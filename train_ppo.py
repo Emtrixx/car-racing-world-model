@@ -5,14 +5,13 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 import torch.nn.functional as F
-from torch.distributions import Normal # Using Gaussian policy for continuous actions
 import time
 import matplotlib.pyplot as plt
-from pathlib import Path
 
+from projects.gym_stuff.car_racing.models import Actor, Critic
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
-                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
+from utils import (DEVICE, ENV_NAME, transform,
+                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode, PPO_ACTOR_SAVE_FILENAME, PPO_CRITIC_SAVE_FILENAME)
 from models import ConvVAE
 
 print(f"Using device: {DEVICE}")
@@ -21,75 +20,19 @@ print(f"Using device: {DEVICE}")
 GAMMA = 0.99           # Discount factor
 LAMBDA = 0.95          # Lambda for GAE
 EPSILON = 0.2          # Clipping parameter for PPO
-ACTOR_LR = 3e-4        # Learning rate for actor
-CRITIC_LR = 1e-3       # Learning rate for critic
-EPOCHS_PER_UPDATE = 5 # Number of optimization epochs per batch
+ACTOR_LR = 1e-4        # Learning rate for actor
+CRITIC_LR = 3e-4       # Learning rate for critic
+EPOCHS_PER_UPDATE = 10 # Number of optimization epochs per batch
 MINIBATCH_SIZE = 64
 STEPS_PER_BATCH = 2048 # Number of steps to collect rollout data per update
-MAX_TRAINING_STEPS = 100_000 # Total steps for training todo: higher
+MAX_TRAINING_STEPS = 500_000 # Total steps for training todo: higher
 ENTROPY_COEF = 0.01    # Entropy regularization coefficient
 VF_COEF = 0.5          # Value function loss coefficient
 TARGET_KL = 0.015      # Target KL divergence limit (optional, for early stopping updates)
 GRAD_CLIP_NORM = 0.5   # Gradient clipping norm
 
-# --- File Paths & Saving ---
-PPO_ACTOR_SAVE_FILENAME = f"checkpoints/{ENV_NAME}_ppo_actor_ld{LATENT_DIM}.pth"
-PPO_CRITIC_SAVE_FILENAME = f"checkpoints/{ENV_NAME}_ppo_critic_ld{LATENT_DIM}.pth"
+# --- Saving ---
 SAVE_INTERVAL = 50 # Save models every N updates
-
-# --- Actor Network ---
-class Actor(nn.Module):
-    def __init__(self, state_dim=LATENT_DIM, action_dim=ACTION_DIM, hidden_dim=256):
-        super().__init__()
-        self.action_dim = action_dim
-        self.net = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh()
-        )
-        # Output layer for action means
-        self.fc_mean = nn.Linear(hidden_dim, action_dim)
-        # Output layer for action log standard deviations (log_std)
-        # Using a learnable parameter per action dimension, not state-dependent initially
-        self.log_std = nn.Parameter(torch.zeros(action_dim))
-
-    def forward(self, state):
-        x = self.net(state)
-        action_mean = self.fc_mean(x)
-
-        # We use tanh activation on the mean for steering [-1, 1].
-        # For gas/brake [0, 1], we could apply sigmoid or (tanh+1)/2 later,
-        # but often letting the distribution + clipping handle it works okay.
-        # Let's apply tanh to the first dim (steering) explicitly.
-        # Keep gas/brake means unbounded for now, will rely on sampling/clipping.
-        action_mean = torch.cat([
-            torch.tanh(action_mean[:, :1]), # Steering mean bounded [-1, 1]
-            action_mean[:, 1:]              # Gas, Brake means unbounded
-        ], dim=1)
-
-
-        action_log_std = self.log_std.expand_as(action_mean) # Same log_std for all states
-        action_std = torch.exp(action_log_std)
-
-        # Create the Normal distribution
-        dist = Normal(action_mean, action_std)
-        return dist
-
-# --- Critic Network ---
-class Critic(nn.Module):
-    def __init__(self, state_dim=LATENT_DIM, hidden_dim=256):
-        super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(state_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, hidden_dim),
-            nn.Tanh(),
-            nn.Linear(hidden_dim, 1) # Output a single value
-        )
-
-    def forward(self, state):
-        return self.net(state)
 
 # --- PPO Storage ---
 # Simple class or dictionary to hold rollout data
