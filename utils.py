@@ -22,6 +22,8 @@ VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_cvae_ld{LATENT_DIM}_epoch10.p
 WM_MODEL_SUFFIX = f"ld{LATENT_DIM}_ac{ACTION_DIM}"
 WM_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
 DREAM_GIF_FILENAME = f"images/{ENV_NAME}_dream_{WM_MODEL_SUFFIX}.gif"
+PPO_ACTOR_SAVE_FILENAME = f"checkpoints/{ENV_NAME}_ppo_actor_ld{LATENT_DIM}.pth"
+PPO_CRITIC_SAVE_FILENAME = f"checkpoints/{ENV_NAME}_ppo_critic_ld{LATENT_DIM}.pth"
 
 # --- Data Preprocessing Transform (Identical for all parts) ---
 transform = transforms.Compose([
