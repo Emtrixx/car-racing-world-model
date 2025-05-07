@@ -1,4 +1,4 @@
-# train_world_model.py
+# train_world_model_mlp.py
 import gymnasium as gym
 import numpy as np
 import torch
@@ -13,7 +13,8 @@ import matplotlib.pyplot as plt
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME, WM_CHECKPOINT_FILENAME,
                    RandomPolicy, preprocess_and_encode)
-from models import ConvVAE, WorldModelMLP # Need VAE for encoding, WM for training
+from projects.gym_stuff.car_racing.models.world_model import WorldModelMLP
+from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4

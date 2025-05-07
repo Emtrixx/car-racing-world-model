@@ -9,9 +9,10 @@ from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
 # Assuming PPO filenames were also added to utils, or define them here
 # PPO_ACTOR_SAVE_FILENAME = f"{ENV_NAME}_ppo_actor_ld{LATENT_DIM}.pth" # Define if not in utils
-from utils import PPO_ACTOR_SAVE_FILENAME # Assuming you added this to utils.py
+from utils import PPO_ACTOR_SAVE_FILENAME
 
-from models import ConvVAE, Actor # Import VAE and Actor definitions
+from projects.gym_stuff.car_racing.models.actor_critic import Actor
+from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
 
 # --- Configuration ---
 NUM_EPISODES = 5 # How many episodes to play

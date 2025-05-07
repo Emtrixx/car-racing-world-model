@@ -11,7 +11,8 @@ import sys
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME, WM_CHECKPOINT_FILENAME, DREAM_GIF_FILENAME,
                    RandomPolicy, preprocess_and_encode)
-from models import ConvVAE, WorldModelMLP
+from projects.gym_stuff.car_racing.models.world_model import WorldModelMLP
+from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
 
 # --- Configuration ---
 DREAM_HORIZON = 100 # How many steps to dream
