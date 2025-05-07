@@ -11,8 +11,8 @@ from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
 # PPO_ACTOR_SAVE_FILENAME = f"{ENV_NAME}_ppo_actor_ld{LATENT_DIM}.pth" # Define if not in utils
 from utils import PPO_ACTOR_SAVE_FILENAME
 
-from projects.gym_stuff.car_racing.models.actor_critic import Actor
-from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
+from models.actor_critic import Actor
+from models.conv_vae import ConvVAE
 
 # --- Configuration ---
 NUM_EPISODES = 5 # How many episodes to play

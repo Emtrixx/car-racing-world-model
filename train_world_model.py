@@ -7,10 +7,10 @@ from torch.utils.data import DataLoader, Dataset
 import time
 import matplotlib.pyplot as plt
 
-from projects.gym_stuff.car_racing.models.actor_critic import Actor
-from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
-from projects.gym_stuff.car_racing.models.world_model import WorldModelGRU
-from projects.gym_stuff.car_racing.utils import WM_CHECKPOINT_FILENAME_GRU
+from models.actor_critic import Actor
+from models.conv_vae import ConvVAE
+from models.world_model import WorldModelGRU
+from utils import WM_CHECKPOINT_FILENAME_GRU
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME,  # WM_CHECKPOINT_FILENAME (will change suffix)
@@ -18,9 +18,9 @@ from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4
-WM_EPOCHS = 5 # Might need more for GRU
+WM_EPOCHS = 50 # Might need more for GRU
 WM_BATCH_SIZE = 32 # Sequences per batch
-COLLECT_EPISODES = 30 # Number of full episodes to collect for WM training
+COLLECT_EPISODES = 350 # Number of full episodes to collect for WM training
 REPLAY_BUFFER_CAPACITY = COLLECT_EPISODES # Store sequences from episodes
 
 # GRU Specific Config
