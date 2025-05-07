@@ -11,7 +11,7 @@ import time
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, IMG_SIZE, CHANNELS, LATENT_DIM,
                    VAE_CHECKPOINT_FILENAME, transform)
-from models import ConvVAE
+from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
 
 # --- Configuration ---
 BATCH_SIZE = 32
