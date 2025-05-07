@@ -7,15 +7,15 @@ import imageio
 import matplotlib.pyplot as plt
 import sys
 
-from projects.gym_stuff.car_racing.models.actor_critic import Actor
-from projects.gym_stuff.car_racing.train_world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM
+from models.actor_critic import Actor
+from train_world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME, WM_CHECKPOINT_FILENAME, DREAM_GIF_FILENAME,
                    RandomPolicy, preprocess_and_encode, WM_CHECKPOINT_FILENAME_GRU, PPO_ACTOR_SAVE_FILENAME,
                    PPOPolicyWrapper)
-from projects.gym_stuff.car_racing.models.world_model import WorldModelMLP, WorldModelGRU
-from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
+from models.world_model import WorldModelMLP, WorldModelGRU
+from models.conv_vae import ConvVAE
 
 # --- Configuration ---
 DREAM_HORIZON = 100 # How many steps to dream
