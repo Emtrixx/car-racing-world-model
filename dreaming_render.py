@@ -7,50 +7,63 @@ import imageio
 import matplotlib.pyplot as plt
 import sys
 
+from projects.gym_stuff.car_racing.models.actor_critic import Actor
+from projects.gym_stuff.car_racing.train_world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME, WM_CHECKPOINT_FILENAME, DREAM_GIF_FILENAME,
-                   RandomPolicy, preprocess_and_encode)
-from projects.gym_stuff.car_racing.models.world_model import WorldModelMLP
+                   RandomPolicy, preprocess_and_encode, WM_CHECKPOINT_FILENAME_GRU, PPO_ACTOR_SAVE_FILENAME,
+                   PPOPolicyWrapper)
+from projects.gym_stuff.car_racing.models.world_model import WorldModelMLP, WorldModelGRU
 from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
 
 # --- Configuration ---
 DREAM_HORIZON = 100 # How many steps to dream
+DREAM_GIF_FILENAME = f"{ENV_NAME}_dream_gru_horizon{DREAM_HORIZON}.gif"
 
 # --- Dreaming Function ---
-def dream_sequence(vae_model, world_model, policy, initial_obs, transform_fn, horizon, device):
-    vae_model.eval(); world_model.eval()
+def dream_sequence_gru(vae_model, world_model_gru, policy, initial_obs, transform_fn, horizon, device):
+    vae_model.eval()
+    world_model_gru.eval()
     dreamed_frames = []
 
     with torch.no_grad():
-        z_current = preprocess_and_encode(initial_obs, transform_fn, vae_model, device)
+        # 1. Encode the initial observation
+        z_current = preprocess_and_encode(initial_obs, transform_fn, vae_model, device) # (latent_dim)
+
+        # 2. Decode the initial latent state to get the first frame
         initial_frame_decoded = vae_model.decode(z_current.unsqueeze(0)).squeeze(0)
         initial_frame_np = initial_frame_decoded.permute(1, 2, 0).cpu().numpy()
         dreamed_frames.append((np.clip(initial_frame_np, 0, 1) * 255).astype(np.uint8))
 
-        print(f"Starting dream. Horizon: {horizon}")
-        pbar_interval = max(1, horizon // 10)
+        print(f"Starting GRU dream. Horizon: {horizon}")
+
+        # Initialize GRU hidden state (batch_size is 1 for dreaming)
+        h_current = torch.zeros(world_model_gru.gru_num_layers, 1, world_model_gru.gru_hidden_dim).to(device)
 
         for t in range(horizon):
+            # a. Get action from policy (expects (latent_dim))
             action_np = policy.get_action(z_current.cpu().numpy())
-            action = torch.tensor(action_np, dtype=torch.float32, device=device)
+            action_t = torch.tensor(action_np, dtype=torch.float32, device=device).unsqueeze(0) # (1, action_dim)
+            z_current_batch = z_current.unsqueeze(0) # (1, latent_dim)
 
-            # Predict next latent state (World Model expects batch dim)
-            z_next_pred = world_model(z_current.unsqueeze(0), action.unsqueeze(0)).squeeze(0)
+            # b. Predict next latent state using the GRU world model's step function
+            z_next_pred, h_next = world_model_gru.step(z_current_batch, action_t, h_current)
+            z_next_pred = z_next_pred.squeeze(0) # (latent_dim)
 
-            # Decode predicted latent state (VAE decoder expects batch dim)
+            # c. Decode the predicted latent state into an image
             obs_pred_decoded = vae_model.decode(z_next_pred.unsqueeze(0)).squeeze(0)
 
-            # Store frame
+            # d. Store frame
             frame_np = obs_pred_decoded.permute(1, 2, 0).cpu().numpy()
             dreamed_frames.append((np.clip(frame_np, 0, 1) * 255).astype(np.uint8))
 
-            # Update state
+            # e. Update current latent state and hidden state
             z_current = z_next_pred
+            h_current = h_next
 
-            if (t + 1) % pbar_interval == 0: print(f"  Dream step {t+1}/{horizon}")
-
-    print("Dreaming finished.")
+            if (t + 1) % 20 == 0: print(f"  GRU Dream step {t+1}/{horizon}")
+    print("GRU Dreaming finished.")
     return dreamed_frames
 
 # --- Main Execution ---
@@ -58,7 +71,11 @@ if __name__ == "__main__":
     print(f"Starting dream sequence generation on device: {DEVICE}")
 
     # 1. Initialize Environment (only for initial obs)
+    temp_env = gym.make(ENV_NAME)
     env = gym.make(ENV_NAME, render_mode="rgb_array")
+    action_space_low = temp_env.action_space.low
+    action_space_high = temp_env.action_space.high
+    temp_env.close()
 
     # 2. Load Pre-trained VAE
     vae_model = ConvVAE().to(DEVICE) # Use definition from models
@@ -69,28 +86,50 @@ if __name__ == "__main__":
     except FileNotFoundError: print(f"ERROR: VAE ckpt '{VAE_CHECKPOINT_FILENAME}' not found."); env.close(); sys.exit()
     except Exception as e: print(f"ERROR loading VAE: {e}"); env.close(); sys.exit()
 
-    # 3. Load Trained World Model
-    world_model = WorldModelMLP().to(DEVICE) # Use definition from models
+    # 3. Load GRU World Model
+    world_model_gru = WorldModelGRU(
+        gru_hidden_dim=GRU_HIDDEN_DIM,
+        gru_num_layers=GRU_NUM_LAYERS,
+        gru_input_embed_dim=GRU_INPUT_EMBED_DIM
+    ).to(DEVICE)
     try:
-        world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME, map_location=DEVICE))
-        world_model.eval()
-        print(f"Loaded World Model: {WM_CHECKPOINT_FILENAME}")
-    except FileNotFoundError: print(f"ERROR: WM ckpt '{WM_CHECKPOINT_FILENAME}' not found."); env.close(); sys.exit()
-    except Exception as e: print(f"ERROR loading WM: {e}"); env.close(); sys.exit()
+        world_model_gru.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
+        world_model_gru.eval()
+        print(f"Loaded GRU World Model: {WM_CHECKPOINT_FILENAME_GRU}")
+    except Exception as e: print(f"ERROR GRU WM: {e}"); sys.exit()
 
-    # 4. Initialize Policy (Random for testing dream)
-    policy = RandomPolicy(env.action_space) # From utils
-    # Replace with your trained policy later if desired
+    # 4. Initialize Policy (PPO Actor)
+    policy_for_collection = None
+    try:
+        print(f"Attempting to load PPO Actor for dreaming: {PPO_ACTOR_SAVE_FILENAME}")
+        actor_for_dreaming = Actor().to(DEVICE)
+        actor_for_dreaming.load_state_dict(torch.load(PPO_ACTOR_SAVE_FILENAME, map_location=DEVICE))
+        actor_for_dreaming.eval()
+        # For dreaming, deterministic actions might be preferred for consistency
+        policy_for_dreaming = PPOPolicyWrapper(actor_for_dreaming, DEVICE, deterministic=True,
+                                               action_space_low=action_space_low,
+                                               action_space_high=action_space_high)
+        print(f"Using PPO Actor for data collection.")
+    except FileNotFoundError:
+        print(f"ERROR: PPO Actor checkpoint '{PPO_ACTOR_SAVE_FILENAME}' not found. Train PPO first.")
+        env.close();
+        sys.exit()
+    except Exception as e:
+        print(f"ERROR loading PPO Actor: {e}");
+        env.close();
+        sys.exit()
 
-    # 5. Get Initial Observation
-    initial_obs, _ = env.reset()
-    env.close() # Close env
+    # Get Initial Observation for dreaming
+    # No need to keep env open if just getting one frame from a fresh reset
+    dream_env = gym.make(ENV_NAME, render_mode="rgb_array")
+    initial_obs, _ = dream_env.reset()
+    dream_env.close()
 
-    # 6. Generate Dream Sequence
     start_dream_time = time.time()
-    # Pass transform from utils
-    dreamed_frames = dream_sequence(vae_model, world_model, policy, initial_obs, transform, DREAM_HORIZON, DEVICE)
-    print(f"Dream generation took {time.time() - start_dream_time:.2f} seconds.")
+    dreamed_frames = dream_sequence_gru(
+        vae_model, world_model_gru, policy_for_dreaming, initial_obs, transform, DREAM_HORIZON, DEVICE
+    )
+    print(f"GRU Dream generation took {time.time() - start_dream_time:.2f} seconds.")
 
     # 7. Save GIF
     if dreamed_frames:
