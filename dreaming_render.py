@@ -11,7 +11,7 @@ from models.actor_critic import Actor
 from train_world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
-                   VAE_CHECKPOINT_FILENAME, WM_CHECKPOINT_FILENAME, DREAM_GIF_FILENAME,
+                   VAE_CHECKPOINT_FILENAME, WM_CHECKPOINT_FILENAME,
                    RandomPolicy, preprocess_and_encode, WM_CHECKPOINT_FILENAME_GRU, PPO_ACTOR_SAVE_FILENAME,
                    PPOPolicyWrapper)
 from models.world_model import WorldModelMLP, WorldModelGRU
@@ -19,7 +19,7 @@ from models.conv_vae import ConvVAE
 
 # --- Configuration ---
 DREAM_HORIZON = 100 # How many steps to dream
-DREAM_GIF_FILENAME = f"{ENV_NAME}_dream_gru_horizon{DREAM_HORIZON}.gif"
+DREAM_GIF_FILENAME = f"images/{ENV_NAME}_dream_gru_horizon{DREAM_HORIZON}.gif"
 
 # --- Dreaming Function ---
 def dream_sequence_gru(vae_model, world_model_gru, policy, initial_obs, transform_fn, horizon, device):
@@ -73,6 +73,7 @@ if __name__ == "__main__":
     # 1. Initialize Environment (only for initial obs)
     temp_env = gym.make(ENV_NAME)
     env = gym.make(ENV_NAME, render_mode="rgb_array")
+    initial_obs, _ = temp_env.reset()
     action_space_low = temp_env.action_space.low
     action_space_high = temp_env.action_space.high
     temp_env.close()
@@ -118,12 +119,6 @@ if __name__ == "__main__":
         print(f"ERROR loading PPO Actor: {e}");
         env.close();
         sys.exit()
-
-    # Get Initial Observation for dreaming
-    # No need to keep env open if just getting one frame from a fresh reset
-    dream_env = gym.make(ENV_NAME, render_mode="rgb_array")
-    initial_obs, _ = dream_env.reset()
-    dream_env.close()
 
     start_dream_time = time.time()
     dreamed_frames = dream_sequence_gru(
