@@ -299,7 +299,7 @@ def train_ppo_in_dream():
     plt.xlabel("Dream Episode Index (approx)")
     plt.ylabel("Total Predicted Reward in Dream")
     plt.title("PPO Training Rewards in Dream Environment")
-    plt.savefig("ppo_dream_training_rewards.png")
+    plt.savefig("images/ppo_dream_training_rewards.png")
     print("Saved dream rewards plot.")
 
 

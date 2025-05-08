@@ -165,7 +165,7 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
         axes[1, i].set_title(f'Recon {i+1}')
         axes[1, i].axis('off')
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
-    save_path = f"checkpoints/vae_reconstruction_epoch_{epoch}.png"
+    save_path = f"images/vae_reconstruction_epoch_{epoch}.png"
     plt.savefig(save_path)
     print(f"Saved reconstruction visualization to {save_path}")
     plt.close(fig) # Close the figure to free memory
