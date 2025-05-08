@@ -4,6 +4,7 @@ import numpy as np
 import gymnasium as gym
 from torchvision import transforms
 from torch.distributions import Normal
+from dataclasses import dataclass
 
 # --- Configuration Constants ---
 ENV_NAME = "CarRacing-v3"
@@ -107,11 +108,128 @@ def preprocess_and_encode(obs, transform_fn, vae_model, device):
         z = mu # Shape: (1, LATENT_DIM)
     return z.squeeze(0) # Remove batch dim -> Shape: (LATENT_DIM)
 
-# You could add other shared utilities here, e.g., functions to save/load models,
-# setup logging, etc.
+@dataclass
+class PPOHyperparameters:
+    gamma: float = 0.99
+    lambda_gae: float = 0.95 # Renamed from LAMBDA to avoid keyword clash
+    epsilon_clip: float = 0.2
+    actor_lr: float = 3e-4
+    critic_lr: float = 1e-3
+    epochs_per_update: int = 10
+    minibatch_size: int = 64
+    # steps_per_batch: int # This is context-dependent (real vs dream)
+    entropy_coef: float = 0.01
+    vf_coef: float = 0.5
+    grad_clip_norm: float = 0.5
+    target_kl: float = 0.015
 
 print(f"Utils loaded. Using device: {DEVICE}")
 print(f"VAE Path: {VAE_CHECKPOINT_FILENAME}")
 print(f"WM Path: {WM_CHECKPOINT_FILENAME}")
 PPO_DREAM_ACTOR_SAVE_FILENAME = f"{ENV_NAME}_ppo_dream_actor_ld{LATENT_DIM}.pth"
 PPO_DREAM_CRITIC_SAVE_FILENAME = f"{ENV_NAME}_ppo_dream_critic_ld{LATENT_DIM}.pth"
+
+# --- PPO Storage ---
+# Simple class or dictionary to hold rollout data
+class RolloutBuffer:
+    def __init__(self):
+        self.states = []
+        self.actions = []
+        self.log_probs = []
+        self.rewards = []
+        self.dones = []
+        self.values = []
+        # These will be populated by compute_returns_and_advantages
+        self.returns = None     # torch.Tensor
+        self.advantages = None  # torch.Tensor
+
+    def add(self, state, action, log_prob, reward, done, value):
+        self.states.append(state)
+        self.actions.append(action)
+        self.log_probs.append(log_prob)
+        self.rewards.append(reward)
+        self.dones.append(done)
+        self.values.append(value)
+
+    def compute_returns_and_advantages(self, last_value_tensor, gamma, lambda_gae):
+        n_steps = len(self.rewards)
+        if n_steps == 0:
+            self.returns = torch.tensor([])
+            self.advantages = torch.tensor([])
+            return
+
+        # Ensure last_value_tensor is on CPU if other tensors are
+        last_value_tensor = last_value_tensor.cpu()
+
+        advantages_list = [torch.zeros_like(self.rewards[0])] * n_steps  # Temp list
+        returns_list = [torch.zeros_like(self.rewards[0])] * n_steps  # Temp list
+
+        # Stack values for easier access and ensure it's on CPU
+        cpu_values = torch.stack(self.values)  # self.values are stored on CPU
+
+        last_gae_lam = 0
+        for t in reversed(range(n_steps)):
+            if t == n_steps - 1:
+                next_non_terminal = 1.0 - self.dones[t].float()  # self.dones is on CPU
+                next_values = last_value_tensor  # Value after the last collected step
+            else:
+                next_non_terminal = 1.0 - self.dones[t].float()
+                next_values = cpu_values[t + 1]
+
+            delta = self.rewards[t] + gamma * next_values * next_non_terminal - cpu_values[t]
+            last_gae_lam = delta + gamma * lambda_gae * next_non_terminal * last_gae_lam
+            advantages_list[t] = last_gae_lam
+            returns_list[t] = advantages_list[t] + cpu_values[t]
+
+        self.returns = torch.stack(returns_list)
+        self.advantages = torch.stack(advantages_list)
+
+        # Normalize advantages (important for stability)
+        self.advantages = (self.advantages - self.advantages.mean()) / (self.advantages.std() + 1e-8)
+
+    def get_batch(self, batch_size):
+        """ Returns shuffled minibatches from the stored data. """
+        n_samples = len(self.states) # Use length of states/actions list
+        if n_samples == 0:
+             # Handle case where buffer might be empty after clear or before first fill
+             print("Warning: get_batch called on empty buffer.")
+             return # Yield nothing
+
+        indices = np.random.permutation(n_samples)
+
+        # --- Corrected Stacking/Usage ---
+        # Stack only the lists of tensors (these should be on CPU)
+        all_states = torch.stack(self.states)
+        all_actions = torch.stack(self.actions)
+        all_log_probs = torch.stack(self.log_probs)
+
+        # Use the pre-computed tensors directly (they should be on CPU)
+        # Add a check to ensure compute_returns_and_advantages was called
+        if not hasattr(self, 'returns') or not hasattr(self, 'advantages'):
+             raise RuntimeError("compute_returns_and_advantages must be called before get_batch")
+        # These are already tensors, no need to stack
+        all_returns = self.returns
+        all_advantages = self.advantages
+        # --------------------------
+
+        # Basic shape consistency check
+        if not (all_states.shape[0] == n_samples and \
+                all_actions.shape[0] == n_samples and \
+                all_log_probs.shape[0] == n_samples and \
+                all_returns.shape[0] == n_samples and \
+                all_advantages.shape[0] == n_samples):
+            raise RuntimeError(f"Shape mismatch in buffer data! Expected {n_samples} samples.")
+
+
+        for i in range(0, n_samples, batch_size):
+            batch_indices = indices[i : i + batch_size]
+            yield (
+                all_states[batch_indices],    # Shape: (batch_size, latent_dim)
+                all_actions[batch_indices],   # Shape: (batch_size, action_dim)
+                all_log_probs[batch_indices], # Shape: (batch_size,)
+                all_returns[batch_indices],   # Shape: (batch_size,)
+                all_advantages[batch_indices],# Shape: (batch_size,)
+            )
+
+    def clear(self):
+        self.__init__() # Reset all lists

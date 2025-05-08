@@ -9,6 +9,8 @@ import time
 import matplotlib.pyplot as plt
 
 from models.actor_critic import Actor, Critic
+from projects.gym_stuff.car_racing.utils import RolloutBuffer, PPOHyperparameters
+from projects.gym_stuff.car_racing.utils_rl import perform_ppo_update
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode, PPO_ACTOR_SAVE_FILENAME, PPO_CRITIC_SAVE_FILENAME)
@@ -34,109 +36,6 @@ GRAD_CLIP_NORM = 0.5   # Gradient clipping norm
 # --- Saving ---
 SAVE_INTERVAL = 50 # Save models every N updates
 
-# --- PPO Storage ---
-# Simple class or dictionary to hold rollout data
-class RolloutBuffer:
-    def __init__(self):
-        self.states = []
-        self.actions = []
-        self.log_probs = []
-        self.rewards = []
-        self.dones = []
-        self.values = []
-
-    def add(self, state, action, log_prob, reward, done, value):
-        self.states.append(state)
-        self.actions.append(action)
-        self.log_probs.append(log_prob)
-        self.rewards.append(reward)
-        self.dones.append(done)
-        self.values.append(value)
-
-    def compute_returns_and_advantages(self, last_value, gamma, lambda_):
-        """ Computes GAE and returns. """
-        n_steps = len(self.rewards)
-        if n_steps == 0:
-            self.returns = torch.tensor([])
-            self.advantages = torch.tensor([])
-            return [], []  # Handle empty buffer case
-
-        # Ensure tensors created on CPU since buffer stores CPU tensors
-        advantages = torch.zeros(n_steps, dtype=torch.float32, device='cpu')
-        returns = torch.zeros(n_steps, dtype=torch.float32, device='cpu')
-
-        # Stack values for easier access and ensure it's on CPU
-        cpu_values = torch.stack(self.values)  # self.values are stored on CPU
-        last_value_cpu = last_value.cpu()  # Ensure last_value is on CPU for consistency
-
-        last_gae_lam = 0
-        for t in reversed(range(n_steps)):
-            if t == n_steps - 1:
-                # Use last_value_cpu for the value after the last step
-                next_non_terminal = 1.0 - self.dones[t].float()  # self.dones is on CPU
-                next_values = last_value_cpu
-            else:
-                next_non_terminal = 1.0 - self.dones[t].float()
-                next_values = cpu_values[t + 1]  # Value of the actual next step
-
-            # Use cpu_values tensor for V(s_t)
-            delta = self.rewards[t] + gamma * next_values * next_non_terminal - cpu_values[t]
-            last_gae_lam = delta + gamma * lambda_ * next_non_terminal * last_gae_lam
-            advantages[t] = last_gae_lam  # Assign to the 1D tensor
-            returns[t] = advantages[t] + cpu_values[t]  # Return = Advantage + Value
-
-        # Store computed tensors in the buffer object
-        self.returns = returns
-        self.advantages = advantages
-
-        return returns, advantages  # Optional: return them as well
-
-    def get_batch(self, batch_size):
-        """ Returns shuffled minibatches from the stored data. """
-        n_samples = len(self.states) # Use length of states/actions list
-        if n_samples == 0:
-             # Handle case where buffer might be empty after clear or before first fill
-             print("Warning: get_batch called on empty buffer.")
-             return # Yield nothing
-
-        indices = np.random.permutation(n_samples)
-
-        # --- Corrected Stacking/Usage ---
-        # Stack only the lists of tensors (these should be on CPU)
-        all_states = torch.stack(self.states)
-        all_actions = torch.stack(self.actions)
-        all_log_probs = torch.stack(self.log_probs)
-
-        # Use the pre-computed tensors directly (they should be on CPU)
-        # Add a check to ensure compute_returns_and_advantages was called
-        if not hasattr(self, 'returns') or not hasattr(self, 'advantages'):
-             raise RuntimeError("compute_returns_and_advantages must be called before get_batch")
-        # These are already tensors, no need to stack
-        all_returns = self.returns
-        all_advantages = self.advantages
-        # --------------------------
-
-        # Basic shape consistency check
-        if not (all_states.shape[0] == n_samples and \
-                all_actions.shape[0] == n_samples and \
-                all_log_probs.shape[0] == n_samples and \
-                all_returns.shape[0] == n_samples and \
-                all_advantages.shape[0] == n_samples):
-            raise RuntimeError(f"Shape mismatch in buffer data! Expected {n_samples} samples.")
-
-
-        for i in range(0, n_samples, batch_size):
-            batch_indices = indices[i : i + batch_size]
-            yield (
-                all_states[batch_indices],    # Shape: (batch_size, latent_dim)
-                all_actions[batch_indices],   # Shape: (batch_size, action_dim)
-                all_log_probs[batch_indices], # Shape: (batch_size,)
-                all_returns[batch_indices],   # Shape: (batch_size,)
-                all_advantages[batch_indices],# Shape: (batch_size,)
-            )
-
-    def clear(self):
-        self.__init__() # Reset all lists
 
 # --- Main Training Function ---
 def train_ppo():
@@ -167,6 +66,13 @@ def train_ppo():
     critic = Critic().to(DEVICE)
     actor_optimizer = optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
     critic_optimizer = optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
+
+    hyperparams = PPOHyperparameters(
+        gamma=GAMMA, lambda_gae=LAMBDA, epsilon_clip=EPSILON,
+        actor_lr=ACTOR_LR, critic_lr=CRITIC_LR, epochs_per_update=EPOCHS_PER_UPDATE,
+        minibatch_size=MINIBATCH_SIZE, entropy_coef=ENTROPY_COEF, vf_coef=VF_COEF,
+        grad_clip_norm=GRAD_CLIP_NORM, target_kl=TARGET_KL
+    )
 
     # 4. Initialize Rollout Buffer
     buffer = RolloutBuffer()
@@ -253,75 +159,13 @@ def train_ppo():
         buffer.advantages = (buffer.advantages - buffer.advantages.mean()) / (buffer.advantages.std() + 1e-8)
 
         # --- Perform PPO Update ---
-        actor.train() # Set to train mode for updates
-        critic.train()
-        approx_kl_divs = []
-
-        for epoch in range(EPOCHS_PER_UPDATE):
-            for states, actions, old_log_probs, returns, advantages in buffer.get_batch(MINIBATCH_SIZE):
-                states, actions, old_log_probs, returns, advantages = \
-                    states.to(DEVICE), actions.to(DEVICE), old_log_probs.to(DEVICE), \
-                    returns.to(DEVICE), advantages.to(DEVICE)
-
-                # Detach tensors coming from the buffer that shouldn't propagate gradients from the rollout phase
-                # Actions are needed for log_prob calculation but should be treated as fixed inputs here
-                # Old log probs are fixed targets for the ratio calculation
-                # Returns and Advantages are targets/weights for the losses
-                actions = actions.detach()
-                old_log_probs = old_log_probs.detach()
-                returns = returns.detach()
-                advantages = advantages.detach()  # Already normalized, treat as constant weights
-
-                # --- Calculate Actor Loss ---
-                new_dist = actor(states)
-                # Calculate log_prob using the detached actions from the buffer
-                new_log_probs = new_dist.log_prob(actions).sum(1)  # Sum across action dims
-                entropy = new_dist.entropy().sum(1).mean()  # Mean entropy
-
-                # Calculate ratio r_t(theta) = exp(log pi_new - log pi_old)
-                # old_log_probs is now detached
-                log_ratio = new_log_probs - old_log_probs
-                ratio = torch.exp(log_ratio)
-
-                # Clipped Surrogate Objective (advantages is detached)
-                surr1 = ratio * advantages
-                surr2 = torch.clamp(ratio, 1.0 - EPSILON, 1.0 + EPSILON) * advantages
-                actor_loss = -torch.min(surr1, surr2).mean()  # Negative because we minimize
-
-                # --- Calculate Critic Loss ---
-                new_values = critic(states).squeeze(1)  # Shape: (batch_size,)
-                # Simple value loss: MSE against calculated returns (returns is detached)
-                critic_loss = F.mse_loss(new_values, returns)
-
-                # --- Calculate Total Loss ---
-                loss = actor_loss + VF_COEF * critic_loss - ENTROPY_COEF * entropy
-
-                # --- Compute Gradients (Once using combined loss) ---
-                actor_optimizer.zero_grad()
-                critic_optimizer.zero_grad()
-                loss.backward()  # Should now work correctly
-
-                # --- Actor Update ---
-                nn.utils.clip_grad_norm_(actor.parameters(), GRAD_CLIP_NORM)
-                actor_optimizer.step()
-
-                # --- Critic Update ---
-                nn.utils.clip_grad_norm_(critic.parameters(), GRAD_CLIP_NORM)
-                critic_optimizer.step()
-
-                # --- KL Divergence Tracking (Optional) ---
-                with torch.no_grad():
-                    approx_kl = (ratio - 1) - log_ratio # http://joschu.net/blog/kl-approx.html
-                    approx_kl = approx_kl.mean().item()
-                    approx_kl_divs.append(approx_kl)
-
-            # Optional: Early stopping based on KL divergence
-            if TARGET_KL is not None and np.mean(approx_kl_divs[-len(buffer.states)//MINIBATCH_SIZE:]) > TARGET_KL:
-                print(f"  Epoch {epoch+1}: Early stopping at KL divergence {np.mean(approx_kl_divs):.4f} > {TARGET_KL}")
-                break
+        mean_kl = perform_ppo_update(
+            buffer, actor, critic, actor_optimizer, critic_optimizer,
+            hyperparams, DEVICE, last_value_for_gae=last_value
+        )
 
 
-        print(f"Update {update}, Optimizing for {epoch+1} epochs. Mean KL: {np.mean(approx_kl_divs):.4f}")
+        print(f"Update {update}, Optimizing for {EPOCHS_PER_UPDATE} epochs. Mean KL: {mean_kl:.4f}")
         avg_reward = np.mean(all_episode_rewards[-10:]) if all_episode_rewards else 0.0
         print(f"Total Steps: {global_step}, Avg Reward (Last 10 ep): {avg_reward:.2f}")
 
