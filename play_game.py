@@ -9,7 +9,7 @@ from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
 # Assuming PPO filenames were also added to utils, or define them here
 # PPO_ACTOR_SAVE_FILENAME = f"{ENV_NAME}_ppo_actor_ld{LATENT_DIM}.pth" # Define if not in utils
-from utils import PPO_ACTOR_SAVE_FILENAME
+from projects.gym_stuff.car_racing.utils_rl import PPO_ACTOR_SAVE_FILENAME
 
 from models.actor_critic import Actor
 from models.conv_vae import ConvVAE

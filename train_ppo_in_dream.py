@@ -14,12 +14,11 @@ from torch import nn, random
 from projects.gym_stuff.car_racing.models.actor_critic import Actor, Critic
 from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
 from projects.gym_stuff.car_racing.models.world_model import WorldModelGRU
-from projects.gym_stuff.car_racing.utils import PPO_DREAM_ACTOR_SAVE_FILENAME, PPO_DREAM_CRITIC_SAVE_FILENAME, \
-    RolloutBuffer, PPOHyperparameters
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,
-                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode,
-                   RandomPolicy)
+                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
+from projects.gym_stuff.car_racing.utils_rl import RandomPolicy, PPOHyperparameters, PPO_DREAM_ACTOR_SAVE_FILENAME, \
+    PPO_DREAM_CRITIC_SAVE_FILENAME, RolloutBuffer
 
 # Import GRU WM parameters and checkpoint path from its training script
 # This assumes train_world_model.py defines these at the global scope
