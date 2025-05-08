@@ -2,10 +2,10 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 
-from utils import LATENT_DIM, ACTION_DIM
+from ..utils import LATENT_DIM, ACTION_DIM
 
 
-# --- MLO-based World Model ---
+# --- MLP-based World Model ---
 class WorldModelMLP(nn.Module):
     # Use WM_HIDDEN_DIM from utils or define a default
     def __init__(self, latent_dim=LATENT_DIM, action_dim=ACTION_DIM, hidden_dim=256):
