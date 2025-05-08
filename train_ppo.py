@@ -2,19 +2,17 @@
 import gymnasium as gym
 import numpy as np
 import torch
-import torch.nn as nn
 import torch.optim as optim
-import torch.nn.functional as F
 import time
 import matplotlib.pyplot as plt
 
-from models.actor_critic import Actor, Critic
-from projects.gym_stuff.car_racing.utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
+from actor_critic import Actor, Critic
+from utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
     PPO_CRITIC_SAVE_FILENAME, PPOHyperparameters, RolloutBuffer
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
-from models.conv_vae import ConvVAE
+from conv_vae import ConvVAE
 
 print(f"Using device: {DEVICE}")
 

@@ -11,13 +11,13 @@ import matplotlib.pyplot as plt
 
 from torch import nn, random
 
-from projects.gym_stuff.car_racing.models.actor_critic import Actor, Critic
-from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
-from projects.gym_stuff.car_racing.models.world_model import WorldModelGRU
+from actor_critic import Actor, Critic
+from conv_vae import ConvVAE
+from world_model import WorldModelGRU
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
-from projects.gym_stuff.car_racing.utils_rl import RandomPolicy, PPOHyperparameters, PPO_DREAM_ACTOR_SAVE_FILENAME, \
+from utils_rl import RandomPolicy, PPOHyperparameters, PPO_DREAM_ACTOR_SAVE_FILENAME, \
     PPO_DREAM_CRITIC_SAVE_FILENAME, RolloutBuffer
 
 # Import GRU WM parameters and checkpoint path from its training script
@@ -26,9 +26,9 @@ from train_world_model import (WM_CHECKPOINT_FILENAME_GRU, GRU_HIDDEN_DIM,
                                GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM)
 
 # Import PPO Hyperparameters (can also define them here or in a shared config)
-from train_ppo import (GAMMA, LAMBDA, EPSILON, ACTOR_LR, CRITIC_LR,
-                       EPOCHS_PER_UPDATE, MINIBATCH_SIZE,  # STEPS_PER_BATCH will be for dream
-                       ENTROPY_COEF, VF_COEF, TARGET_KL, GRAD_CLIP_NORM)
+from train_ppo import (ACTOR_LR, CRITIC_LR,
+    # STEPS_PER_BATCH will be for dream
+                       )
 
 print(f"Device for PPO in Dream: {DEVICE}")
 

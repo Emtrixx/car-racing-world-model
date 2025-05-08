@@ -6,7 +6,7 @@ import torch.optim as optim  # For type hinting
 import torch.nn.functional as F
 import numpy as np
 
-from projects.gym_stuff.car_racing.utils import ENV_NAME, LATENT_DIM
+from utils import ENV_NAME, LATENT_DIM
 
 
 @dataclass

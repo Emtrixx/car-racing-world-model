@@ -7,15 +7,15 @@ from torch.utils.data import DataLoader, Dataset
 import time
 import matplotlib.pyplot as plt
 
-from models.actor_critic import Actor
-from models.conv_vae import ConvVAE
-from models.world_model import WorldModelGRU
+from actor_critic import Actor
+from conv_vae import ConvVAE
+from world_model import WorldModelGRU
 from utils import WM_CHECKPOINT_FILENAME_GRU
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME,  # WM_CHECKPOINT_FILENAME (will change suffix)
                    preprocess_and_encode)
-from projects.gym_stuff.car_racing.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
+from utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4

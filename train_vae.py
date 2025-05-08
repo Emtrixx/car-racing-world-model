@@ -9,9 +9,8 @@ import matplotlib.pyplot as plt
 import time
 
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, IMG_SIZE, CHANNELS, LATENT_DIM,
-                   VAE_CHECKPOINT_FILENAME, transform)
-from models.conv_vae import ConvVAE
+from utils import (DEVICE, ENV_NAME, IMG_SIZE, CHANNELS, VAE_CHECKPOINT_FILENAME, transform)
+from conv_vae import ConvVAE
 
 # --- Configuration ---
 BATCH_SIZE = 32

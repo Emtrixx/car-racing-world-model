@@ -2,7 +2,7 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 
-from projects.gym_stuff.car_racing.utils import CHANNELS, LATENT_DIM, IMG_SIZE
+from utils import CHANNELS, LATENT_DIM, IMG_SIZE
 
 
 # --- VAE Model Definition ---
