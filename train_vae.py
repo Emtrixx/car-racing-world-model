@@ -8,8 +8,10 @@ from torch.utils.data import DataLoader, Dataset
 import matplotlib.pyplot as plt
 import time
 
+from actor_critic import Actor
+from utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, IMG_SIZE, CHANNELS, VAE_CHECKPOINT_FILENAME, transform)
+from utils import (DEVICE, ENV_NAME, IMG_SIZE, CHANNELS, VAE_CHECKPOINT_FILENAME, transform, preprocess_and_encode)
 from conv_vae import ConvVAE
 
 # --- Configuration ---
@@ -37,8 +39,44 @@ def collect_frames(env_name, num_frames, transform_fn):
     state, _ = env.reset()
     frame_count = 0
 
+    # 2. Load Pre-trained VAE
+    vae_model = ConvVAE().to(DEVICE)
+    try:
+        vae_model.load_state_dict(torch.load(VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
+        vae_model.eval()
+        print(f"Successfully loaded VAE: {VAE_CHECKPOINT_FILENAME}")
+    except FileNotFoundError:
+        print(f"ERROR: VAE checkpoint '{VAE_CHECKPOINT_FILENAME}' not found. Train VAE first.")
+        env.close();
+        exit()
+    except Exception as e:
+        print(f"ERROR loading VAE: {e}");
+        env.close();
+        exit()
+
+    # Initialize Policy (PPO Actor)
+    policy = None
+    try:
+        print(f"Attempting to load PPO Actor from: {PPO_ACTOR_SAVE_FILENAME}")
+        actor_for_collection = Actor().to(DEVICE)  # Actor from models.py
+        actor_for_collection.load_state_dict(torch.load(PPO_ACTOR_SAVE_FILENAME, map_location=DEVICE))
+        actor_for_collection.eval()  # Set to eval mode
+        # For data collection for world model, sampling is often preferred (deterministic=False)
+        policy = PPOPolicyWrapper(actor_for_collection, DEVICE, deterministic=False,
+                                                 action_space_low=env.action_space.low,
+                                                 action_space_high=env.action_space.high)
+        print(f"Using PPO Actor for data collection.")
+    except FileNotFoundError:
+        print(f"ERROR: PPO Actor checkpoint '{PPO_ACTOR_SAVE_FILENAME}' not found. Train PPO first.")
+        env.close(); exit()
+    except Exception as e:
+        print(f"ERROR loading PPO Actor: {e}"); env.close(); exit()
+
+
+
     while frame_count < num_frames:
-        action = env.action_space.sample() # Random actions
+        z_t = preprocess_and_encode(state, transform_fn, vae_model, DEVICE)
+        action = policy.get_action(z_t.cpu().numpy())
         state, reward, terminated, truncated, info = env.step(action)
         frame = env.render()
 
