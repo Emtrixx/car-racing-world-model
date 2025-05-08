@@ -19,9 +19,9 @@ from projects.gym_stuff.car_racing.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOP
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4
-WM_EPOCHS = 5 # Might need more for GRU
+WM_EPOCHS = 50 # Might need more for GRU
 WM_BATCH_SIZE = 32 # Sequences per batch
-COLLECT_EPISODES = 20 # Number of full episodes to collect for WM training
+COLLECT_EPISODES = 350 # Number of full episodes to collect for WM training
 REPLAY_BUFFER_CAPACITY = COLLECT_EPISODES # Store sequences from episodes
 
 # GRU Specific Config
