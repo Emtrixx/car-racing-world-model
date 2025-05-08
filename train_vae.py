@@ -16,9 +16,9 @@ from models.conv_vae import ConvVAE
 # --- Configuration ---
 BATCH_SIZE = 32
 LEARNING_RATE = 1e-4
-EPOCHS = 35         # Number of training epochs
+EPOCHS = 50         # Number of training epochs
 BETA = 1.0          # Weight for the KL divergence term
-NUM_FRAMES_COLLECT = 10000 # How many frames to collect for training dataset
+NUM_FRAMES_COLLECT = 50000 # How many frames to collect for training dataset
 
 # --- VAE Loss Function ---
 def vae_loss_function(recon_x, x, mu, logvar, beta=BETA):
