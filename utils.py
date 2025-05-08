@@ -113,3 +113,5 @@ def preprocess_and_encode(obs, transform_fn, vae_model, device):
 print(f"Utils loaded. Using device: {DEVICE}")
 print(f"VAE Path: {VAE_CHECKPOINT_FILENAME}")
 print(f"WM Path: {WM_CHECKPOINT_FILENAME}")
+PPO_DREAM_ACTOR_SAVE_FILENAME = f"{ENV_NAME}_ppo_dream_actor_ld{LATENT_DIM}.pth"
+PPO_DREAM_CRITIC_SAVE_FILENAME = f"{ENV_NAME}_ppo_dream_critic_ld{LATENT_DIM}.pth"

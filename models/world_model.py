@@ -2,8 +2,7 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 
-from ..utils import LATENT_DIM, ACTION_DIM
-
+from projects.gym_stuff.car_racing.utils import LATENT_DIM, ACTION_DIM
 
 # --- MLP-based World Model ---
 class WorldModelMLP(nn.Module):
@@ -59,7 +58,9 @@ class WorldModelGRU(nn.Module):
             batch_first=True # Expects input: (batch, seq, feature)
         )
         # Output layer projects GRU hidden state to the predicted next latent state
-        self.fc_out = nn.Linear(gru_hidden_dim, latent_dim)
+        self.fc_out = nn.Linear(gru_hidden_dim, latent_dim) # Predict next latent state
+        self.fc_r_pred = nn.Linear(gru_hidden_dim, 1) # Predict scalar reward
+        self.fc_d_pred = nn.Linear(gru_hidden_dim, 1) # Predict done logit
 
     def forward(self, z_sequence, a_sequence, h_initial=None):
         """
@@ -95,8 +96,10 @@ class WorldModelGRU(nn.Module):
 
         # Predict next latent state from GRU output
         next_z_pred_sequence = self.fc_out(gru_output)
+        next_r_pred_sequence = self.fc_r_pred(gru_output) # No activation for reward
+        next_d_pred_logits = self.fc_d_pred(gru_output) # Done logits
 
-        return next_z_pred_sequence, h_final
+        return next_z_pred_sequence, next_r_pred_sequence, next_d_pred_logits, h_final
 
     def step(self, z_t, a_t, h_prev):
         """
@@ -113,7 +116,15 @@ class WorldModelGRU(nn.Module):
         z_t_seq = z_t.unsqueeze(1)
         a_t_seq = a_t.unsqueeze(1)
 
-        next_z_pred_seq, h_next = self.forward(z_t_seq, a_t_seq, h_initial=h_prev)
-        next_z_pred = next_z_pred_seq.squeeze(1) # Remove sequence_length dim
+        next_z_pred_seq, next_r_pred_seq, next_d_pred_logits_seq, h_next = \
+            self.forward(z_t_seq, a_t_seq, h_initial=h_prev)
 
-        return next_z_pred, h_next
+        next_z_pred = next_z_pred_seq.squeeze(1)
+        next_r_pred = next_r_pred_seq.squeeze(1)
+        next_d_pred_logits = next_d_pred_logits_seq.squeeze(1)
+        # It's common to use torch.bernoulli(torch.sigmoid(next_d_pred_logits))
+        # to get a sampled done flag during dreaming, or just use the probability.
+        # For training the PPO agent, we might just pass the probability or the logits
+        # and let the agent learn from that. For now, just return logits.
+
+        return next_z_pred, next_r_pred, next_d_pred_logits, h_next
