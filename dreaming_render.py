@@ -12,8 +12,8 @@ from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
 from projects.gym_stuff.car_racing.models.world_model import WorldModelGRU
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
-                   VAE_CHECKPOINT_FILENAME, RandomPolicy, preprocess_and_encode,
-                   PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper)
+                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
+from projects.gym_stuff.car_racing.utils_rl import PPO_ACTOR_SAVE_FILENAME, RandomPolicy, PPOPolicyWrapper
 
 # Assuming GRU hyperparams and checkpoint name are correctly sourced.
 # If they are defined in train_world_model.py at global scope:

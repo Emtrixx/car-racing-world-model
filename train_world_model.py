@@ -14,7 +14,8 @@ from utils import WM_CHECKPOINT_FILENAME_GRU
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME,  # WM_CHECKPOINT_FILENAME (will change suffix)
-                   preprocess_and_encode, PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper)
+                   preprocess_and_encode)
+from projects.gym_stuff.car_racing.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4
