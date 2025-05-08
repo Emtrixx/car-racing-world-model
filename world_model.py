@@ -2,7 +2,7 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 
-from projects.gym_stuff.car_racing.utils import LATENT_DIM, ACTION_DIM
+from utils import LATENT_DIM, ACTION_DIM
 
 # --- MLP-based World Model ---
 class WorldModelMLP(nn.Module):
