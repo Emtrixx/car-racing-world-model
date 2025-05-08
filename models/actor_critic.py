@@ -2,7 +2,7 @@ import torch
 from torch import nn as nn
 from torch.distributions import Normal
 
-from ..utils import LATENT_DIM, ACTION_DIM
+from projects.gym_stuff.car_racing.utils import LATENT_DIM, ACTION_DIM
 
 
 # --- Actor Network ---

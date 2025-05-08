@@ -18,9 +18,9 @@ from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4
-WM_EPOCHS = 50 # Might need more for GRU
+WM_EPOCHS = 5 # Might need more for GRU
 WM_BATCH_SIZE = 32 # Sequences per batch
-COLLECT_EPISODES = 350 # Number of full episodes to collect for WM training
+COLLECT_EPISODES = 20 # Number of full episodes to collect for WM training
 REPLAY_BUFFER_CAPACITY = COLLECT_EPISODES # Store sequences from episodes
 
 # GRU Specific Config
@@ -33,92 +33,98 @@ SEQUENCE_LENGTH = 50  # Length of sequences to train on
 # --- Data Collection for GRU (Sequence Data) ---
 def collect_sequences_for_gru(env, policy, transform_fn, vae_model,
                               num_episodes, sequence_length, device):
-    print(f"Collecting sequences from {num_episodes} episodes for GRU World Model...")
-    collected_sequences = [] # Store tuples of (z_input_seq, a_input_seq, z_target_seq)
+    print(f"Collecting sequences (z,a,r,d) from {num_episodes} episodes...")
+    collected_sequences = []
 
     for episode_idx in range(num_episodes):
         obs, _ = env.reset()
-        current_episode_z = []
-        current_episode_a = []
-        done = False
-        truncated = False
+        current_episode_z, current_episode_a, current_episode_r, current_episode_d = [], [], [], []
+        done, truncated = False, False
 
-        # Collect full episode
         while not done and not truncated:
             z_t = preprocess_and_encode(obs, transform_fn, vae_model, device)
-            action_np = policy.get_action(z_t.cpu().numpy()) # Policy might expect numpy
+            action_np = policy.get_action(z_t.cpu().numpy())
             action_tensor = torch.tensor(action_np, dtype=torch.float32)
 
-            current_episode_z.append(z_t.cpu())       # Store z_t
-            current_episode_a.append(action_tensor.cpu()) # Store a_t
+            next_obs, reward, terminated, truncated, info = env.step(action_np)
+            current_done_flag = terminated or truncated
 
-            obs, reward, terminated, truncated, info = env.step(action_np)
-            done = terminated or truncated
+            current_episode_z.append(z_t.cpu())
+            current_episode_a.append(action_tensor.cpu())
+            current_episode_r.append(torch.tensor(reward, dtype=torch.float32).cpu())
+            current_episode_d.append(
+                torch.tensor(current_done_flag, dtype=torch.float32).cpu())  # Store as float for BCEWithLogitsLoss
 
-        # Add the final z state if episode ended
-        if len(current_episode_z) > 0: # Ensure episode was not empty
+            obs = next_obs
+            done = current_done_flag
+
+        # Add the final z state for target
+        if len(current_episode_z) > 0:
             z_final = preprocess_and_encode(obs, transform_fn, vae_model, device)
-            current_episode_z.append(z_final.cpu()) # This is z_L (target for last input)
+            current_episode_z.append(z_final.cpu())
 
-        # Create fixed-length sequences from the episode
-        # We need sequence_length+1 z's to make sequence_length inputs and sequence_length targets
-        episode_len = len(current_episode_a) # Number of actions, so L-1 inputs
+        episode_len = len(current_episode_a)
         if episode_len >= sequence_length:
             for i in range(episode_len - sequence_length + 1):
-                # z_inputs: z_i, z_{i+1}, ..., z_{i+sequence_length-1}
-                z_input_seq = torch.stack(current_episode_z[i : i + sequence_length])
-                # a_inputs: a_i, a_{i+1}, ..., a_{i+sequence_length-1}
-                a_input_seq = torch.stack(current_episode_a[i : i + sequence_length])
-                # z_targets: z_{i+1}, z_{i+2}, ..., z_{i+sequence_length}
-                z_target_seq = torch.stack(current_episode_z[i + 1 : i + 1 + sequence_length])
+                z_input_seq = torch.stack(current_episode_z[i: i + sequence_length])
+                a_input_seq = torch.stack(current_episode_a[i: i + sequence_length])
+                # Targets
+                z_target_seq = torch.stack(current_episode_z[i + 1: i + 1 + sequence_length])
+                r_target_seq = torch.stack(current_episode_r[i: i + sequence_length]).unsqueeze(-1)  # Add feature dim
+                d_target_seq = torch.stack(current_episode_d[i: i + sequence_length]).unsqueeze(-1)  # Add feature dim
 
-                collected_sequences.append((z_input_seq, a_input_seq, z_target_seq))
+                collected_sequences.append((z_input_seq, a_input_seq, z_target_seq, r_target_seq, d_target_seq))
+
         if (episode_idx + 1) % 20 == 0:
-            print(f"  Finished episode {episode_idx+1}/{num_episodes}. Total sequences: {len(collected_sequences)}")
-
+            print(f"  Episode {episode_idx + 1}/{num_episodes}. Total sequences: {len(collected_sequences)}")
     print(f"Finished collecting. Total sequences: {len(collected_sequences)}.")
     return collected_sequences
 
-
-# --- Dataset for GRU World Model Training (Sequences) ---
-class SequenceDataset(Dataset):
+class SequenceDataset(Dataset): # Now returns 5 items
     def __init__(self, sequence_data):
-        self.data = sequence_data # List of (z_input_seq, a_input_seq, z_target_seq)
+        self.data = sequence_data
+    def __len__(self): return len(self.data)
+    def __getitem__(self, idx): return self.data[idx]
 
-    def __len__(self):
-        return len(self.data)
-
-    def __getitem__(self, idx):
-        return self.data[idx] # Returns the tuple of three sequence tensors
-
-# --- GRU World Model Training Loop ---
-def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer, criterion, epoch, device):
+# --- GRU World Model Training Loop (with r, d loss) ---
+def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer,
+                                z_criterion, r_criterion, d_criterion, epoch, device): # Separate criteria
     world_model_gru.train()
-    epoch_loss = 0
+    epoch_loss, epoch_z_loss, epoch_r_loss, epoch_d_loss = 0, 0, 0, 0
     processed_batches = 0
 
-    for batch_idx, (z_input_seq, a_input_seq, z_target_seq) in enumerate(dataloader):
-        z_input_seq = z_input_seq.to(device)     # (batch, seq_len, latent_dim)
-        a_input_seq = a_input_seq.to(device)     # (batch, seq_len, action_dim)
-        z_target_seq = z_target_seq.to(device)   # (batch, seq_len, latent_dim)
+    for z_input_seq, a_input_seq, z_target_seq, r_target_seq, d_target_seq in dataloader:
+        z_input_seq, a_input_seq, z_target_seq, r_target_seq, d_target_seq = \
+            z_input_seq.to(device), a_input_seq.to(device), z_target_seq.to(device), \
+            r_target_seq.to(device), d_target_seq.to(device)
 
         optimizer.zero_grad()
+        z_pred_seq, r_pred_seq, d_pred_logits_seq, _ = world_model_gru(z_input_seq, a_input_seq)
 
-        # Predict sequence of next latent states
-        # h_initial is None by default (zeros)
-        z_pred_seq, _ = world_model_gru(z_input_seq, a_input_seq)
+        loss_z = z_criterion(z_pred_seq, z_target_seq)
+        loss_r = r_criterion(r_pred_seq, r_target_seq)
+        # Use BCEWithLogitsLoss for done flags as they are binary
+        loss_d = d_criterion(d_pred_logits_seq, d_target_seq) # Target should be float 0.0 or 1.0
 
-        # Calculate loss over the entire sequence predictions
-        loss = criterion(z_pred_seq, z_target_seq)
+        # Combine losses (can weight them)
+        total_loss = loss_z + loss_r + loss_d
 
-        loss.backward()
+        total_loss.backward()
         optimizer.step()
-        epoch_loss += loss.item()
+
+        epoch_loss += total_loss.item()
+        epoch_z_loss += loss_z.item()
+        epoch_r_loss += loss_r.item()
+        epoch_d_loss += loss_d.item()
         processed_batches += 1
 
-    avg_epoch_loss = epoch_loss / processed_batches
-    print(f'====> GRU World Model Epoch: {epoch} Average loss: {avg_epoch_loss:.6f}')
-    return avg_epoch_loss
+    avg_loss = epoch_loss / processed_batches
+    avg_z_loss = epoch_z_loss / processed_batches
+    avg_r_loss = epoch_r_loss / processed_batches
+    avg_d_loss = epoch_d_loss / processed_batches
+    print(f'====> GRU WM Epoch: {epoch} Avg Loss: {avg_loss:.4f} '
+          f'(Z: {avg_z_loss:.4f}, R: {avg_r_loss:.4f}, D: {avg_d_loss:.4f})')
+    return avg_loss
 
 # --- Main Execution ---
 if __name__ == "__main__":
@@ -183,14 +189,19 @@ if __name__ == "__main__":
         gru_input_embed_dim=GRU_INPUT_EMBED_DIM
     ).to(DEVICE)
     wm_optimizer = optim.Adam(world_model_gru.parameters(), lr=WM_LEARNING_RATE)
-    wm_criterion = nn.MSELoss() # Mean Squared Error for predicting next latent state sequence
+    # Define separate loss criteria
+    z_loss_criterion = nn.MSELoss()
+    r_loss_criterion = nn.MSELoss()  # Or nn.L1Loss()
+    d_loss_criterion = nn.BCEWithLogitsLoss()  # For done logits
 
     # 7. Train the GRU World Model
     print("Starting GRU World Model training...")
     start_train_time = time.time()
     wm_losses = []
     for epoch in range(1, WM_EPOCHS + 1):
-        loss = train_world_model_gru_epoch(world_model_gru, wm_dataloader, wm_optimizer, wm_criterion, epoch, DEVICE)
+        loss = train_world_model_gru_epoch(world_model_gru, wm_dataloader, wm_optimizer,
+                                           z_loss_criterion, r_loss_criterion, d_loss_criterion,
+                                           epoch, DEVICE)
         wm_losses.append(loss)
     print(f"GRU World Model training took {time.time() - start_train_time:.2f} seconds.")
 
