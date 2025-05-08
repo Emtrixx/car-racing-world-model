@@ -14,7 +14,8 @@ from torch import nn, random
 from projects.gym_stuff.car_racing.models.actor_critic import Actor, Critic
 from projects.gym_stuff.car_racing.models.conv_vae import ConvVAE
 from projects.gym_stuff.car_racing.models.world_model import WorldModelGRU
-from projects.gym_stuff.car_racing.utils import PPO_DREAM_ACTOR_SAVE_FILENAME, PPO_DREAM_CRITIC_SAVE_FILENAME
+from projects.gym_stuff.car_racing.utils import PPO_DREAM_ACTOR_SAVE_FILENAME, PPO_DREAM_CRITIC_SAVE_FILENAME, \
+    RolloutBuffer, PPOHyperparameters
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode,
@@ -28,7 +29,7 @@ from train_world_model import (WM_CHECKPOINT_FILENAME_GRU, GRU_HIDDEN_DIM,
 # Import PPO Hyperparameters (can also define them here or in a shared config)
 from train_ppo import (GAMMA, LAMBDA, EPSILON, ACTOR_LR, CRITIC_LR,
                        EPOCHS_PER_UPDATE, MINIBATCH_SIZE,  # STEPS_PER_BATCH will be for dream
-                       ENTROPY_COEF, VF_COEF, TARGET_KL, GRAD_CLIP_NORM, RolloutBuffer)
+                       ENTROPY_COEF, VF_COEF, TARGET_KL, GRAD_CLIP_NORM)
 
 print(f"Device for PPO in Dream: {DEVICE}")
 
@@ -168,6 +169,14 @@ def train_ppo_in_dream():
     # try: critic.load_state_dict(torch.load(PPO_CRITIC_SAVE_FILENAME, map_location=DEVICE))
     # except: print("Initializing new PPO Critic for dream.")
 
+    # Instantiate PPOHyperparameters todo: use a config file or shared module
+    hyperparams = PPOHyperparameters(
+        gamma=0.99, lambda_gae=0.95, epsilon_clip=0.2,
+        actor_lr=3e-4, critic_lr=1e-3, epochs_per_update=4,  # Fewer epochs often better for model-based
+        minibatch_size=64, entropy_coef=0.01, vf_coef=0.5,
+        grad_clip_norm=0.5, target_kl=0.015
+    )
+
     actor_optimizer = optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
     critic_optimizer = optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
     print("PPO Actor/Critic initialized.")
@@ -244,11 +253,32 @@ def train_ppo_in_dream():
                 current_h = torch.zeros(GRU_NUM_LAYERS, 1, GRU_HIDDEN_DIM).to(DEVICE)
                 if num_dream_episodes_this_batch > 0: total_dream_reward_this_batch = 0  # Reset counter if we had episodes
 
+                # --- Determine last_value_for_gae for dream ---
+                with torch.no_grad():
+                    if dream_buffer.dones and dream_buffer.dones[-1].item() > 0.5:  # If last dream step was 'done'
+                        last_value_for_gae_dream = torch.tensor(0.0, device=DEVICE)
+                    elif dream_buffer.states:  # If buffer is not empty
+                        # Use critic to estimate value of the very last dreamed state
+                        last_dreamed_z = dream_buffer.states[-1].to(DEVICE)  # Ensure it's the state *after* last action
+                        # This needs to be the z_next from the final step of collection
+                        # The GAE calculation expects V(s_T+1).
+                        # So, if current_z is the last state added to buffer.states,
+                        # last_value_for_gae should be V(current_z_after_last_dream_step)
+                        # If a dream ends by horizon, current_z would be the state to evaluate.
+                        # For simplicity, let's get z_T (last state in dream_buffer.states) and its value.
+                        # The logic within perform_ppo_update.buffer.compute_returns_and_advantages handles
+                        # whether this last_value is used based on the last done flag.
+                        # For the last step in the dream batch current_z is z_{T_batch}
+                        # We need V(z_{T_batch}) if not done, or V(z_{T_batch+1}) if it's the value after the last action.
+                        # The `current_z` at the end of the dream collection loop is the state *after* the last action.
+                        last_value_for_gae_dream = critic(current_z.unsqueeze(0)).squeeze(0).to(DEVICE)
+                    else:  # Buffer empty
+                        last_value_for_gae_dream = torch.tensor(0.0, device=DEVICE)
+
         # Perform PPO update using the dream_buffer
         mean_kl = perform_ppo_update(
             dream_buffer, actor, critic, actor_optimizer, critic_optimizer,
-            EPOCHS_PER_UPDATE, MINIBATCH_SIZE, GAMMA, LAMBDA, EPSILON,
-            VF_COEF, ENTROPY_COEF, GRAD_CLIP_NORM, TARGET_KL, DEVICE
+            hyperparams, DEVICE, last_value_for_gae_dream
         )
         avg_dream_ep_reward = np.mean(all_dream_episode_rewards[-10:]) if all_dream_episode_rewards else 0
         print(f"Dream Update: {update_num}, Avg KL: {mean_kl:.4f}, Avg Dream Ep Reward: {avg_dream_ep_reward:.2f}")
