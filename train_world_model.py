@@ -19,14 +19,14 @@ from utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4
-WM_EPOCHS = 50 # Might need more for GRU
+WM_EPOCHS = 100 # Might need more for GRU
 WM_BATCH_SIZE = 32 # Sequences per batch
-COLLECT_EPISODES = 350 # Number of full episodes to collect for WM training
+COLLECT_EPISODES = 500 # Number of full episodes to collect for WM training
 REPLAY_BUFFER_CAPACITY = COLLECT_EPISODES # Store sequences from episodes
 
 # GRU Specific Config
 GRU_HIDDEN_DIM = 256
-GRU_NUM_LAYERS = 1 # Start with 1, can try 2
+GRU_NUM_LAYERS = 2 # Start with 1, can try 2
 GRU_INPUT_EMBED_DIM = 128 # Optional embedding dimension for (z,a) pair
 SEQUENCE_LENGTH = 50  # Length of sequences to train on
 
@@ -43,7 +43,7 @@ def collect_sequences_for_gru(env, policy, transform_fn, vae_model,
         done, truncated = False, False
 
         while not done and not truncated:
-            z_t = preprocess_and_encode(obs, transform_fn, vae_model, device)
+            z_t = preprocess_and_encode(obs, transform_fn, vae_model, device) # embedding
             action_np = policy.get_action(z_t.cpu().numpy())
             action_tensor = torch.tensor(action_np, dtype=torch.float32)
 
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     print(f"Starting GRU World Model training on device: {DEVICE}")
 
     # 1. Initialize Environment
-    env = gym.make(ENV_NAME, render_mode="rgb_array")
+    env = gym.make(ENV_NAME, render_mode="rgb_array", max_episode_steps=400)
 
     # 2. Load Pre-trained VAE
     vae_model = ConvVAE().to(DEVICE)

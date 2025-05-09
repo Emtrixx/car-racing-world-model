@@ -34,7 +34,7 @@ def vae_loss_function(recon_x, x, mu, logvar, beta=BETA):
 # --- Data Collection ---
 def collect_frames(env_name, num_frames, transform_fn):
     print(f"Collecting {num_frames} frames for VAE training...")
-    env = gym.make(env_name, render_mode="rgb_array")
+    env = gym.make(env_name, render_mode="rgb_array", max_episode_steps=1000)
     frames = []
     state, _ = env.reset()
     frame_count = 0

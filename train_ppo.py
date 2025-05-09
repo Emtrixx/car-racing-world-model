@@ -97,7 +97,7 @@ def train_ppo():
             # Encode observation to latent state z_t
             with torch.no_grad():
                 z_t = preprocess_and_encode(start_obs, transform, vae_model, DEVICE)
-                value = critic(z_t.unsqueeze(0)).squeeze(0) # Add/remove batch dim
+                value = critic(z_t.unsqueeze(0)).squeeze()
 
             # Sample action from actor policy
             dist = actor(z_t.unsqueeze(0)) # Add batch dim
@@ -149,9 +149,9 @@ def train_ppo():
         # Compute value for the last state reached
         with torch.no_grad():
             z_last = preprocess_and_encode(start_obs, transform, vae_model, DEVICE)
-            last_value = critic(z_last.unsqueeze(0)).squeeze(0)
+            last_value = critic(z_last.unsqueeze(0)).squeeze().to(DEVICE)
         # Compute returns and advantages using GAE
-        buffer.returns, buffer.advantages = buffer.compute_returns_and_advantages(last_value.cpu(), GAMMA, LAMBDA)
+        buffer.compute_returns_and_advantages(last_value.cpu(), GAMMA, LAMBDA)
 
         # Normalize advantages (important for stability)
         buffer.advantages = (buffer.advantages - buffer.advantages.mean()) / (buffer.advantages.std() + 1e-8)
