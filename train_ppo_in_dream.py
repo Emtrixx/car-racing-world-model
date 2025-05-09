@@ -85,7 +85,7 @@ def perform_ppo_update(buffer, actor, critic, actor_optimizer, critic_optimizer,
     else:  # Buffer might be empty if dream_steps_per_batch is small
         return 0.0  # No update if buffer is empty
 
-    buffer.returns, buffer.advantages = buffer.compute_returns_and_advantages(
+    buffer.compute_returns_and_advantages(
         last_value=last_val_for_gae,  # This needs careful handling for dreams
         gamma=gamma, lambda_=lambda_
     )
@@ -209,7 +209,7 @@ def train_ppo_in_dream():
         for dream_step in range(DREAM_STEPS_PER_BATCH):
             # Get action from current PPO policy
             with torch.no_grad():
-                value_z = critic(current_z.unsqueeze(0)).squeeze(0)  # V(z_t)
+                value_z = critic(current_z.unsqueeze(0)).squeeze()  # V(z_t)
                 dist = actor(current_z.unsqueeze(0))
                 action_raw = dist.sample()
                 log_prob_action = dist.log_prob(action_raw).sum(1).squeeze(0)
