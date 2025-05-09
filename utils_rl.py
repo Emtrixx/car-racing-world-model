@@ -66,9 +66,6 @@ def perform_ppo_update(
     # last_value_for_gae is now passed as an argument
     buffer.compute_returns_and_advantages(last_value_for_gae, hyperparams.gamma, hyperparams.lambda_gae)
 
-    # Normalize advantages (important for stability)
-    buffer.advantages = (buffer.advantages - buffer.advantages.mean()) / (buffer.advantages.std() + 1e-8)
-
     for epoch in range(hyperparams.epochs_per_update):
         approx_kl_divs_this_epoch = []
         for states, actions, old_log_probs, returns, advantages in buffer.get_batch(hyperparams.minibatch_size):
