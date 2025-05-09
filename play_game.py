@@ -21,7 +21,7 @@ PLAYBACK_SPEED_DELAY = 0.02 # Seconds to pause between steps (increase for slowe
 def play():
     print(f"Initializing environment: {ENV_NAME} with human rendering.")
     # Use render_mode="human"
-    env = gym.make(ENV_NAME, render_mode="human")
+    env = gym.make(ENV_NAME, render_mode="human", max_episode_steps=300)
 
     # --- Load Models ---
     print(f"Loading models to device: {DEVICE}")

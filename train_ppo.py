@@ -25,7 +25,7 @@ CRITIC_LR = 3e-4       # Learning rate for critic
 EPOCHS_PER_UPDATE = 10 # Number of optimization epochs per batch
 MINIBATCH_SIZE = 64
 STEPS_PER_BATCH = 2048 # Number of steps to collect rollout data per update
-MAX_TRAINING_STEPS = 500_000 # Total steps for training todo: higher
+MAX_TRAINING_STEPS = 1_500_000 # Total steps for training todo: higher
 ENTROPY_COEF = 0.01    # Entropy regularization coefficient
 VF_COEF = 0.5          # Value function loss coefficient
 TARGET_KL = 0.015      # Target KL divergence limit (optional, for early stopping updates)
@@ -150,11 +150,6 @@ def train_ppo():
         with torch.no_grad():
             z_last = preprocess_and_encode(start_obs, transform, vae_model, DEVICE)
             last_value = critic(z_last.unsqueeze(0)).squeeze().to(DEVICE)
-        # Compute returns and advantages using GAE
-        buffer.compute_returns_and_advantages(last_value.cpu(), GAMMA, LAMBDA)
-
-        # Normalize advantages (important for stability)
-        buffer.advantages = (buffer.advantages - buffer.advantages.mean()) / (buffer.advantages.std() + 1e-8)
 
         # --- Perform PPO Update ---
         mean_kl = perform_ppo_update(
