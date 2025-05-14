@@ -81,7 +81,7 @@ def preprocess_and_encode_stack(
 
 
 class FrameStackWrapper(gym.Wrapper):
-    def __init__(self, env, num_stack):
+    def __init__(self, env, num_stack=NUM_STACK):
         super().__init__(env)
         self.num_stack = num_stack
         self.frames = deque(maxlen=num_stack)
