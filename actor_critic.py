@@ -2,12 +2,12 @@ import torch
 from torch import nn as nn
 from torch.distributions import Normal
 
-from utils import LATENT_DIM, ACTION_DIM
+from utils import LATENT_DIM, ACTION_DIM, NUM_STACK
 
 
 # --- Actor Network ---
 class Actor(nn.Module):
-    def __init__(self, state_dim=LATENT_DIM, action_dim=ACTION_DIM, hidden_dim=256):
+    def __init__(self, state_dim=LATENT_DIM * NUM_STACK, action_dim=ACTION_DIM, hidden_dim=256):
         super().__init__()
         self.action_dim = action_dim
         self.net = nn.Sequential(
@@ -47,7 +47,7 @@ class Actor(nn.Module):
 
 # --- Critic Network ---
 class Critic(nn.Module):
-    def __init__(self, state_dim=LATENT_DIM, hidden_dim=256):
+    def __init__(self, state_dim=LATENT_DIM * NUM_STACK, hidden_dim=256):
         super().__init__()
         self.net = nn.Sequential(
             nn.Linear(state_dim, hidden_dim),
