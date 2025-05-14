@@ -10,24 +10,26 @@ import matplotlib.pyplot as plt
 from actor_critic import Actor
 from conv_vae import ConvVAE
 from world_model import WorldModelGRU
-from utils import WM_CHECKPOINT_FILENAME_GRU
+from utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK, preprocess_and_encode
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME,  # WM_CHECKPOINT_FILENAME (will change suffix)
-                   preprocess_and_encode)
+                   preprocess_and_encode_stack)
 from utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4
-WM_EPOCHS = 100 # Might need more for GRU
-WM_BATCH_SIZE = 32 # Sequences per batch
-COLLECT_EPISODES = 500 # Number of full episodes to collect for WM training
-REPLAY_BUFFER_CAPACITY = COLLECT_EPISODES # Store sequences from episodes
+WM_EPOCHS = 10  # Might need more for GRU
+# WM_EPOCHS = 100  # Might need more for GRU
+WM_BATCH_SIZE = 32  # Sequences per batch
+COLLECT_EPISODES = 10  # Number of full episodes to collect for WM training
+# COLLECT_EPISODES = 500  # Number of full episodes to collect for WM training
+REPLAY_BUFFER_CAPACITY = COLLECT_EPISODES  # Store sequences from episodes
 
 # GRU Specific Config
 GRU_HIDDEN_DIM = 256
-GRU_NUM_LAYERS = 2 # Start with 1, can try 2
-GRU_INPUT_EMBED_DIM = 128 # Optional embedding dimension for (z,a) pair
+GRU_NUM_LAYERS = 2  # Start with 1, can try 2
+GRU_INPUT_EMBED_DIM = 128  # Optional embedding dimension for (z,a) pair
 SEQUENCE_LENGTH = 50  # Length of sequences to train on
 
 
@@ -38,58 +40,87 @@ def collect_sequences_for_gru(env, policy, transform_fn, vae_model,
     collected_sequences = []
 
     for episode_idx in range(num_episodes):
-        obs, _ = env.reset()
-        current_episode_z, current_episode_a, current_episode_r, current_episode_d = [], [], [], []
+        # obs_stack_raw is (NUM_STACK, H, W, C) from FrameStackWrapper
+        obs_stack_raw, _ = env.reset()
+
+        # For storing data of the current episode before forming sequences
+        ep_Z_input_stacks_cpu = []  # List of Z_t (concatenated stack, NUM_STACK * LATENT_DIM)
+        ep_a_actions_cpu = []  # List of a_t (ACTION_DIM)
+        ep_r_rewards_cpu = []  # List of r_{t+1} (scalar)
+        ep_d_dones_cpu = []  # List of d_{t+1} (scalar)
+        ep_z_single_targets_cpu = []  # List of z'_{t+1} (single frame latent, LATENT_DIM)
+
         done, truncated = False, False
+        current_steps_in_episode = 0
 
         while not done and not truncated:
-            z_t = preprocess_and_encode(obs, transform_fn, vae_model, device) # embedding
-            action_np = policy.get_action(z_t.cpu().numpy())
-            action_tensor = torch.tensor(action_np, dtype=torch.float32)
+            # 1. Current state Z_t (input for GRU) - This is the stack of latents for current time t
+            Z_t_concat_gpu = preprocess_and_encode_stack(obs_stack_raw, transform_fn, vae_model, device)
+            ep_Z_input_stacks_cpu.append(Z_t_concat_gpu.cpu())
 
-            next_obs, reward, terminated, truncated, info = env.step(action_np)
+            # 2. Get action based on Z_t
+            action_np = policy.get_action(Z_t_concat_gpu.cpu().numpy())  # Policy sees the concatenated stack
+            action_tensor = torch.tensor(action_np, dtype=torch.float32)
+            ep_a_actions_cpu.append(action_tensor.cpu())
+
+            # 3. Step environment
+            next_obs_stack_raw, reward, terminated, truncated, info = env.step(action_np)
             current_done_flag = terminated or truncated
 
-            current_episode_z.append(z_t.cpu())
-            current_episode_a.append(action_tensor.cpu())
-            current_episode_r.append(torch.tensor(reward, dtype=torch.float32).cpu())
-            current_episode_d.append(
-                torch.tensor(current_done_flag, dtype=torch.float32).cpu())  # Store as float for BCEWithLogitsLoss
+            # 4. Prepare targets for this step (r_{t+1}, d_{t+1}, and z'_{t+1})
+            ep_r_rewards_cpu.append(torch.tensor(reward, dtype=torch.float32).cpu())
+            ep_d_dones_cpu.append(torch.tensor(current_done_flag, dtype=torch.float32).cpu())
 
-            obs = next_obs
+            # The target z'_{t+1} is the VAE encoding of the *single newest raw frame*
+            # from next_obs_stack_raw. The newest frame is at the last index of the stack.
+            single_newest_raw_frame = next_obs_stack_raw[-1]  # Shape (H, W, C)
+            z_prime_tp1_gpu = preprocess_and_encode(single_newest_raw_frame, transform_fn, vae_model, device)
+            ep_z_single_targets_cpu.append(z_prime_tp1_gpu.cpu())
+
+            # 5. Update for next iteration
+            obs_stack_raw = next_obs_stack_raw
             done = current_done_flag
+            current_steps_in_episode += 1
 
-        # Add the final z state for target
-        if len(current_episode_z) > 0:
-            z_final = preprocess_and_encode(obs, transform_fn, vae_model, device)
-            current_episode_z.append(z_final.cpu())
+        # After episode ends, create sequences of fixed length
+        num_transitions_in_episode = len(ep_a_actions_cpu)  # This is L, number of (S,A,R,S',D) steps
 
-        episode_len = len(current_episode_a)
-        if episode_len >= sequence_length:
-            for i in range(episode_len - sequence_length + 1):
-                z_input_seq = torch.stack(current_episode_z[i: i + sequence_length])
-                a_input_seq = torch.stack(current_episode_a[i: i + sequence_length])
-                # Targets
-                z_target_seq = torch.stack(current_episode_z[i + 1: i + 1 + sequence_length])
-                r_target_seq = torch.stack(current_episode_r[i: i + sequence_length]).unsqueeze(-1)  # Add feature dim
-                d_target_seq = torch.stack(current_episode_d[i: i + sequence_length]).unsqueeze(-1)  # Add feature dim
+        if num_transitions_in_episode >= sequence_length:
+            for i in range(num_transitions_in_episode - sequence_length + 1):
+                # Input Z_stack sequence: Z_i, Z_{i+1}, ..., Z_{i+sequence_length-1}
+                z_input_s = torch.stack(ep_Z_input_stacks_cpu[i: i + sequence_length])
+                # Action sequence: a_i, ..., a_{i+sequence_length-1}
+                a_input_s = torch.stack(ep_a_actions_cpu[i: i + sequence_length])
 
-                collected_sequences.append((z_input_seq, a_input_seq, z_target_seq, r_target_seq, d_target_seq))
+                # Target single z' sequence: z'_{i+1}, ..., z'_{i+sequence_length}
+                # These correspond to the single next frame's latent for each input Z_stack
+                z_target_s = torch.stack(ep_z_single_targets_cpu[i: i + sequence_length])
+                # Target reward sequence: r_{i+1}, ..., r_{i+sequence_length}
+                r_target_s = torch.stack(ep_r_rewards_cpu[i: i + sequence_length]).unsqueeze(-1)
+                # Target done sequence: d_{i+1}, ..., d_{i+sequence_length}
+                d_target_s = torch.stack(ep_d_dones_cpu[i: i + sequence_length]).unsqueeze(-1)
 
-        if (episode_idx + 1) % 20 == 0:
-            print(f"  Episode {episode_idx + 1}/{num_episodes}. Total sequences: {len(collected_sequences)}")
+                collected_sequences.append((z_input_s, a_input_s, z_target_s, r_target_s, d_target_s))
+
+        if (episode_idx + 1) % 20 == 0 or episode_idx == num_episodes - 1:
+            print(
+                f"  Episode {episode_idx + 1}/{num_episodes}. Steps: {current_steps_in_episode}. Total sequences collected: {len(collected_sequences)}")
     print(f"Finished collecting. Total sequences: {len(collected_sequences)}.")
     return collected_sequences
 
-class SequenceDataset(Dataset): # Now returns 5 items
+
+class SequenceDataset(Dataset):  # Now returns 5 items
     def __init__(self, sequence_data):
         self.data = sequence_data
+
     def __len__(self): return len(self.data)
+
     def __getitem__(self, idx): return self.data[idx]
+
 
 # --- GRU World Model Training Loop (with r, d loss) ---
 def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer,
-                                z_criterion, r_criterion, d_criterion, epoch, device): # Separate criteria
+                                z_criterion, r_criterion, d_criterion, epoch, device):  # Separate criteria
     world_model_gru.train()
     epoch_loss, epoch_z_loss, epoch_r_loss, epoch_d_loss = 0, 0, 0, 0
     processed_batches = 0
@@ -97,7 +128,7 @@ def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer,
     for z_input_seq, a_input_seq, z_target_seq, r_target_seq, d_target_seq in dataloader:
         z_input_seq, a_input_seq, z_target_seq, r_target_seq, d_target_seq = \
             z_input_seq.to(device), a_input_seq.to(device), z_target_seq.to(device), \
-            r_target_seq.to(device), d_target_seq.to(device)
+                r_target_seq.to(device), d_target_seq.to(device)
 
         optimizer.zero_grad()
         z_pred_seq, r_pred_seq, d_pred_logits_seq, _ = world_model_gru(z_input_seq, a_input_seq)
@@ -105,7 +136,7 @@ def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer,
         loss_z = z_criterion(z_pred_seq, z_target_seq)
         loss_r = r_criterion(r_pred_seq, r_target_seq)
         # Use BCEWithLogitsLoss for done flags as they are binary
-        loss_d = d_criterion(d_pred_logits_seq, d_target_seq) # Target should be float 0.0 or 1.0
+        loss_d = d_criterion(d_pred_logits_seq, d_target_seq)  # Target should be float 0.0 or 1.0
 
         # Combine losses (can weight them)
         total_loss = loss_z + loss_r + loss_d
@@ -127,12 +158,13 @@ def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer,
           f'(Z: {avg_z_loss:.4f}, R: {avg_r_loss:.4f}, D: {avg_d_loss:.4f})')
     return avg_loss
 
+
 # --- Main Execution ---
 if __name__ == "__main__":
     print(f"Starting GRU World Model training on device: {DEVICE}")
 
     # 1. Initialize Environment
-    env = gym.make(ENV_NAME, render_mode="rgb_array", max_episode_steps=400)
+    env = FrameStackWrapper(gym.make(ENV_NAME, render_mode="rgb_array", max_episode_steps=400), num_stack=NUM_STACK)
 
     # 2. Load Pre-trained VAE
     vae_model = ConvVAE().to(DEVICE)
@@ -142,9 +174,12 @@ if __name__ == "__main__":
         print(f"Successfully loaded VAE: {VAE_CHECKPOINT_FILENAME}")
     except FileNotFoundError:
         print(f"ERROR: VAE checkpoint '{VAE_CHECKPOINT_FILENAME}' not found. Train VAE first.")
-        env.close(); exit()
+        env.close();
+        exit()
     except Exception as e:
-        print(f"ERROR loading VAE: {e}"); env.close(); exit()
+        print(f"ERROR loading VAE: {e}");
+        env.close();
+        exit()
 
     # 3. Initialize Policy (PPO Actor)
     policy_for_collection = None
@@ -160,9 +195,12 @@ if __name__ == "__main__":
         print(f"Using PPO Actor for data collection.")
     except FileNotFoundError:
         print(f"ERROR: PPO Actor checkpoint '{PPO_ACTOR_SAVE_FILENAME}' not found. Train PPO first.")
-        env.close(); exit()
+        env.close();
+        exit()
     except Exception as e:
-        print(f"ERROR loading PPO Actor: {e}"); env.close(); exit()
+        print(f"ERROR loading PPO Actor: {e}");
+        env.close();
+        exit()
 
     # 4. Collect Sequence Data
     start_collect_time = time.time()
@@ -183,7 +221,8 @@ if __name__ == "__main__":
 
     # 6. Initialize GRU World Model, Optimizer, Criterion
     world_model_gru = WorldModelGRU(
-        latent_dim=LATENT_DIM,
+        input_latent_stack_dim=NUM_STACK * LATENT_DIM,  # Input is the concatenated stack
+        output_single_latent_dim=LATENT_DIM,  # Output is a single next latent
         action_dim=ACTION_DIM,
         gru_hidden_dim=GRU_HIDDEN_DIM,
         gru_num_layers=GRU_NUM_LAYERS,
@@ -209,10 +248,14 @@ if __name__ == "__main__":
     # 8. Plot and Save Loss
     plt.figure(figsize=(10, 5))
     plt.plot(range(1, WM_EPOCHS + 1), wm_losses)
-    plt.xlabel("Epoch"); plt.ylabel("MSE Loss")
-    plt.title(f"GRU World Model Training Loss (SeqLen {SEQUENCE_LENGTH})"); plt.grid(True)
+    plt.xlabel("Epoch");
+    plt.ylabel("MSE Loss")
+    plt.title(f"GRU World Model Training Loss (SeqLen {SEQUENCE_LENGTH})");
+    plt.grid(True)
     loss_plot_path = f"images/world_model_gru_loss_seq{SEQUENCE_LENGTH}.png"
-    plt.savefig(loss_plot_path); print(f"Saved loss plot to {loss_plot_path}"); plt.close()
+    plt.savefig(loss_plot_path);
+    print(f"Saved loss plot to {loss_plot_path}");
+    plt.close()
 
     # 9. Save the trained GRU World Model
     try:
