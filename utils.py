@@ -89,6 +89,7 @@ class FrameStackWrapper(gym.Wrapper):
         # Modify observation space
         # Original observation space is Box(0, 255, (H, W, C), uint8)
         # We will stack raw frames. The VAE will process them individually later.
+        # example carlculation. observation_space defined with same result below
         low = np.repeat(self.observation_space.low[..., np.newaxis], num_stack, axis=-1)
         high = np.repeat(self.observation_space.high[..., np.newaxis], num_stack, axis=-1)
         # New shape: (H, W, C*num_stack) if concatenating channels, or (H, W, C, num_stack)
