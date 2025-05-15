@@ -1,19 +1,19 @@
 # train_ppo.py
-import gymnasium as gym
+import time
+
+import matplotlib.pyplot as plt
 import numpy as np
 import torch
 import torch.optim as optim
-import time
-import matplotlib.pyplot as plt
 
 from actor_critic import Actor, Critic
-from utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
-    PPO_CRITIC_SAVE_FILENAME, PPOHyperparameters, RolloutBuffer
+from conv_vae import ConvVAE
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,
-                   VAE_CHECKPOINT_FILENAME, FrameStackWrapper, NUM_STACK,
-                   preprocess_and_encode_stack)
-from conv_vae import ConvVAE
+                   VAE_CHECKPOINT_FILENAME, NUM_STACK,
+                   make_env, LATENT_DIM)
+from utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
+    PPO_CRITIC_SAVE_FILENAME, PPOHyperparameters, RolloutBuffer
 
 print(f"Using device: {DEVICE}")
 
@@ -23,12 +23,12 @@ LAMBDA = 0.95  # Lambda for GAE
 EPSILON = 0.2  # Clipping parameter for PPO
 ACTOR_LR = 1e-4  # Learning rate for actor
 CRITIC_LR = 3e-4  # Learning rate for critic
-EPOCHS_PER_UPDATE = 5  # testing
-# EPOCHS_PER_UPDATE = 12  # Number of optimization epochs per batch
+# EPOCHS_PER_UPDATE = 5  # testing
+EPOCHS_PER_UPDATE = 10  # Number of optimization epochs per batch
 MINIBATCH_SIZE = 64
 STEPS_PER_BATCH = 2048  # Number of steps to collect rollout data per update
-MAX_TRAINING_STEPS = 10_000  # testing
-# MAX_TRAINING_STEPS = 10_000_000  # Total steps for training todo: higher
+# MAX_TRAINING_STEPS = 10_000  # testing
+MAX_TRAINING_STEPS = 10_000_000  # Total steps for training
 ENTROPY_COEF = 0.01  # Entropy regularization coefficient
 VF_COEF = 0.5  # Value function loss coefficient
 TARGET_KL = 0.015  # Target KL divergence limit (optional, for early stopping updates)
@@ -43,17 +43,15 @@ def train_ppo():
     print("Starting PPO training...")
     start_time = time.time()
 
-    # 1. Setup Environment
-    raw_env = gym.make(ENV_NAME, render_mode="rgb_array")
-    # Apply wrapper for Frame Stacking
-    env = FrameStackWrapper(raw_env, NUM_STACK)  # WRAP for frame stacking
-    # Note: For continuous actions, CarRacing-v3 might benefit from wrappers like:
-    env = gym.wrappers.TransformReward(env, lambda r: np.clip(r, -1.0, 1.0))  # Reward clipping
-    # env = gym.wrappers.NormalizeObservation(env) # If not using VAE
-    env = gym.wrappers.NormalizeReward(env, gamma=GAMMA)  # If needed
-    print(f"Wrapped environment. Observation space: {env.observation_space.shape}")
+    # Put hyperparams into object
+    hyperparams = PPOHyperparameters(
+        gamma=GAMMA, lambda_gae=LAMBDA, epsilon_clip=EPSILON,
+        actor_lr=ACTOR_LR, critic_lr=CRITIC_LR, epochs_per_update=EPOCHS_PER_UPDATE,
+        minibatch_size=MINIBATCH_SIZE, entropy_coef=ENTROPY_COEF, vf_coef=VF_COEF,
+        grad_clip_norm=GRAD_CLIP_NORM, target_kl=TARGET_KL
+    )
 
-    # 2. Load VAE (ensure it's trained)
+    # Load ConvVAE
     vae_model = ConvVAE().to(DEVICE)
     try:
         vae_model.load_state_dict(torch.load(VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
@@ -61,25 +59,30 @@ def train_ppo():
         print(f"Successfully loaded VAE: {VAE_CHECKPOINT_FILENAME}")
     except FileNotFoundError:
         print(f"ERROR: VAE checkpoint '{VAE_CHECKPOINT_FILENAME}' not found. Train VAE first.")
-        env.close();
         return
     except Exception as e:
         print(f"ERROR loading VAE: {e}");
-        env.close();
         return
+
+    # Setup Environment
+    # - wrapper pipeline
+    # - raw observations are preprocessed and embedded
+    # - actions and rewards are clipped
+    env = make_env(
+        env_id=ENV_NAME,
+        vae_model_instance=vae_model,
+        device_for_vae=DEVICE,
+        frame_stack_num=NUM_STACK,
+        transform_function=transform,
+        single_latent_dim=LATENT_DIM,
+        gamma=GAMMA,
+    )
 
     # 3. Initialize Actor, Critic, Optimizers
     actor = Actor().to(DEVICE)
     critic = Critic().to(DEVICE)
     actor_optimizer = optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
     critic_optimizer = optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
-
-    hyperparams = PPOHyperparameters(
-        gamma=GAMMA, lambda_gae=LAMBDA, epsilon_clip=EPSILON,
-        actor_lr=ACTOR_LR, critic_lr=CRITIC_LR, epochs_per_update=EPOCHS_PER_UPDATE,
-        minibatch_size=MINIBATCH_SIZE, entropy_coef=ENTROPY_COEF, vf_coef=VF_COEF,
-        grad_clip_norm=GRAD_CLIP_NORM, target_kl=TARGET_KL
-    )
 
     # 4. Initialize Rollout Buffer
     buffer = RolloutBuffer()
@@ -88,7 +91,7 @@ def train_ppo():
     global_step = 0
     update = 0
     all_episode_rewards = []
-    current_raw_frame_stack, _ = env.reset()  # (NUM_STACK, H, W, C)
+    current_Z_t_numpy, _ = env.reset()  # (num_stack * LATENT_DIM,)
 
     while global_step < MAX_TRAINING_STEPS:
         update += 1
@@ -103,13 +106,14 @@ def train_ppo():
             global_step += 1
             # num_steps_this_batch += 1
 
-            # Encode observation to latent state z_t
+            # Convert current NumPy state from env to PyTorch tensor for actor/critic
+            Z_t_tensor = torch.tensor(current_Z_t_numpy, dtype=torch.float32).to(DEVICE)
+
             with torch.no_grad():
-                Z_t = preprocess_and_encode_stack(current_raw_frame_stack, transform, vae_model, DEVICE)
-                value = critic(Z_t.unsqueeze(0)).squeeze()  # Pass concatenated Z_t
+                value = critic(Z_t_tensor.unsqueeze(0)).squeeze()
 
             # Sample action from actor policy
-            dist = actor(Z_t.unsqueeze(0))
+            dist = actor(Z_t_tensor.unsqueeze(0))
             action_raw_from_dist = dist.sample()  # This is the 'raw' action from distribution
             log_prob = dist.log_prob(action_raw_from_dist).sum(1).squeeze(0)
             action_raw_from_dist = action_raw_from_dist.squeeze(0)
@@ -131,22 +135,22 @@ def train_ppo():
             action_np = action_clipped.detach().cpu().numpy()
 
             # Step the environment
-            next_raw_frame_stack, reward, terminated, truncated, info = env.step(action_np)
+            next_Z_t_numpy, reward, terminated, truncated, info = env.step(action_np)
             done = terminated or truncated
             current_episode_reward += reward  # Use reward from NormalizeReward wrapper
 
             # Store transition data (move tensors to CPU for storage). State is Z_t, action is raw from distribution
-            buffer.add(Z_t.cpu(), action_raw_from_dist.cpu(), log_prob.cpu(),
+            buffer.add(Z_t_tensor.cpu(), action_raw_from_dist.cpu(), log_prob.cpu(),
                        torch.tensor(reward, dtype=torch.float32).cpu(),
                        torch.tensor(done, dtype=torch.bool).cpu(),
                        value.cpu())
 
-            current_raw_frame_stack = next_raw_frame_stack  # Update observation for next step
+            current_Z_t_numpy = next_Z_t_numpy  # Update observation for next step
             if done:
                 print(f"Step: {global_step}, Episode Reward: {current_episode_reward:.2f}")
                 all_episode_rewards.append(current_episode_reward)
                 current_episode_reward = 0
-                current_raw_frame_stack, _ = env.reset()
+                current_Z_t_numpy, _ = env.reset()
 
             # Check if max steps reached during collection
             if global_step >= MAX_TRAINING_STEPS:
@@ -155,8 +159,8 @@ def train_ppo():
         # --- Prepare for Update ---
         # Compute value for the last state reached
         with torch.no_grad():
-            Z_last = preprocess_and_encode_stack(current_raw_frame_stack, transform, vae_model, DEVICE)
-            last_value = critic(Z_last.unsqueeze(0)).squeeze().to(DEVICE)
+            Z_last_tensor = torch.tensor(current_Z_t_numpy, dtype=torch.float32).to(DEVICE)
+            last_value = critic(Z_last_tensor.unsqueeze(0)).squeeze().to(DEVICE)
 
         # --- Perform PPO Update ---
         mean_kl = perform_ppo_update(
