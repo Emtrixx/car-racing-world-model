@@ -57,6 +57,29 @@ def preprocess_and_encode(obs, transform_fn, vae_model, device):
     return z.squeeze(0)  # Remove batch dim -> Shape: (LATENT_DIM)
 
 
+# --- Helper Function to Preprocess and Encode Observation Stack ---
+def preprocess_and_encode_stack(
+        raw_frame_stack,  # NumPy array from FrameStackWrapper: (num_stack, H, W, C)
+        transform_fn,  # Your existing torchvision transform
+        vae_model,  # Your loaded VAE model (in eval mode)
+        device
+):
+    latent_vectors = []
+    for i in range(raw_frame_stack.shape[0]):  # Iterate through N frames in the stack
+        raw_frame = raw_frame_stack[i]  # Single frame (H, W, C)
+        # Use your existing preprocess_and_encode logic for a single frame,
+        # or replicate its core here:
+        processed_frame = transform_fn(raw_frame).unsqueeze(0).to(device)  # (1, C, H, W)
+        with torch.no_grad():
+            mu, _ = vae_model.encode(processed_frame)  # mu shape (1, LATENT_DIM)
+            latent_vectors.append(mu.squeeze(0))  # Squeeze to (LATENT_DIM)
+
+    # Concatenate the N latent vectors
+    # Resulting shape: (num_stack * LATENT_DIM,)
+    concatenated_latents = torch.cat(latent_vectors, dim=0)
+    return concatenated_latents
+
+
 class FrameStackWrapper(gym.Wrapper):
     def __init__(self, env, num_stack=NUM_STACK):
         super().__init__(env)
@@ -205,8 +228,10 @@ def make_env(vae_model_instance,  # The loaded and initialized VAE model
              render_mode=None,
              gamma=0.99,
              single_latent_dim=LATENT_DIM,
-             device_for_vae=DEVICE):
-    env = gym.make(env_id, render_mode=render_mode)
+             device_for_vae=DEVICE,
+             max_episode_steps=None,
+             ):
+    env = gym.make(env_id, render_mode=render_mode, max_episode_steps=max_episode_steps)
     env = ActionClipWrapper(env)  # Clip actions from agent before they hit the core env logic
     env = FrameStackWrapper(env, frame_stack_num)  # add frame stacking to observation
     env = LatentStateWrapper(env, vae_model_instance, transform_function,
