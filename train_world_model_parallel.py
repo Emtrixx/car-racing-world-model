@@ -1,3 +1,6 @@
+import argparse
+import os
+
 import gymnasium as gym
 import torch
 import torch.optim as optim
@@ -28,7 +31,7 @@ GRU_NUM_LAYERS = 3
 GRU_INPUT_EMBED_DIM = 32  # Can be None, but GRU class handles it. For constant, it's an int or None.
 
 # Training Hyperparameters
-COLLECT_EPISODES = 2  # Number of full episodes to collect for WM training
+COLLECT_EPISODES = 100  # Number of full episodes to collect for WM training
 WM_EPOCHS = 10  # Number of epochs to train the world model
 WM_BATCH_SIZE = 32  # Sequences per batch
 SEQUENCE_LENGTH = 50  # Length of sequences to train on
@@ -41,19 +44,64 @@ NUM_LOADER_WORKERS = 4  # For DataLoader for PyTorch training
 # Environment settings for data collection
 MAX_EPISODE_STEPS_COLLECT = 400  # Max steps per episode in the collection environment
 
+def get_config(name="default"):
+    configs = {
+        "default": {
+            "env_name": ENV_NAME,
+            "latent_dim": LATENT_DIM,
+            "action_dim": ACTION_DIM,
+            "num_stack": NUM_STACK,
+            "vae_checkpoint_filename": VAE_CHECKPOINT_FILENAME,
+            "ppo_actor_save_filename": PPO_ACTOR_SAVE_FILENAME,
+            "device_str": DEVICE_STR,
+            "gru_hidden_dim": GRU_HIDDEN_DIM,
+            "gru_num_layers": GRU_NUM_LAYERS,
+            "gru_input_embed_dim": GRU_INPUT_EMBED_DIM,
+            "wm_epochs": WM_EPOCHS,
+            "wm_batch_size": WM_BATCH_SIZE,
+            "sequence_length": SEQUENCE_LENGTH,
+            "wm_learning_rate": WM_LEARNING_RATE,
+            "num_collection_workers": NUM_COLLECTION_WORKERS,
+            "num_loader_workers": NUM_LOADER_WORKERS,
+            "collect_episodes": COLLECT_EPISODES,
+            "max_episode_steps_collect": MAX_EPISODE_STEPS_COLLECT,
+            "wm_checkpoint_filename_gru": WM_CHECKPOINT_FILENAME_GRU,
+        },
+        "test": {
+            "env_name": ENV_NAME,
+            "latent_dim": LATENT_DIM,
+            "action_dim": ACTION_DIM,
+            "num_stack": NUM_STACK,
+            "vae_checkpoint_filename": VAE_CHECKPOINT_FILENAME,
+            "ppo_actor_save_filename": PPO_ACTOR_SAVE_FILENAME,
+            "device_str": DEVICE_STR,
+            "gru_hidden_dim": 64,
+            "gru_num_layers": 1,
+            "gru_input_embed_dim": GRU_INPUT_EMBED_DIM,
+            "wm_epochs": WM_EPOCHS,
+            "wm_batch_size": WM_BATCH_SIZE,
+            "sequence_length": SEQUENCE_LENGTH,
+            "wm_learning_rate": WM_LEARNING_RATE,
+            "num_collection_workers": 2,
+            "num_loader_workers": 2,
+            "collect_episodes": 2,
+            "max_episode_steps_collect": MAX_EPISODE_STEPS_COLLECT,
+            "wm_checkpoint_filename_gru": WM_CHECKPOINT_FILENAME_GRU,
+        }
+    }
+    return configs[name]
+
 
 # --- Worker function for parallel data collection ---
+# No changes needed here, as it receives all parameters explicitly.
 def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_name_str,
                              vae_checkpoint_path_str, policy_checkpoint_path_str,
                              sequence_length_int, device_str_for_worker, num_stack_int,
-                             # Optional paths for dynamic imports if needed later
-                             actor_class_module_path=None, conv_vae_class_module_path=None,
-                             ppo_policy_wrapper_class_module_path=None, utils_module_path=None):
+                             max_episode_steps_collect_int): # Added max_episode_steps
     try:
-        # Standard library imports
         import os
-        import torch  # Should be available
-        import gymnasium as gym  # Should be available
+        import torch
+        import gymnasium as gym
 
         # Assuming these custom modules are in PYTHONPATH or same directory
         from conv_vae import ConvVAE
@@ -65,7 +113,7 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
             f"[Worker {worker_id}, PID {os.getpid()}] Starting, assigned {num_episodes_to_collect_by_worker} episodes. Device: {device_str_for_worker}")
 
         # 1. Initialize Environment for this worker
-        worker_env = FrameStackWrapper(gym.make(env_name_str, render_mode="rgb_array", max_episode_steps=400),
+        worker_env = FrameStackWrapper(gym.make(env_name_str, render_mode="rgb_array", max_episode_steps=max_episode_steps_collect_int),
                                        num_stack=num_stack_int)
 
         # 2. Load VAE Model for this worker
@@ -88,7 +136,7 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
         for episode_idx in range(num_episodes_to_collect_by_worker):
             obs_stack_raw, _ = worker_env.reset()
 
-            ep_Z_inputs_cpu = []  # Renamed from ep_Z_input_stacks_cpu
+            ep_Z_inputs_cpu = []
             ep_a_actions_cpu = []
             ep_r_rewards_cpu = []
             ep_d_dones_cpu = []
@@ -161,9 +209,7 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
                               num_collection_workers_int,
                               env_name_str_for_worker, vae_checkpoint_path_str_for_worker,
                               policy_checkpoint_path_str_for_worker, num_stack_int_for_worker,
-                              # The following args from original are no longer directly used here:
-                              # env, policy, transform_fn, vae_model (these are for main process, workers handle their own)
-                              # Instead, paths and names are passed for workers to initialize.
+                              max_episode_steps_collect_int
                               ):
     print(
         f"Starting parallel collection with {num_collection_workers_int} workers for {num_episodes_total} total episodes...")
@@ -191,9 +237,9 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
             vae_checkpoint_path_str_for_worker,
             policy_checkpoint_path_str_for_worker,
             sequence_length_int,
-            device_str_main,  # All workers will use the main device string for now (e.g., "cuda" or "cpu")
-            num_stack_int_for_worker
-            # actor_class_module_path, conv_vae_class_module_path, etc. can be added here if dynamic import is needed
+            device_str_main,
+            num_stack_int_for_worker,
+            max_episode_steps_collect_int
         )
         worker_args_list.append(args)
 
@@ -219,7 +265,7 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
         if result_list:  # result_list could be None or empty if a worker failed and returned []
             all_collected_sequences.extend(result_list)
             print(
-                f"Collected {len(result_list)} sequences from worker {worker_args_list[worker_idx][0]}.")  # Logs worker_id
+                f"Collected {len(result_list)} sequences from worker {worker_args_list[worker_idx][0]}.")
         else:
             print(f"Worker {worker_args_list[worker_idx][0]} returned no sequences (or failed).")
 
@@ -227,7 +273,7 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
     return all_collected_sequences
 
 
-class SequenceDataset(Dataset):  # Now returns 5 items
+class SequenceDataset(Dataset):
     def __init__(self, sequence_data):
         self.data = sequence_data
 
@@ -238,7 +284,7 @@ class SequenceDataset(Dataset):  # Now returns 5 items
 
 # --- GRU World Model Training Loop (with r, d loss) ---
 def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer,
-                                z_criterion, r_criterion, d_criterion, epoch, device):  # Separate criteria
+                                z_criterion, r_criterion, d_criterion, epoch, device):
     world_model_gru.train()
     epoch_loss, epoch_z_loss, epoch_r_loss, epoch_d_loss = 0, 0, 0, 0
     processed_batches = 0
@@ -279,62 +325,85 @@ def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer,
 
 # --- Main Execution ---
 if __name__ == "__main__":
-    # --- Argument Parsing Removed ---
-    # Configuration is now done via constants in the "# --- Configuration ---" section above.
+    # 1. Argument Parsing: Allow selecting config from command line
+    parser = argparse.ArgumentParser(description="Train GRU World Model")
+    parser.add_argument("--config_name", type=str, default="default",
+                        help="Name of the configuration to use (e.g., 'default', 'test').")
+    args = parser.parse_args()
 
-    # --- Use Constants for Configuration ---
-    # DEVICE is already defined in the Configuration section using DEVICE_STR.
-    # Structural parameters (ENV_NAME, LATENT_DIM, ACTION_DIM, NUM_STACK) are imported from utils.py.
+    # Load the chosen configuration
+    config = get_config(args.config_name)
+    print(f"Loaded configuration: '{args.config_name}'")
+
+    # Use a single `config` object for all parameters
+    env_name = config["env_name"]
+    latent_dim = config["latent_dim"]
+    # This replaces all the individual constant imports/definitions at the top
+    action_dim = config["action_dim"]
+    num_stack = config["num_stack"]
+    vae_checkpoint_filename = config["vae_checkpoint_filename"]
+    ppo_actor_save_filename = config["ppo_actor_save_filename"]
+    wm_checkpoint_filename_gru = config["wm_checkpoint_filename_gru"] # Use WM checkpoint path from config
+    device_str = config["device_str"]
+    device = torch.device(device_str) # Re-initialize DEVICE based on config string
+
+    gru_hidden_dim = config["gru_hidden_dim"]
+    gru_num_layers = config["gru_num_layers"]
+    gru_input_embed_dim = config["gru_input_embed_dim"]
+
+    collect_episodes = config["collect_episodes"]
+    wm_epochs = config["wm_epochs"]
+    wm_batch_size = config["wm_batch_size"]
+    sequence_length = config["sequence_length"]
+    wm_learning_rate = config["wm_learning_rate"]
+
+    num_collection_workers = config["num_collection_workers"]
+    num_loader_workers = config["num_loader_workers"]
+    max_episode_steps_collect = config["max_episode_steps_collect"]
 
     # Set multiprocessing start method - crucial for CUDA.
-    # This should be done once at the beginning.
     try:
         mp.set_start_method('spawn')
         print("Multiprocessing start method set to 'spawn'.")
     except RuntimeError as e:
-        # This can happen if it's already set, or on some systems where 'spawn' is the default or only option.
         print(f"Could not set start method (possibly already set or not allowed): {e}")
-        pass  # Continue if already set or if 'spawn' is the only option.
+        pass
 
-    print(f"Starting GRU World Model training on device: {DEVICE}")
-    # print(f"Arguments: {args}") # Removed as args object no longer exists
+    print(f"Starting GRU World Model training on device: {device}")
 
     # 1. Initialize Environment (Main process - primarily for validation, workers create their own)
-    # Uses ENV_NAME and NUM_STACK from utils.py, and MAX_EPISODE_STEPS_COLLECT from this file's config.
     main_env_for_setup = FrameStackWrapper(
-        gym.make(ENV_NAME, render_mode="rgb_array", max_episode_steps=MAX_EPISODE_STEPS_COLLECT), num_stack=NUM_STACK)
-    print(f"Main environment '{ENV_NAME}' with stack {NUM_STACK} initialized for setup.")
-    main_env_for_setup.close()  # Close it as workers will create their own.
+        gym.make(env_name, render_mode="rgb_array", max_episode_steps=max_episode_steps_collect), num_stack=num_stack)
+    print(f"Main environment '{env_name}' with stack {num_stack} initialized for setup.")
+    main_env_for_setup.close()
     print("Closed main_env_for_setup.")
 
     # 2. & 3. VAE and Policy loading in main process are skipped if using parallel collection,
     # as workers handle their own loading. Add checks for checkpoint files.
-    # Checkpoints VAE_CHECKPOINT_FILENAME and PPO_ACTOR_SAVE_FILENAME are imported from utils.py.
-    import os
-
-    if not os.path.exists(VAE_CHECKPOINT_FILENAME):
-        print(f"CRITICAL ERROR: VAE Checkpoint {VAE_CHECKPOINT_FILENAME} not found. Exiting before starting workers.")
+    if not os.path.exists(vae_checkpoint_filename):
+        print(f"CRITICAL ERROR: VAE Checkpoint {vae_checkpoint_filename} not found. Exiting before starting workers.")
         exit()
-    if not os.path.exists(PPO_ACTOR_SAVE_FILENAME):
+    if not os.path.exists(ppo_actor_save_filename):
         print(
-            f"CRITICAL ERROR: Policy Checkpoint {PPO_ACTOR_SAVE_FILENAME} not found. Exiting before starting workers.")
+            f"CRITICAL ERROR: Policy Checkpoint {ppo_actor_save_filename} not found. Exiting before starting workers.")
         exit()
-    print(f"Found VAE checkpoint: {VAE_CHECKPOINT_FILENAME}")
-    print(f"Found Policy checkpoint: {PPO_ACTOR_SAVE_FILENAME}")
+    print(f"Found VAE checkpoint: {vae_checkpoint_filename}")
+    print(f"Found Policy checkpoint: {ppo_actor_save_filename}")
 
     # 4. Collect Sequence Data (Parallelized)
-    print(f"Number of collection workers configured: {NUM_COLLECTION_WORKERS}")
+    print(f"Number of collection workers configured: {num_collection_workers}")
     start_collect_time = time.time()
 
     sequence_data_buffer = collect_sequences_for_gru(
-        num_episodes_total=COLLECT_EPISODES,
-        sequence_length_int=SEQUENCE_LENGTH,
-        device_str_main=DEVICE_STR,  # Pass device string for workers
-        num_collection_workers_int=NUM_COLLECTION_WORKERS,
-        env_name_str_for_worker=ENV_NAME,
-        vae_checkpoint_path_str_for_worker=VAE_CHECKPOINT_FILENAME,
-        policy_checkpoint_path_str_for_worker=PPO_ACTOR_SAVE_FILENAME,
-        num_stack_int_for_worker=NUM_STACK
+        num_episodes_total=collect_episodes,
+        sequence_length_int=sequence_length,
+        device_str_main=device_str,
+        num_collection_workers_int=num_collection_workers,
+        env_name_str_for_worker=env_name,
+        vae_checkpoint_path_str_for_worker=vae_checkpoint_filename,
+        policy_checkpoint_path_str_for_worker=ppo_actor_save_filename,
+        num_stack_int_for_worker=num_stack,
+        max_episode_steps_collect_int=max_episode_steps_collect # Pass this from config
     )
 
     print(f"Sequence data collection (parallel/serial) took {time.time() - start_collect_time:.2f} seconds.")
@@ -345,28 +414,27 @@ if __name__ == "__main__":
 
     # 5. Prepare DataLoader
     sequence_dataset = SequenceDataset(sequence_data_buffer)
-    wm_dataloader = DataLoader(sequence_dataset, batch_size=WM_BATCH_SIZE, shuffle=True, num_workers=NUM_LOADER_WORKERS)
+    wm_dataloader = DataLoader(sequence_dataset, batch_size=wm_batch_size, shuffle=True, num_workers=num_loader_workers)
 
     # 6. Initialize GRU World Model, Optimizer, Criterion
     world_model_gru = WorldModelGRU(
-        latent_dim=LATENT_DIM,
-        action_dim=ACTION_DIM,
-        gru_hidden_dim=GRU_HIDDEN_DIM,
-        gru_num_layers=GRU_NUM_LAYERS,
-        gru_input_embed_dim=GRU_INPUT_EMBED_DIM
+        latent_dim=latent_dim,
+        action_dim=action_dim,
+        gru_hidden_dim=gru_hidden_dim,
+        gru_num_layers=gru_num_layers,
+        gru_input_embed_dim=gru_input_embed_dim
     )
 
-    if torch.cuda.is_available() and DEVICE.type == 'cuda':  # Check if current_device is CUDA
+    if torch.cuda.is_available() and device.type == 'cuda':
         print(f"CUDA available. Number of GPUs: {torch.cuda.device_count()}")
         if torch.cuda.device_count() > 1:
             print("Using nn.DataParallel for GRU model training.")
             world_model_gru = nn.DataParallel(world_model_gru)
 
-    world_model_gru.to(DEVICE)  # Ensure model is on the target device
-    print(f"GRU World Model moved to device: {DEVICE}")
+    world_model_gru.to(device)
+    print(f"GRU World Model moved to device: {device}")
 
-    wm_optimizer = optim.Adam(world_model_gru.parameters(), lr=WM_LEARNING_RATE)
-    # Define separate loss criteria
+    wm_optimizer = optim.Adam(world_model_gru.parameters(), lr=wm_learning_rate)
     z_loss_criterion = nn.MSELoss()
     r_loss_criterion = nn.MSELoss()
     d_loss_criterion = nn.BCEWithLogitsLoss()
@@ -378,7 +446,7 @@ if __name__ == "__main__":
     for epoch in range(1, WM_EPOCHS + 1):
         loss = train_world_model_gru_epoch(world_model_gru, wm_dataloader, wm_optimizer,
                                            z_loss_criterion, r_loss_criterion, d_loss_criterion,
-                                           epoch, DEVICE)  # Pass current_device
+                                           epoch, DEVICE)
         wm_losses.append(loss)
     print(f"GRU World Model training took {time.time() - start_train_time:.2f} seconds.")
 
@@ -387,13 +455,12 @@ if __name__ == "__main__":
     plt.plot(range(1, WM_EPOCHS + 1), wm_losses)
     plt.xlabel("Epoch")
     plt.ylabel("MSE Loss")
-    plt.title(f"GRU World Model Training Loss (SeqLen {SEQUENCE_LENGTH})")
+    plt.title(f"GRU World Model Training Loss (SeqLen {sequence_length})")
     plt.grid(True)
-    # Ensure 'images' directory exists
     images_dir = "images"
     if not os.path.exists(images_dir):
         os.makedirs(images_dir)
-    loss_plot_path = f"{images_dir}/{ENV_NAME}_worldmodel_gru_loss_seq{SEQUENCE_LENGTH}_e{WM_EPOCHS}.png"
+    loss_plot_path = f"{images_dir}/{env_name}_worldmodel_gru_loss_seq{sequence_length}_e{wm_epochs}.png"
     plt.savefig(loss_plot_path)
     print(f"Saved loss plot to {loss_plot_path}")
     plt.close()
@@ -402,7 +469,7 @@ if __name__ == "__main__":
     try:
         model_state_to_save = world_model_gru.module.state_dict() if isinstance(world_model_gru,
                                                                                 nn.DataParallel) else world_model_gru.state_dict()
-        torch.save(model_state_to_save, WM_CHECKPOINT_FILENAME_GRU)  # Use WM_CHECKPOINT_FILENAME_GRU
-        print(f"GRU World Model saved to {WM_CHECKPOINT_FILENAME_GRU}")
+        torch.save(model_state_to_save, wm_checkpoint_filename_gru)
+        print(f"GRU World Model saved to {wm_checkpoint_filename_gru}")
     except Exception as e:
         print(f"Error saving GRU World Model: {e}")
