@@ -16,7 +16,7 @@ from utils import (
     LATENT_DIM,  # Default: 32
     ACTION_DIM,  # Default: 3
     NUM_STACK,  # Default: 4
-    VAE_CHECKPOINT_FILENAME,  # Path to VAE, constructed based on ENV_NAME, LATENT_DIM
+    VAE_CHECKPOINT_FILENAME,
     transform as main_process_transform,  # transform is used by worker
     preprocess_and_encode,
     preprocess_and_encode_stack,
@@ -93,17 +93,16 @@ def get_config(name="default"):
 
 
 # --- Worker function for parallel data collection ---
-# No changes needed here, as it receives all parameters explicitly.
 def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_name_str,
                              vae_checkpoint_path_str, policy_checkpoint_path_str,
                              sequence_length_int, device_str_for_worker, num_stack_int,
                              max_episode_steps_collect_int): # Added max_episode_steps
     try:
         import os
+        import time
         import torch
         import gymnasium as gym
 
-        # Assuming these custom modules are in PYTHONPATH or same directory
         from conv_vae import ConvVAE
         from actor_critic import Actor
         from utils_rl import PPOPolicyWrapper
@@ -193,15 +192,40 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
 
         worker_env.close()
         print(
-            f"[Worker {worker_id}, PID {os.getpid()}] Finished. Collected {len(worker_collected_sequences)} sequences.")
-        return worker_collected_sequences
+            f"[Worker {worker_id}, PID {os.getpid()}] Finished data collection. Collected {len(worker_collected_sequences)} sequences.")
+
+        # Create a directory for temporary worker data if it doesn't exist
+        temp_data_dir = "./tmp_worker_data"
+        if not os.path.exists(temp_data_dir):
+            try:
+                os.makedirs(temp_data_dir)
+                print(f"[Worker {worker_id}] Created directory: {temp_data_dir}")
+            except OSError as e:
+                print(f"[Worker {worker_id}] Error creating directory {temp_data_dir}: {e}")
+                # Fallback to current directory if subdir creation fails
+                temp_data_dir = "."
+
+        # Generate unique filename
+        timestamp = int(time.time() * 1000)
+        filename = os.path.join(temp_data_dir, f"temp_worker_data_{worker_id}_{timestamp}.pt")
+
+        try:
+            print(f"[Worker {worker_id}] Attempting to save data to {filename}...")
+            torch.save(worker_collected_sequences, filename)
+            print(f"[Worker {worker_id}] Successfully saved data to {filename}.")
+            return filename  # Return the filepath
+        except Exception as e_save:
+            print(f"[Worker {worker_id}] ERROR saving data to {filename}: {e_save}")
+            import traceback
+            traceback.print_exc()
+            return None  # Return None on save error
     except Exception as e:
         print(f"[Worker {worker_id}, PID {os.getpid()}] ERROR: {e}")
         import traceback
         traceback.print_exc()
         if 'worker_env' in locals():  # Ensure env is closed if it was initialized
             worker_env.close()
-        return []  # Return empty list on error
+        return None  # Return None on general error in worker
 
 
 # --- Data Collection for GRU (Sequence Data) ---
@@ -259,17 +283,43 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
 
     # Note: mp.set_start_method should be called once in if __name__ == "__main__"
     with mp.Pool(processes=pool_size) as pool:
-        results = pool.starmap(collect_sequences_worker, worker_args_list)
+        # Results will now be filepaths or None
+        filepath_results = pool.starmap(collect_sequences_worker, worker_args_list)
 
-    for worker_idx, result_list in enumerate(results):
-        if result_list:  # result_list could be None or empty if a worker failed and returned []
-            all_collected_sequences.extend(result_list)
-            print(
-                f"Collected {len(result_list)} sequences from worker {worker_args_list[worker_idx][0]}.")
-        else:
-            print(f"Worker {worker_args_list[worker_idx][0]} returned no sequences (or failed).")
+    for worker_idx, filepath_result in enumerate(filepath_results):
+        worker_actual_id = worker_args_list[worker_idx][0] # Get actual worker_id from args
+        if filepath_result and os.path.exists(filepath_result):
+            try:
+                print(f"Loading data from worker {worker_actual_id}'s file: {filepath_result}")
+                worker_data = torch.load(filepath_result)
+                all_collected_sequences.extend(worker_data)
+                print(
+                    f"Successfully loaded {len(worker_data)} sequences from worker {worker_actual_id} (file: {filepath_result}).")
+                # Optionally, delete the temporary file after successful loading
+                try:
+                    os.remove(filepath_result)
+                    print(f"Removed temporary file: {filepath_result}")
+                except OSError as e_remove:
+                    print(f"Warning: Could not remove temporary file {filepath_result}: {e_remove}")
+            except Exception as e_load:
+                print(f"ERROR loading data from worker {worker_actual_id}'s file {filepath_result}: {e_load}")
+        elif filepath_result: # Filepath was returned but does not exist
+             print(f"Worker {worker_actual_id} returned filepath {filepath_result}, but file not found.")
+        else: # Worker returned None (either general error or save error)
+            print(f"Worker {worker_actual_id} failed to produce a data file.")
 
     print(f"Finished collecting. Total sequences from all workers: {len(all_collected_sequences)}.")
+    # Clean up the temporary directory if it's empty and was created
+    temp_data_dir = "./tmp_worker_data"
+    if os.path.exists(temp_data_dir) and not os.listdir(temp_data_dir):
+        try:
+            os.rmdir(temp_data_dir)
+            print(f"Removed empty temporary directory: {temp_data_dir}")
+        except OSError as e_rmdir:
+            print(f"Warning: Could not remove temporary directory {temp_data_dir}: {e_rmdir}")
+    elif os.path.exists(temp_data_dir) and os.listdir(temp_data_dir):
+        print(f"Warning: Temporary directory {temp_data_dir} is not empty. Manual cleanup might be needed.")
+
     return all_collected_sequences
 
 
