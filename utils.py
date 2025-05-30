@@ -15,7 +15,8 @@ NUM_STACK = 4  # Number of latent vectors to stack
 LATENT_DIM = 32  # Size of the latent space vector z
 ACTION_DIM = 3  # CarRacing: Steering, Gas, Brake
 
-DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+DEVICE_STR = "cuda" if torch.cuda.is_available() else "cpu"
+DEVICE = torch.device(DEVICE_STR)  # Use GPU if available, else CPU
 
 # --- File Paths ---
 # It's often good practice to make these easily configurable (e.g., via argparse)
