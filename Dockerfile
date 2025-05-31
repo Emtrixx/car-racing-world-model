@@ -14,9 +14,10 @@ COPY requirements.txt ./
 # and clean them up afterwards if possible (though for -slim it might be tricky
 # without adding too much complexity for now).
 # swig is listed in requirements and often needs to be installed via apt
-RUN apt-get update && apt-get install -y swig && \
+RUN apt-get update && \
+    apt-get install -y swig build-essential && \
     pip install --no-cache-dir -r requirements.txt && \
-    apt-get purge -y --auto-remove swig && \
+    apt-get purge -y --auto-remove swig build-essential && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the rest of the project files into the working directory
