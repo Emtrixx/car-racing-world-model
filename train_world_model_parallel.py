@@ -31,7 +31,7 @@ GRU_NUM_LAYERS = 3
 GRU_INPUT_EMBED_DIM = 32  # Can be None, but GRU class handles it. For constant, it's an int or None.
 
 # Training Hyperparameters
-COLLECT_EPISODES = 100  # Number of full episodes to collect for WM training
+COLLECT_EPISODES = 1000  # Number of full episodes to collect for WM training
 WM_EPOCHS = 10  # Number of epochs to train the world model
 WM_BATCH_SIZE = 32  # Sequences per batch
 SEQUENCE_LENGTH = 50  # Length of sequences to train on
