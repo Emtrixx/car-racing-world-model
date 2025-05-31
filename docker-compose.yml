@@ -1,0 +1,25 @@
+services:
+  app:
+    build:
+      context: .
+    image: car-racing-rl-app
+    container_name: car-racing-rl-container
+    volumes:
+      - ./app:/app
+
+    # Keep the container running if needed, or allow interactive sessions
+#    tty: true
+#    stdin_open: true
+
+    # GPU Configuration
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: all
+              capabilities: [gpu]
+
+networks:
+  default:
+    driver: bridge
