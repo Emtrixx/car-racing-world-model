@@ -9,12 +9,10 @@ matplotlib-inline~=0.1.7
 torchvision~=0.22.0
 pillow~=11.2.1
 scipy~=1.15.3
-d2l~=1.0.3
 setuptools~=80.9.0
 ucimlrepo~=0.0.7
 gymnasium~=1.1.1
 gymnasium[box2d]~=1.1.1
 shap~=0.47.2
-scikit-learn~=1.6.1
 swig~=4.3.1
 
