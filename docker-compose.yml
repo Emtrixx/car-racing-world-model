@@ -7,6 +7,8 @@ services:
     volumes:
       - ./app:/app
 
+    # docker-compose run app python train_ppo.py
+
     # Keep the container running if needed, or allow interactive sessions
 #    tty: true
 #    stdin_open: true
