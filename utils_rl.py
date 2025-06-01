@@ -19,7 +19,6 @@ class PPOHyperparameters:
     epochs_per_update: int = 10
     minibatch_size: int = 64
     # steps_per_batch: int # This is context-dependent (real vs dream)
-    entropy_coef: float = 0.01
     vf_coef: float = 0.5
     grad_clip_norm: float = 0.5
     target_kl: float = 0.015
@@ -39,7 +38,8 @@ def perform_ppo_update(
         critic_optimizer: optim.Optimizer,
         hyperparams,  # Should be an instance of PPOHyperparameters or similar dict/object
         device: torch.device,
-        last_value_for_gae: torch.Tensor  # V(s_T) for the batch, already on correct device
+        last_value_for_gae: torch.Tensor,  # V(s_T) for the batch, already on correct device
+        current_entropy_coef: float  # Annealed entropy coefficient
 ):
     """
     Performs PPO optimization epochs on the data in the buffer.
@@ -91,7 +91,7 @@ def perform_ppo_update(
             critic_loss = F.mse_loss(new_values, returns)
 
             # --- Calculate Total Loss ---
-            loss = actor_loss + hyperparams.vf_coef * critic_loss - hyperparams.entropy_coef * entropy
+            loss = actor_loss + hyperparams.vf_coef * critic_loss - current_entropy_coef * entropy
 
             # --- Compute Gradients ---
             actor_optimizer.zero_grad()

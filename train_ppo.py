@@ -31,17 +31,23 @@ def get_config(name="default"):
             "MINIBATCH_SIZE": 64,
             "STEPS_PER_BATCH": 2048,
             "MAX_TRAINING_STEPS": 10_000_000,
-            "ENTROPY_COEF": 0.01,
+            "INITIAL_ENTROPY_COEF": 0.01,
+            "FINAL_ENTROPY_COEF": 0.001,
+            "ENTROPY_ANNEAL_FRACTION": 0.75,
             "VF_COEF": 0.5,
             "TARGET_KL": 0.015,
             "GRAD_CLIP_NORM": 0.5,
             "SAVE_INTERVAL": 50,
         }
     }
-    # A bit more robust: copy default and update for test
+    # copy default and update for test
     configs["test"] = configs["default"].copy()
     configs["test"]["MAX_TRAINING_STEPS"] = 1000
     configs["test"]["STEPS_PER_BATCH"] = 128
+    configs["test"]["INITIAL_ENTROPY_COEF"] = 0.01
+    configs["test"]["FINAL_ENTROPY_COEF"] = 0.001
+    configs["test"]["ENTROPY_ANNEAL_FRACTION"] = 0.75
+
 
     return configs[name]
 
@@ -55,7 +61,7 @@ def train_ppo(config):  # Added config argument
     hyperparams = PPOHyperparameters(
         gamma=config["GAMMA"], lambda_gae=config["LAMBDA"], epsilon_clip=config["EPSILON"],
         actor_lr=config["ACTOR_LR"], critic_lr=config["CRITIC_LR"], epochs_per_update=config["EPOCHS_PER_UPDATE"],
-        minibatch_size=config["MINIBATCH_SIZE"], entropy_coef=config["ENTROPY_COEF"], vf_coef=config["VF_COEF"],
+        minibatch_size=config["MINIBATCH_SIZE"], vf_coef=config["VF_COEF"],
         grad_clip_norm=config["GRAD_CLIP_NORM"], target_kl=config["TARGET_KL"]
     )
 
@@ -92,6 +98,10 @@ def train_ppo(config):  # Added config argument
     actor_optimizer = optim.Adam(actor.parameters(), lr=config["ACTOR_LR"], eps=1e-5)
     critic_optimizer = optim.Adam(critic.parameters(), lr=config["CRITIC_LR"], eps=1e-5)
 
+    # Store initial learning rates for annealing
+    initial_actor_lr = config["ACTOR_LR"]
+    initial_critic_lr = config["CRITIC_LR"]
+
     # 4. Initialize Rollout Buffer
     buffer = RolloutBuffer()
 
@@ -103,6 +113,24 @@ def train_ppo(config):  # Added config argument
 
     while global_step < config["MAX_TRAINING_STEPS"]:
         update += 1
+
+        # --- Learning Rate Annealing ---
+        progress_fraction = global_step / config["MAX_TRAINING_STEPS"]
+        decayed_actor_lr = initial_actor_lr * (1.0 - progress_fraction)
+        decayed_critic_lr = initial_critic_lr * (1.0 - progress_fraction)
+
+        # Update optimizer learning rates
+        actor_optimizer.param_groups[0]['lr'] = decayed_actor_lr
+        critic_optimizer.param_groups[0]['lr'] = decayed_critic_lr
+
+        # --- Entropy Coefficient Annealing ---
+        if config["ENTROPY_ANNEAL_FRACTION"] > 0:
+            entropy_anneal_progress = min(1.0, progress_fraction / config["ENTROPY_ANNEAL_FRACTION"])
+        else: # Avoid division by zero, default to initial if fraction is 0 or less
+            entropy_anneal_progress = 0.0
+        current_entropy_coef = config["INITIAL_ENTROPY_COEF"] * (1.0 - entropy_anneal_progress) + \
+                               config["FINAL_ENTROPY_COEF"] * entropy_anneal_progress
+
         buffer.clear()
         actor.eval()  # Set to eval mode for rollout collection
         critic.eval()
@@ -173,10 +201,11 @@ def train_ppo(config):  # Added config argument
         # --- Perform PPO Update ---
         mean_kl = perform_ppo_update(
             buffer, actor, critic, actor_optimizer, critic_optimizer,
-            hyperparams, DEVICE, last_value_for_gae=last_value
+            hyperparams, DEVICE, last_value_for_gae=last_value,
+            current_entropy_coef=current_entropy_coef  # Pass annealed entropy coef
         )
 
-        print(f"Update {update}, Optimizing for {config['EPOCHS_PER_UPDATE']} epochs. Mean KL: {mean_kl:.4f}")
+        print(f"Update {update}, Optimizing for {config['EPOCHS_PER_UPDATE']} epochs. Mean KL: {mean_kl:.4f}, Current LRs (A/C): {decayed_actor_lr:.2e}/{decayed_critic_lr:.2e}, Entropy Coef: {current_entropy_coef:.2e}")
         avg_reward = np.mean(all_episode_rewards[-10:]) if all_episode_rewards else 0.0
         print(f"Total Steps: {global_step}, Avg Reward (Last 10 ep): {avg_reward:.2f}")
 
