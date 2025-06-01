@@ -19,10 +19,7 @@ DEVICE_STR = "cuda" if torch.cuda.is_available() else "cpu"
 DEVICE = torch.device(DEVICE_STR)  # Use GPU if available, else CPU
 
 # --- File Paths ---
-# It's often good practice to make these easily configurable (e.g., via argparse)
-# But defining them here keeps consistency for now.
-VAE_MODEL_SUFFIX = f"ld{LATENT_DIM}"  # Suffix based on latent dim
-VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_cvae_ld{LATENT_DIM}_epoch10.pth"  # Your saved VAE model
+VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_cvae_ld{LATENT_DIM}_epoch10.pth"
 WM_MODEL_SUFFIX = f"ld{LATENT_DIM}_ac{ACTION_DIM}"
 WM_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
 WM_CHECKPOINT_FILENAME_GRU = f"checkpoints/{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
@@ -66,17 +63,13 @@ def preprocess_and_encode_stack(
         device
 ):
     latent_vectors = []
-    for i in range(raw_frame_stack.shape[0]):  # Iterate through N frames in the stack
-        raw_frame = raw_frame_stack[i]  # Single frame (H, W, C)
-        # Use your existing preprocess_and_encode logic for a single frame,
-        # or replicate its core here:
-        processed_frame = transform_fn(raw_frame).unsqueeze(0).to(device)  # (1, C, H, W)
+    for i in range(raw_frame_stack.shape[0]):
+        # same logic as for single frame
+        raw_frame = raw_frame_stack[i]
+        processed_frame = transform_fn(raw_frame).unsqueeze(0).to(device)
         with torch.no_grad():
-            mu, _ = vae_model.encode(processed_frame)  # mu shape (1, LATENT_DIM)
-            latent_vectors.append(mu.squeeze(0))  # Squeeze to (LATENT_DIM)
-
-    # Concatenate the N latent vectors
-    # Resulting shape: (num_stack * LATENT_DIM,)
+            mu, _ = vae_model.encode(processed_frame)
+            latent_vectors.append(mu.squeeze(0))
     concatenated_latents = torch.cat(latent_vectors, dim=0)
     return concatenated_latents
 
@@ -86,24 +79,9 @@ class FrameStackWrapper(gym.Wrapper):
         super().__init__(env)
         self.num_stack = num_stack
         self.frames = deque(maxlen=num_stack)
-
-        # Modify observation space
-        # Original observation space is Box(0, 255, (H, W, C), uint8)
-        # We will stack raw frames. The VAE will process them individually later.
-        # example carlculation. observation_space defined with same result below
-        low = np.repeat(self.observation_space.low[..., np.newaxis], num_stack, axis=-1)
-        high = np.repeat(self.observation_space.high[..., np.newaxis], num_stack, axis=-1)
-        # New shape: (H, W, C*num_stack) if concatenating channels, or (H, W, C, num_stack)
-        # Let's make it (num_stack, H, W, C) for easier iteration later.
-        # Or if VAE expects (C,H,W), then (num_stack, C, H, W) after transform.
-        # For now, the wrapper will output a list of N frames, or a NumPy array (N, H, W, C).
-        # The actual stacking for VAE input will be handled after this wrapper.
-        # So, the wrapper's observation space can be a tuple of spaces or a Box with num_stack as first dim.
-        # Let's return a list of frames from the wrapper for maximum flexibility.
-        # However, a NumPy array is more standard for gym observation_space.
         original_shape = self.env.observation_space.shape
         self.observation_space = spaces.Box(
-            low=0,  # Assuming raw frames are uint8 [0,255]
+            low=0,
             high=255,
             shape=(num_stack, *original_shape),  # (num_stack, H, W, C)
             dtype=self.env.observation_space.dtype
@@ -178,15 +156,17 @@ class ActionClipWrapper(gym.ActionWrapper):
             )
             return clipped_action
         else:
-            raise TypeError("ActionClipWrapper only works with Box action spaces.")
-            # print(f"Warning: Action space is not Box ({self.action_space}), returning action unclipped.")
-            # return action
+            # This case should ideally not be reached if wrappers are correctly stacked.
+            # If action_space is not Box, clipping is ill-defined.
+            print(
+                f"Warning: Action space for ActionClipWrapper is not Box ({self.action_space}), returning action unclipped.")
+            return action
 
 
 class LatentStateWrapper(gym.ObservationWrapper):
     def __init__(self, env, vae_model, transform_fn, latent_dim, num_stack, device):
         super().__init__(env)
-        self.vae_model = vae_model.to(device).eval()  # Ensure VAE is on device and in eval mode
+        self.vae_model = vae_model.to(device).eval()
         self.transform_fn = transform_fn
         self.latent_dim = latent_dim
         self.num_stack = num_stack
@@ -222,6 +202,42 @@ class LatentStateWrapper(gym.ObservationWrapper):
         return concatenated_latents_tensor.cpu().numpy()
 
 
+# For SB3
+class ActionTransformWrapper(gym.ActionWrapper):
+    def __init__(self, env):
+        super().__init__(env)
+        # The action space of THIS wrapper (what the SB3 agent sees)
+        # It's Box(-1, 1) for all 3 components (steering, gas control, brake control)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(ACTION_DIM,), dtype=np.float32)
+        # Store the original action space of the wrapped environment for clipping reference
+        self._underlying_action_space = env.action_space  # This is CarRacing's original action space
+
+    def action(self, action_from_agent: np.ndarray) -> np.ndarray:
+        # action_from_agent comes from SB3 agent, in range [-1, 1] for all components. Shape: (ACTION_DIM,)
+        # For CarRacing-v3, ACTION_DIM is 3: [steer_control, gas_control, brake_control]
+
+        steer_control = action_from_agent[0]
+        gas_control = action_from_agent[1]  # Represents gas intensity, agent outputs in [-1, 1]
+        brake_control = action_from_agent[2]  # Represents brake intensity, agent outputs in [-1, 1]
+
+        # Transform to CarRacing's native action ranges:
+        # Steering: agent's output is already in [-1, 1]
+        actual_steering = steer_control
+        # Gas: agent's output in [-1, 1] needs to be mapped to [0, 1]
+        actual_gas = (gas_control + 1.0) / 2.0
+        # Brake: agent's output in [-1, 1] needs to be mapped to [0, 1]
+        actual_brake = (brake_control + 1.0) / 2.0
+
+        transformed_action = np.array([actual_steering, actual_gas, actual_brake], dtype=np.float32)
+
+        # Clip to the *underlying* environment's actual valid range.
+        # This ensures that even if the transformation logic is slightly off or due to float precision,
+        # the action sent to the base CarRacing environment is valid.
+        clipped_transformed_action = np.clip(transformed_action,
+                                             self._underlying_action_space.low,
+                                             self._underlying_action_space.high)
+        return clipped_transformed_action
+
 def make_env(vae_model_instance,  # The loaded and initialized VAE model
              transform_function,  # torchvision.transforms.Compose object
              env_id=ENV_NAME,
@@ -243,6 +259,76 @@ def make_env(vae_model_instance,  # The loaded and initialized VAE model
     print(f"Final wrapped environment observation space: {env.observation_space}")
     print(f"Sample observation shape from final env: {env.observation_space.sample().shape}")
 
+    return env
+
+def make_env_sb3(
+        env_id: str,
+        vae_model_instance: torch.nn.Module,  # Pass the loaded VAE model
+        transform_function,
+        frame_stack_num: int,
+        single_latent_dim: int,
+        device_for_vae: torch.device,
+        gamma: float,
+        render_mode: str = None,
+        max_episode_steps: int = None,
+        seed: int = 0  # Add seed parameter
+):
+    """
+    Creates and wraps the environment for use with Stable Baselines3.
+    The VAE model instance must be passed.
+    """
+    # Create the base environment
+    # For Gymnasium 0.26+, max_episode_steps is part of gym.make()
+    # For older versions, it might be applied via a TimeLimit wrapper later if not None.
+    env_kwargs = {}
+    if render_mode:
+        env_kwargs['render_mode'] = render_mode
+    if max_episode_steps:  # Gymnasium 0.26+
+        env_kwargs['max_episode_steps'] = max_episode_steps
+
+    env = gym.make(env_id, **env_kwargs)
+
+    # Apply seed. Important for reproducibility, especially with VecEnv.
+    # Note: env.reset(seed=seed) is preferred in Gymnasium 0.26+ for initial seeding.
+    # For continuous seeding of action_space/observation_space, it's more complex with wrappers.
+    # SubprocVecEnv handles seeding of each env instance using the seed passed to its env_fn.
+    # So, the primary seeding point will be in the env_fn for SubprocVecEnv.
+    # However, calling reset here with a seed is good practice for the initial state.
+    # obs, info = env.reset(seed=seed) # Initial reset with seed
+
+    # --- Action Wrappers ---
+    # 1. ActionTransformWrapper:
+    #    - Agent outputs actions in [-1, 1]^3.
+    #    - This wrapper transforms them to CarRacing's native ranges ([~,ガス,ブレーキ]).
+    #    - It defines self.action_space = Box([-1, 1]^3, ...) which SB3 will see.
+    env = ActionTransformWrapper(env)
+
+    # 2. ActionClipWrapper:
+    #    - Clips actions received from the agent (which are in [-1, 1]^3 as per ActionTransformWrapper's space)
+    #    - This ensures actions are strictly within the [-1, 1]^3 bounds before transformation by ActionTransformWrapper.
+    #    - The ActionTransformWrapper then does its own clipping to the *underlying* environment's true bounds.
+    env = ActionClipWrapper(env)  # This will clip to the action_space defined by ActionTransformWrapper
+
+    # --- Observation Wrappers ---
+    # 3. FrameStackWrapper: Stacks raw frames.
+    env = FrameStackWrapper(env, frame_stack_num)
+
+    # 4. LatentStateWrapper: Encodes stacked frames into latent vectors using VAE.
+    env = LatentStateWrapper(env, vae_model_instance, transform_function,
+                             single_latent_dim, frame_stack_num, device_for_vae)
+
+    # --- Reward Wrapper ---
+    # 5. NormalizeReward: Normalizes rewards.
+    env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+
+    # For SB3, RecordEpisodeStatistics is often useful when using VecEnvs for logging.
+    # It should be one of the outermost wrappers if used.
+    # env = gym.wrappers.RecordEpisodeStatistics(env) # Add this if you want SB3 to log ep_len_mean, ep_rew_mean
+
+    # print(f"Seed {seed}: Final wrapped environment observation space: {env.observation_space}")
+    # print(f"Seed {seed}: Sample observation shape: {env.observation_space.sample().shape}")
+    # print(f"Seed {seed}: Final wrapped environment action space: {env.action_space}")
+    # print(f"Seed {seed}: Sample action: {env.action_space.sample()}")
     return env
 
 
