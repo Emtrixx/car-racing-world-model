@@ -26,17 +26,6 @@ class Actor(nn.Module):
         x = self.net(state)
         action_mean = self.fc_mean(x)
 
-        # We use tanh activation on the mean for steering [-1, 1].
-        # For gas/brake [0, 1], we could apply sigmoid or (tanh+1)/2 later,
-        # but often letting the distribution + clipping handle it works okay.
-        # Let's apply tanh to the first dim (steering) explicitly.
-        # Keep gas/brake means unbounded for now, will rely on sampling/clipping.
-        action_mean = torch.cat([
-            torch.tanh(action_mean[:, :1]), # Steering mean bounded [-1, 1]
-            action_mean[:, 1:]              # Gas, Brake means unbounded
-        ], dim=1)
-
-
         action_log_std = self.log_std.expand_as(action_mean) # Same log_std for all states
         action_std = torch.exp(action_log_std)
 
