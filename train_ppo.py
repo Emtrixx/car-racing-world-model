@@ -1,5 +1,6 @@
 # train_ppo.py
 import time
+import argparse
 
 import matplotlib.pyplot as plt
 import numpy as np
@@ -17,38 +18,45 @@ from utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
 
 print(f"Using device: {DEVICE}")
 
-# --- PPO Hyperparameters ---
-GAMMA = 0.99  # Discount factor
-LAMBDA = 0.95  # Lambda for GAE
-EPSILON = 0.2  # Clipping parameter for PPO
-ACTOR_LR = 1e-4  # Learning rate for actor
-CRITIC_LR = 3e-4  # Learning rate for critic
-# EPOCHS_PER_UPDATE = 5  # testing
-EPOCHS_PER_UPDATE = 10  # Number of optimization epochs per batch
-MINIBATCH_SIZE = 64
-STEPS_PER_BATCH = 2048  # Number of steps to collect rollout data per update
-# MAX_TRAINING_STEPS = 10_000  # testing
-MAX_TRAINING_STEPS = 10_000_000  # Total steps for training
-ENTROPY_COEF = 0.01  # Entropy regularization coefficient
-VF_COEF = 0.5  # Value function loss coefficient
-TARGET_KL = 0.015  # Target KL divergence limit (optional, for early stopping updates)
-GRAD_CLIP_NORM = 0.5  # Gradient clipping norm
 
-# --- Saving ---
-SAVE_INTERVAL = 50  # Save models every N updates
+def get_config(name="default"):
+    configs = {
+        "default": {
+            "GAMMA": 0.99,
+            "LAMBDA": 0.95,
+            "EPSILON": 0.2,
+            "ACTOR_LR": 1e-4,
+            "CRITIC_LR": 3e-4,
+            "EPOCHS_PER_UPDATE": 10,
+            "MINIBATCH_SIZE": 64,
+            "STEPS_PER_BATCH": 2048,
+            "MAX_TRAINING_STEPS": 10_000_000,
+            "ENTROPY_COEF": 0.01,
+            "VF_COEF": 0.5,
+            "TARGET_KL": 0.015,
+            "GRAD_CLIP_NORM": 0.5,
+            "SAVE_INTERVAL": 50,
+        }
+    }
+    # A bit more robust: copy default and update for test
+    configs["test"] = configs["default"].copy()
+    configs["test"]["MAX_TRAINING_STEPS"] = 1000
+    configs["test"]["STEPS_PER_BATCH"] = 128
+
+    return configs[name]
 
 
 # --- Main Training Function ---
-def train_ppo():
+def train_ppo(config):  # Added config argument
     print("Starting PPO training...")
     start_time = time.time()
 
     # Put hyperparams into object
     hyperparams = PPOHyperparameters(
-        gamma=GAMMA, lambda_gae=LAMBDA, epsilon_clip=EPSILON,
-        actor_lr=ACTOR_LR, critic_lr=CRITIC_LR, epochs_per_update=EPOCHS_PER_UPDATE,
-        minibatch_size=MINIBATCH_SIZE, entropy_coef=ENTROPY_COEF, vf_coef=VF_COEF,
-        grad_clip_norm=GRAD_CLIP_NORM, target_kl=TARGET_KL
+        gamma=config["GAMMA"], lambda_gae=config["LAMBDA"], epsilon_clip=config["EPSILON"],
+        actor_lr=config["ACTOR_LR"], critic_lr=config["CRITIC_LR"], epochs_per_update=config["EPOCHS_PER_UPDATE"],
+        minibatch_size=config["MINIBATCH_SIZE"], entropy_coef=config["ENTROPY_COEF"], vf_coef=config["VF_COEF"],
+        grad_clip_norm=config["GRAD_CLIP_NORM"], target_kl=config["TARGET_KL"]
     )
 
     # Load ConvVAE
@@ -75,14 +83,14 @@ def train_ppo():
         frame_stack_num=NUM_STACK,
         transform_function=transform,
         single_latent_dim=LATENT_DIM,
-        gamma=GAMMA,
+        gamma=config["GAMMA"],
     )
 
     # 3. Initialize Actor, Critic, Optimizers
     actor = Actor().to(DEVICE)
     critic = Critic().to(DEVICE)
-    actor_optimizer = optim.Adam(actor.parameters(), lr=ACTOR_LR, eps=1e-5)
-    critic_optimizer = optim.Adam(critic.parameters(), lr=CRITIC_LR, eps=1e-5)
+    actor_optimizer = optim.Adam(actor.parameters(), lr=config["ACTOR_LR"], eps=1e-5)
+    critic_optimizer = optim.Adam(critic.parameters(), lr=config["CRITIC_LR"], eps=1e-5)
 
     # 4. Initialize Rollout Buffer
     buffer = RolloutBuffer()
@@ -93,7 +101,7 @@ def train_ppo():
     all_episode_rewards = []
     current_Z_t_numpy, _ = env.reset()  # (num_stack * LATENT_DIM,)
 
-    while global_step < MAX_TRAINING_STEPS:
+    while global_step < config["MAX_TRAINING_STEPS"]:
         update += 1
         buffer.clear()
         actor.eval()  # Set to eval mode for rollout collection
@@ -102,7 +110,7 @@ def train_ppo():
         # num_steps_this_batch = 0
 
         # --- Collect Rollout Data (STEPS_PER_BATCH) ---
-        for _ in range(STEPS_PER_BATCH):
+        for _ in range(config["STEPS_PER_BATCH"]):
             global_step += 1
             # num_steps_this_batch += 1
 
@@ -153,7 +161,7 @@ def train_ppo():
                 current_Z_t_numpy, _ = env.reset()
 
             # Check if max steps reached during collection
-            if global_step >= MAX_TRAINING_STEPS:
+            if global_step >= config["MAX_TRAINING_STEPS"]:
                 break
 
         # --- Prepare for Update ---
@@ -168,12 +176,12 @@ def train_ppo():
             hyperparams, DEVICE, last_value_for_gae=last_value
         )
 
-        print(f"Update {update}, Optimizing for {EPOCHS_PER_UPDATE} epochs. Mean KL: {mean_kl:.4f}")
+        print(f"Update {update}, Optimizing for {config['EPOCHS_PER_UPDATE']} epochs. Mean KL: {mean_kl:.4f}")
         avg_reward = np.mean(all_episode_rewards[-10:]) if all_episode_rewards else 0.0
         print(f"Total Steps: {global_step}, Avg Reward (Last 10 ep): {avg_reward:.2f}")
 
         # --- Save Models Periodically ---
-        if update % SAVE_INTERVAL == 0:
+        if update % config["SAVE_INTERVAL"] == 0:
             print(f"Saving models at update {update}...")
             try:
                 torch.save(actor.state_dict(), PPO_ACTOR_SAVE_FILENAME)
@@ -211,4 +219,16 @@ if __name__ == "__main__":
     # Path(PPO_ACTOR_SAVE_FILENAME).parent.mkdir(parents=True, exist_ok=True)
     # Path(PPO_CRITIC_SAVE_FILENAME).parent.mkdir(parents=True, exist_ok=True)
 
-    train_ppo()
+    parser = argparse.ArgumentParser(description="Train PPO agent.")
+    parser.add_argument(
+        "--config_name",
+        type=str,
+        default="default",
+        help="Name of the configuration to use (e.g., 'default', 'test')."
+    )
+    args = parser.parse_args()
+
+    print(f"Using configuration name: {args.config_name}")
+    config = get_config(args.config_name)
+
+    train_ppo(config)
