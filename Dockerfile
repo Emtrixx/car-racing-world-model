@@ -15,7 +15,14 @@ COPY requirements.txt ./
 # without adding too much complexity for now).
 # swig is listed in requirements and often needs to be installed via apt
 RUN apt-get update && \
-    apt-get install -y swig build-essential libgl1-mesa-glx && \
+    apt-get install -y \
+    swig \
+    build-essential \
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev && \
     pip install --no-cache-dir -r requirements.txt && \
     apt-get purge -y --auto-remove swig build-essential && \
     rm -rf /var/lib/apt/lists/*
