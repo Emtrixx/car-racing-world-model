@@ -377,7 +377,7 @@ def train_world_model_gru_epoch(world_model_gru, dataloader, optimizer,
 if __name__ == "__main__":
     # 1. Argument Parsing: Allow selecting config from command line
     parser = argparse.ArgumentParser(description="Train GRU World Model")
-    parser.add_argument("--config_name", type=str, default="default",
+    parser.add_argument("--config", type=str, default="default",
                         help="Name of the configuration to use (e.g., 'default', 'test').")
     args = parser.parse_args()
 

@@ -250,7 +250,7 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train PPO agent.")
     parser.add_argument(
-        "--config_name",
+        "--config",
         type=str,
         default="default",
         help="Name of the configuration to use (e.g., 'default', 'test')."
