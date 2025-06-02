@@ -43,3 +43,12 @@ The primary goal is to train an agent that can drive effectively in the CarRacin
     ```bash
     pip install -r requirements.txt
     ```
+
+## Troubleshooting
+
+Running the PPO model:
+- trained with python 3.11 and torch 2.7.0+cu123
+- when running the PPO model, you may encounter issues
+- setup conda env with python 3.11 and torch 2.7.0
+- Force conda to manage libgcc and libstdc++ 
+  - `conda install -c conda-forge libgcc-ng libstdcxx-ng`
