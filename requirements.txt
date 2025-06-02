@@ -15,6 +15,6 @@ gymnasium~=1.1.1
 gymnasium[box2d]~=1.1.1
 shap~=0.47.2
 swig~=4.3.1
-stable-baselines3~=2.6.0
+stable-baselines3[extra]~=2.6.0
 tensorboard~=2.19.0
 tensorboard-data-server~=0.7.2
