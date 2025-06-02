@@ -218,6 +218,9 @@ def train_ppo_sb3(config_name: str):
 
     callbacks = [checkpoint_callback, eval_callback]
 
+    # PPO should be run on CPU
+    ppo_device = "cpu"
+
     # Create PPO model
     model = PPO(
         policy=config["policy"],
@@ -237,7 +240,7 @@ def train_ppo_sb3(config_name: str):
         tensorboard_log=str(SB3_LOG_DIR / f"sb3_{config_name}_{ENV_NAME.lower()}"),
         verbose=1,
         seed=config["seed"],
-        device=DEVICE  # SB3 will handle moving model to this device
+        device=ppo_device  # SB3 will handle moving model to this device
     )
 
     print(f"PPO Model Device: {model.device}")
