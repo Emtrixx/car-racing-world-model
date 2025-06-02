@@ -7,7 +7,7 @@ services:
     volumes:
       - ./app:/app
 
-    # docker-compose run app python train_ppo.py
+    # docker compose run app python train_world_model_parallel.py --config test
 
     # Keep the container running if needed, or allow interactive sessions
 #    tty: true
