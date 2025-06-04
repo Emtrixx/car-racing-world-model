@@ -22,7 +22,9 @@ PLAYBACK_SPEED_DELAY = 0  # Seconds to pause between steps
 DETERMINISTIC_PLAY = True  # Use deterministic actions for playback
 
 # --- Define Model Path ---
-SB3_MODEL_FILENAME = f"sb3_default_{ENV_NAME.lower()}_final.zip"
+# SB3_MODEL_FILENAME = f"sb3_default_{ENV_NAME.lower()}_final.zip"
+SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip" # best
+# SB3_MODEL_FILENAME = f"sb3_default_carracing-v3/ppo_model_5000000_steps.zip" # one
 # Or use _best.zip:
 # SB3_MODEL_FILENAME = f"default_{ENV_NAME.lower()}_best/best_model.zip"
 SB3_MODEL_PATH = pathlib.Path("checkpoints") / SB3_MODEL_FILENAME
