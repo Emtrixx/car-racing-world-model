@@ -4,18 +4,18 @@ import time
 
 import torch
 from torch import optim
-from torch.utils.data import DataLoader
 from torch.nn import functional as F
+from torch.utils.data import DataLoader
 
 from utils import DEVICE, ENV_NAME, transform, VQ_VAE_CHECKPOINT_FILENAME
-from utils_vae import collect_frames, FrameDataset, visualize_reconstruction
+from utils_vae import FrameDataset, visualize_reconstruction, collect_frames
 from vq_conv_vae import VQVAE
 
 
 def get_config(name="default"):
     configs = {
         "default": {
-            "num_frames_collect": 50000,  # How many frames to collect for training dataset
+            "num_frames_collect": 1_000_000,  # How many frames to collect for training dataset
             "batch_size": 128,  # Batch size for training
             "learning_rate": 1e-3,  # Learning rate for optimizer
             "epochs": 50,  # Number of training epochs
