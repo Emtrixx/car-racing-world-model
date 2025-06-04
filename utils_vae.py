@@ -54,6 +54,8 @@ def collect_frames(env_name, num_frames, transform_fn):
         traceback.print_exc()
         return
 
+    # SB3 PPO agent should be on CPU
+    ppo_device = "cpu"
     # --- Load Trained SB3 PPO Agent ---
     print(f"Loading trained SB3 PPO agent from: {SB3_MODEL_PATH}")
     if not SB3_MODEL_PATH.exists():
@@ -61,7 +63,7 @@ def collect_frames(env_name, num_frames, transform_fn):
         if hasattr(env, 'close'): env.close()
         return
     try:
-        ppo_agent = PPO.load(SB3_MODEL_PATH, device=DEVICE, env=env)  # Provide env for action/obs space checks
+        ppo_agent = PPO.load(SB3_MODEL_PATH, device=ppo_device, env=env)  # Provide env for action/obs space checks
         print(f"Successfully loaded SB3 PPO agent. Agent device: {ppo_agent.device}")
     except Exception as e:
         print(f"ERROR loading SB3 PPO agent: {e}")
