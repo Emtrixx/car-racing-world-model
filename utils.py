@@ -20,6 +20,7 @@ DEVICE = torch.device(DEVICE_STR)  # Use GPU if available, else CPU
 
 # --- File Paths ---
 VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_cvae_ld{LATENT_DIM}_epoch10.pth"
+VQ_VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_vqvae_ld{LATENT_DIM}.pth"
 WM_MODEL_SUFFIX = f"ld{LATENT_DIM}_ac{ACTION_DIM}"
 WM_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
 WM_CHECKPOINT_FILENAME_GRU = f"checkpoints/{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
@@ -238,6 +239,7 @@ class ActionTransformWrapper(gym.ActionWrapper):
                                              self._underlying_action_space.high)
         return clipped_transformed_action
 
+
 def make_env(vae_model_instance,  # The loaded and initialized VAE model
              transform_function,  # torchvision.transforms.Compose object
              env_id=ENV_NAME,
@@ -260,6 +262,7 @@ def make_env(vae_model_instance,  # The loaded and initialized VAE model
     print(f"Sample observation shape from final env: {env.observation_space.sample().shape}")
 
     return env
+
 
 def make_env_sb3(
         env_id: str,
