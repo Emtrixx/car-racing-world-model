@@ -7,12 +7,13 @@ from stable_baselines3 import PPO
 from torch.utils.data import Dataset
 
 from conv_vae import ConvVAE
-from utils import DEVICE, VAE_CHECKPOINT_FILENAME, NUM_STACK, transform, LATENT_DIM, make_env_sb3
+from utils import DEVICE, VAE_CHECKPOINT_FILENAME, NUM_STACK, transform, make_env_sb3
 
 SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip"  # best
 SB3_MODEL_PATH = pathlib.Path("checkpoints") / SB3_MODEL_FILENAME
 
 
+# todo: still uses old ConvVAE -- broken as of now because of updated make_env_sb3
 # --- Data Collection --- (uses vae_model and PPO actor to collect frames)
 def collect_frames(env_name, num_frames, transform_fn):
     print(f"Collecting {num_frames} frames for VAE training...")
@@ -37,13 +38,12 @@ def collect_frames(env_name, num_frames, transform_fn):
     try:
         env = make_env_sb3(
             env_id=env_name,
-            vae_model_instance=vae_model,
+            vq_vae_model_instance=vae_model,
             transform_function=transform,
             frame_stack_num=NUM_STACK,
-            single_latent_dim=LATENT_DIM,
             device_for_vae=DEVICE,
             gamma=0.99,  # Standard gamma, used by NormalizeReward
-            max_episode_steps=1000,  # Typical for CarRacing
+            max_episode_steps=700,
             render_mode="rgb_array",  # Use rgb_array for frame collection
             seed=np.random.randint(0, 10000)  # Give a random seed for variety if desired
         )

@@ -12,9 +12,10 @@ from stable_baselines3 import PPO
 from utils import (
     DEVICE, ENV_NAME, transform, VAE_CHECKPOINT_FILENAME,
     NUM_STACK, LATENT_DIM,  # Added LATENT_DIM and NUM_STACK
-    make_env_sb3  # Use the SB3 compatible environment creation function
+    make_env_sb3, VQ_VAE_CHECKPOINT_FILENAME  # Use the SB3 compatible environment creation function
 )
 from conv_vae import ConvVAE
+from vq_conv_vae import VQVAE
 
 # --- Configuration ---
 NUM_EPISODES = 5  # How many episodes to play
@@ -23,7 +24,8 @@ DETERMINISTIC_PLAY = True  # Use deterministic actions for playback
 
 # --- Define Model Path ---
 # SB3_MODEL_FILENAME = f"sb3_default_{ENV_NAME.lower()}_final.zip"
-SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip" # best
+# SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip"  # best
+SB3_MODEL_FILENAME = f"sb3_test_carracing-v3_best/best_model.zip"  # best test
 # SB3_MODEL_FILENAME = f"sb3_default_carracing-v3/ppo_model_5000000_steps.zip" # one
 # Or use _best.zip:
 # SB3_MODEL_FILENAME = f"default_{ENV_NAME.lower()}_best/best_model.zip"
@@ -33,15 +35,15 @@ SB3_MODEL_PATH = pathlib.Path("checkpoints") / SB3_MODEL_FILENAME
 def play_sb3():
     print(f"Initializing environment: {ENV_NAME} with human rendering.")
 
-    # --- Load VAE Model ---
+    # --- Load VQ-VAE Model ---
     print(f"Loading VAE model to device: {DEVICE}")
-    vae_model = ConvVAE(latent_dim=LATENT_DIM).to(DEVICE)  # Ensure latent_dim is passed if constructor needs it
+    vq_vae_model = VQVAE().to(DEVICE)  # Ensure latent_dim is passed if constructor needs it
     try:
-        vae_model.load_state_dict(torch.load(VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
-        vae_model.eval()
-        print(f"Successfully loaded VAE: {VAE_CHECKPOINT_FILENAME}")
+        vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
+        vq_vae_model.eval()
+        print(f"Successfully loaded VAE: {VQ_VAE_CHECKPOINT_FILENAME}")
     except FileNotFoundError:
-        print(f"ERROR: VAE checkpoint '{VAE_CHECKPOINT_FILENAME}' not found.")
+        print(f"ERROR: VAE checkpoint '{VQ_VAE_CHECKPOINT_FILENAME}' not found.")
         return
     except Exception as e:
         print(f"ERROR loading VAE: {e}")
@@ -54,15 +56,13 @@ def play_sb3():
     try:
         env = make_env_sb3(
             env_id=ENV_NAME,
-            vae_model_instance=vae_model,
+            vq_vae_model_instance=vq_vae_model,
             transform_function=transform,
             frame_stack_num=NUM_STACK,
-            single_latent_dim=LATENT_DIM,
             device_for_vae=DEVICE,
             gamma=0.99,  # Standard gamma, used by NormalizeReward
             render_mode="human",
             max_episode_steps=1000,  # Typical for CarRacing
-            seed=np.random.randint(0, 10000)  # Give a random seed for variety if desired
         )
         print("Environment created successfully with make_env_sb3.")
     except Exception as e:

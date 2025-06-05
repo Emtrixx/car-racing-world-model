@@ -1,27 +1,18 @@
 # train_ppo_sb3.py
-import time
 import argparse
-import os
 import pathlib
+import time
 from typing import Callable
 
 import torch
-import torch.nn as nn
-import numpy as np
-import gymnasium as gym  # Gymnasium is the new name for gym
-
 from stable_baselines3 import PPO
-from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
-from stable_baselines3.common.monitor import Monitor  # For DummyVecEnv logging
+from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
 # Import from local modules
-from conv_vae import ConvVAE  # Assuming conv_vae.py is in the same directory or PYTHONPATH
 from utils import (
-    DEVICE, ENV_NAME, transform, VAE_CHECKPOINT_FILENAME,
-    NUM_STACK, LATENT_DIM, ACTION_DIM,
-    make_env_sb3, DEVICE_STR  # Use the new/modified make_env_sb3 from utils.py
+    DEVICE, ENV_NAME, NUM_STACK, _init_env_fn_sb3
 )
 
 print(f"Using device for main script: {DEVICE}")
@@ -56,7 +47,6 @@ def get_config_sb3(name="default"):
             # Policy keyword arguments for MlpPolicy
             "policy_kwargs": dict(
                 # features_extractor_class=torch.nn.Identity, # Not needed if obs is already flat
-                # features_extractor_kwargs=dict(features_dim=LATENT_DIM * NUM_STACK), # Not needed
                 net_arch=dict(pi=[256, 256], vf=[256, 256]),  # Matches Actor/Critic hidden layers
                 activation_fn=torch.nn.Tanh,
                 log_std_init=-1.0,  # Matches custom Actor's initial log_std bias
@@ -75,9 +65,7 @@ def get_config_sb3(name="default"):
             # Environment parameters (passed to make_env_sb3 via _init_env_fn_sb3)
             "env_name_config": ENV_NAME,
             "num_stack_config": NUM_STACK,
-            "latent_dim_config": LATENT_DIM,
             "gamma_config": 0.99,  # For NormalizeReward wrapper
-            "vae_checkpoint_path_config": VAE_CHECKPOINT_FILENAME,
             "max_episode_steps_config": 1000,  # Max steps per episode in CarRacing
         }
     }
@@ -111,54 +99,6 @@ def linear_schedule(initial_value: float) -> Callable[[float], float]:
     return func
 
 
-def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
-    """
-    Creates an environment instance for SubprocVecEnv or DummyVecEnv.
-    Each process/environment will call this function.
-    """
-    if config_env_params is None:
-        config_env_params = {}
-
-    set_random_seed(seed + rank)  # Ensure each environment has a different seed
-
-    # TODO: check if main process is using the same device as subprocesses
-    vae_device_for_subprocess = torch.device(DEVICE_STR)
-
-    # print(f"Rank {rank}: Attempting to load VAE on device: {vae_device_for_subprocess}")
-
-    # Ensure ConvVAE can be initialized with latent_dim, or adjust as per its definition
-    vae_model = ConvVAE(latent_dim=config_env_params.get("latent_dim_config", LATENT_DIM)).to(vae_device_for_subprocess)
-    vae_checkpoint_path = config_env_params.get("vae_checkpoint_path_config", VAE_CHECKPOINT_FILENAME)
-
-    try:
-        vae_model.load_state_dict(torch.load(vae_checkpoint_path, map_location=vae_device_for_subprocess))
-        vae_model.eval()
-        # print(f"Rank {rank}: Successfully loaded VAE from {vae_checkpoint_path} to {vae_device_for_subprocess}")
-    except FileNotFoundError:
-        print(f"Rank {rank}: ERROR: VAE checkpoint '{vae_checkpoint_path}' not found. Train VAE first.")
-        raise
-    except Exception as e:
-        print(f"Rank {rank}: ERROR loading VAE: {e}")
-        raise
-
-    env = make_env_sb3(
-        env_id=config_env_params.get("env_name_config", ENV_NAME),
-        vae_model_instance=vae_model,
-        transform_function=transform,  # Global transform from utils.py
-        frame_stack_num=config_env_params.get("num_stack_config", NUM_STACK),
-        single_latent_dim=config_env_params.get("latent_dim_config", LATENT_DIM),
-        device_for_vae=vae_device_for_subprocess,
-        gamma=config_env_params.get("gamma_config", 0.99),
-        render_mode=config_env_params.get("render_mode", None),
-        max_episode_steps=config_env_params.get("max_episode_steps_config", 1000),
-        seed=seed + rank  # Pass seed to make_env_sb3 for its own seeding logic if any
-    )
-    # Monitor wrapper is important for SB3 to log episode rewards and lengths,
-    # especially when using DummyVecEnv or if RecordEpisodeStatistics is not used inside make_env_sb3.
-    env = Monitor(env)
-    return env
-
-
 def train_ppo_sb3(config_name: str):
     print(f"Starting Stable Baselines3 PPO training with config: {config_name}...")
     config = get_config_sb3(config_name)
@@ -170,9 +110,7 @@ def train_ppo_sb3(config_name: str):
     env_params_for_creation = {
         "env_name_config": config["env_name_config"],
         "num_stack_config": config["num_stack_config"],
-        "latent_dim_config": config["latent_dim_config"],
         "gamma_config": config["gamma_config"],
-        "vae_checkpoint_path_config": config["vae_checkpoint_path_config"],
         "max_episode_steps_config": config["max_episode_steps_config"],
         "num_envs_for_vae_device_check": config["num_envs"],  # Pass num_envs for VAE device heuristic
         # "render_mode": "human" if config["num_envs"] == 1 else None # Example for rendering
@@ -283,6 +221,4 @@ if __name__ == "__main__":
     )
     args = parser.parse_args()
 
-
     train_ppo_sb3(args.config)
-
