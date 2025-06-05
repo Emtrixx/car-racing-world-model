@@ -1,10 +1,14 @@
 # utils.py
 import torch
+from stable_baselines3.common.monitor import Monitor
+from stable_baselines3.common.utils import set_random_seed
 from torchvision import transforms
 import gymnasium as gym
 from gymnasium import spaces, Wrapper
 from collections import deque
 import numpy as np
+
+from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
 
 # --- Configuration Constants ---
 ENV_NAME = "CarRacing-v3"
@@ -203,6 +207,71 @@ class LatentStateWrapper(gym.ObservationWrapper):
         return concatenated_latents_tensor.cpu().numpy()
 
 
+class LatentStateWrapperVQ(gym.ObservationWrapper):
+    def __init__(self, env, vq_vae_model: torch.nn.Module, transform_fn, num_stack: int, device: torch.device):
+        super().__init__(env)
+        self.vq_vae_model = vq_vae_model.to(device).eval()
+        self.transform_fn = transform_fn
+        self.num_stack = num_stack
+        self.device = device
+
+        # Determine the shape of the flattened quantized output for a single frame
+        # by doing a dummy forward pass.
+        # Ensure IMG_CHANNELS, IMG_SIZE are correctly defined where this wrapper is used.
+        # These should match the input expected by your VQVAE and transform_fn.
+        dummy_input = torch.randn(1, CHANNELS, IMG_SIZE, IMG_SIZE).to(self.device)
+        with torch.no_grad():
+            z_continuous = self.vq_vae_model.encoder(dummy_input)
+            # _, quantized_sample, _, encoding_indices_sample = self.vq_vae_model.vq_layer(z_continuous)
+            # The vq_layer.forward returns: vq_loss, quantized_latents, encoding_indices
+            _, quantized_sample, _ = self.vq_vae_model.vq_layer(z_continuous)
+
+        # quantized_sample has shape (1, embedding_dim, H_feat, W_feat)
+        # We will flatten the (embedding_dim, H_feat, W_feat) part
+        self.flat_quantized_dim_per_frame = np.prod(quantized_sample.shape[1:])
+
+        # New observation space is the concatenated flattened quantized vectors
+        new_obs_shape = (self.num_stack * self.flat_quantized_dim_per_frame,)
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf,
+            shape=new_obs_shape,
+            dtype=np.float32  # Quantized vectors are floats
+        )
+        print(f"LatentStateWrapperVQ: Initialized with observation space shape: {new_obs_shape}")
+
+    def observation(self, obs_stack_raw_numpy):
+        # obs_stack_raw_numpy comes from FrameStackWrapper: (num_stack, H, W, C) dtype=uint8
+        processed_quantized_vectors_list = []
+        for i in range(obs_stack_raw_numpy.shape[0]):  # Iterate through N frames in the stack
+            raw_frame = obs_stack_raw_numpy[i]  # Single raw frame (H, W, C)
+
+            # Apply torchvision transform
+            processed_frame_tensor = self.transform_fn(raw_frame)
+
+            # Add batch dim, move to device for VQ-VAE
+            processed_frame_tensor = processed_frame_tensor.unsqueeze(0).to(self.device)
+
+            with torch.no_grad():
+                # 1. Encode the frame
+                z_continuous = self.vq_vae_model.encoder(processed_frame_tensor)
+                # 2. Get the quantized representation from the VQ layer
+                # vq_loss, quantized_single_frame, encoding_indices = self.vq_vae_model.vq_layer(z_continuous)
+                # We only need the quantized_single_frame for the observation
+                _, quantized_single_frame, _ = self.vq_vae_model.vq_layer(z_continuous)
+
+                # quantized_single_frame has shape (1, embedding_dim, H_feat, W_feat)
+                # Flatten it to (embedding_dim * H_feat * W_feat)
+                flat_quantized_vector = quantized_single_frame.reshape(-1)
+                processed_quantized_vectors_list.append(flat_quantized_vector)
+
+        # Concatenate the N flattened quantized latent vectors (still on device)
+        # Each element in the list is a tensor of shape (flat_quantized_dim_per_frame,)
+        concatenated_quantized_tensor = torch.cat(processed_quantized_vectors_list, dim=0)
+
+        # Environment observations should be NumPy arrays on CPU
+        return concatenated_quantized_tensor.cpu().numpy()
+
+
 # For SB3
 class ActionTransformWrapper(gym.ActionWrapper):
     def __init__(self, env):
@@ -266,10 +335,9 @@ def make_env(vae_model_instance,  # The loaded and initialized VAE model
 
 def make_env_sb3(
         env_id: str,
-        vae_model_instance: torch.nn.Module,  # Pass the loaded VAE model
+        vq_vae_model_instance: torch.nn.Module,  # Pass the loaded VAE model
         transform_function,
         frame_stack_num: int,
-        single_latent_dim: int,
         device_for_vae: torch.device,
         gamma: float,
         render_mode: str = None,
@@ -316,9 +384,9 @@ def make_env_sb3(
     # 3. FrameStackWrapper: Stacks raw frames.
     env = FrameStackWrapper(env, frame_stack_num)
 
-    # 4. LatentStateWrapper: Encodes stacked frames into latent vectors using VAE.
-    env = LatentStateWrapper(env, vae_model_instance, transform_function,
-                             single_latent_dim, frame_stack_num, device_for_vae)
+    # 4. LatentStateWrapper: Encodes stacked frames into quantized latent vectors using VQ-VAE.
+    env = LatentStateWrapperVQ(env, vq_vae_model_instance, transform_function,
+                               frame_stack_num, device_for_vae)
 
     # --- Reward Wrapper ---
     # 5. NormalizeReward: Normalizes rewards.
@@ -336,5 +404,51 @@ def make_env_sb3(
 
 
 print(f"Utils loaded. Using device: {DEVICE}")
-print(f"VAE Path: {VAE_CHECKPOINT_FILENAME}")
+print(f"VQ-VAE Path: {VQ_VAE_CHECKPOINT_FILENAME}")
 print(f"WM Path: {WM_CHECKPOINT_FILENAME}")
+
+
+def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
+    """
+    Creates an environment instance for SubprocVecEnv or DummyVecEnv.
+    Each process/environment will call this function.
+    """
+    if config_env_params is None:
+        config_env_params = {}
+
+    set_random_seed(seed + rank)  # Ensure each environment has a different seed
+
+    vae_device_for_subprocess = torch.device(DEVICE_STR)
+
+    # print(f"Rank {rank}: Attempting to load VAE on device: {vae_device_for_subprocess}")
+
+    vae_model = VQVAE(in_channels=CHANNELS, embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS).to(
+        vae_device_for_subprocess)
+    vq_vae_checkpoint_path = VQ_VAE_CHECKPOINT_FILENAME
+
+    try:
+        vae_model.load_state_dict(torch.load(vq_vae_checkpoint_path, map_location=vae_device_for_subprocess))
+        vae_model.eval()
+        # print(f"Rank {rank}: Successfully loaded VAE from {vae_checkpoint_path} to {vae_device_for_subprocess}")
+    except FileNotFoundError:
+        print(f"Rank {rank}: ERROR: VAE checkpoint '{vq_vae_checkpoint_path}' not found. Train VAE first.")
+        raise
+    except Exception as e:
+        print(f"Rank {rank}: ERROR loading VAE: {e}")
+        raise
+
+    env = make_env_sb3(
+        env_id=config_env_params.get("env_name_config", ENV_NAME),
+        vq_vae_model_instance=vae_model,
+        transform_function=transform,  # Global transform from utils.py
+        frame_stack_num=config_env_params.get("num_stack_config", NUM_STACK),
+        device_for_vae=vae_device_for_subprocess,
+        gamma=config_env_params.get("gamma_config", 0.99),
+        render_mode=config_env_params.get("render_mode", None),
+        max_episode_steps=config_env_params.get("max_episode_steps_config", 1000),
+        seed=seed + rank  # Pass seed to make_env_sb3 for its own seeding logic if any
+    )
+    # Monitor wrapper is important for SB3 to log episode rewards and lengths,
+    # especially when using DummyVecEnv or if RecordEpisodeStatistics is not used inside make_env_sb3.
+    env = Monitor(env)
+    return env
