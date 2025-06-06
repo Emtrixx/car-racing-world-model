@@ -422,13 +422,13 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
 
     # print(f"Rank {rank}: Attempting to load VAE on device: {vae_device_for_subprocess}")
 
-    vae_model = VQVAE(in_channels=CHANNELS, embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS).to(
+    vq_vae_model = VQVAE(in_channels=CHANNELS, embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS).to(
         vae_device_for_subprocess)
     vq_vae_checkpoint_path = VQ_VAE_CHECKPOINT_FILENAME
 
     try:
-        vae_model.load_state_dict(torch.load(vq_vae_checkpoint_path, map_location=vae_device_for_subprocess))
-        vae_model.eval()
+        vq_vae_model.load_state_dict(torch.load(vq_vae_checkpoint_path, map_location=vae_device_for_subprocess))
+        vq_vae_model.eval()
         # print(f"Rank {rank}: Successfully loaded VAE from {vae_checkpoint_path} to {vae_device_for_subprocess}")
     except FileNotFoundError:
         print(f"Rank {rank}: ERROR: VAE checkpoint '{vq_vae_checkpoint_path}' not found. Train VAE first.")
@@ -439,7 +439,7 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
 
     env = make_env_sb3(
         env_id=config_env_params.get("env_name_config", ENV_NAME),
-        vq_vae_model_instance=vae_model,
+        vq_vae_model_instance=vq_vae_model,
         transform_function=transform,  # Global transform from utils.py
         frame_stack_num=config_env_params.get("num_stack_config", NUM_STACK),
         device_for_vae=vae_device_for_subprocess,

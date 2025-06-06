@@ -9,7 +9,7 @@ import imageio
 import matplotlib.pyplot as plt
 import sys  # For sys.exit()
 
-from actor_critic import Actor
+from legacy.actor_critic import Actor
 from conv_vae import ConvVAE
 from world_model import WorldModelGRU
 # Import from local modules
@@ -21,8 +21,8 @@ from utils_rl import PPO_ACTOR_SAVE_FILENAME, RandomPolicy, PPOPolicyWrapper
 # Assuming GRU hyperparams and checkpoint name are correctly sourced.
 # If they are defined in train_world_model.py at global scope:
 try:
-    from train_world_model import (WM_CHECKPOINT_FILENAME_GRU, GRU_HIDDEN_DIM,
-                                   GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM)
+    from legacy.train_world_model import (WM_CHECKPOINT_FILENAME_GRU, GRU_HIDDEN_DIM,
+                                          GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM)
 except ImportError:
     print("ERROR: Could not import GRU params from train_world_model.py.")
     print("Please ensure it's in PYTHONPATH and defines these constants globally, or define them in utils.py / here.")
