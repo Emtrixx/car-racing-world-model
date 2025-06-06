@@ -422,7 +422,8 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
 
     set_random_seed(seed + rank)  # Ensure each environment has a different seed
 
-    vae_device_for_subprocess = torch.device(DEVICE_STR)
+    # vae_device_for_subprocess = torch.device(DEVICE_STR)
+    vae_device_for_subprocess = "cpu"
 
     # print(f"Rank {rank}: Attempting to load VAE on device: {vae_device_for_subprocess}")
 
