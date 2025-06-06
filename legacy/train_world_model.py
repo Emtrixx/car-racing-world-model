@@ -7,7 +7,7 @@ from torch.utils.data import DataLoader, Dataset
 import time
 import matplotlib.pyplot as plt
 
-from actor_critic import Actor
+from legacy.actor_critic import Actor
 from conv_vae import ConvVAE
 from world_model import WorldModelGRU
 from utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK, preprocess_and_encode
@@ -221,8 +221,7 @@ if __name__ == "__main__":
 
     # 6. Initialize GRU World Model, Optimizer, Criterion
     world_model_gru = WorldModelGRU(
-        input_latent_stack_dim=NUM_STACK * LATENT_DIM,  # Input is the concatenated stack
-        output_single_latent_dim=LATENT_DIM,  # Output is a single next latent
+        latent_dim=LATENT_DIM,  # Input is the concatenated stack
         action_dim=ACTION_DIM,
         gru_hidden_dim=GRU_HIDDEN_DIM,
         gru_num_layers=GRU_NUM_LAYERS,

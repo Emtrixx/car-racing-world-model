@@ -11,7 +11,7 @@ import matplotlib.pyplot as plt
 
 from torch import nn, random
 
-from actor_critic import Actor, Critic
+from legacy.actor_critic import Actor, Critic
 from conv_vae import ConvVAE
 from world_model import WorldModelGRU
 # Import from local modules
@@ -22,13 +22,8 @@ from utils_rl import RandomPolicy, PPOHyperparameters, PPO_DREAM_ACTOR_SAVE_FILE
 
 # Import GRU WM parameters and checkpoint path from its training script
 # This assumes train_world_model.py defines these at the global scope
-from train_world_model import (WM_CHECKPOINT_FILENAME_GRU, GRU_HIDDEN_DIM,
-                               GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM)
-
-# Import PPO Hyperparameters (can also define them here or in a shared config)
-from train_ppo import (ACTOR_LR, CRITIC_LR,
-    # STEPS_PER_BATCH will be for dream
-                       )
+from legacy.train_world_model import (WM_CHECKPOINT_FILENAME_GRU, GRU_HIDDEN_DIM,
+                                      GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM)
 
 print(f"Device for PPO in Dream: {DEVICE}")
 
@@ -144,7 +139,8 @@ def train_ppo_in_dream():
     try:
         vae_model.load_state_dict(torch.load(VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
     except Exception as e:
-        print(f"Failed to load VAE: {e}"); return
+        print(f"Failed to load VAE: {e}");
+        return
     print("VAE loaded.")
 
     # 2. Load World Model (GRU with R/D heads)
@@ -156,7 +152,8 @@ def train_ppo_in_dream():
     try:
         world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
     except Exception as e:
-        print(f"Failed to load GRU World Model: {e}"); return
+        print(f"Failed to load GRU World Model: {e}");
+        return
     print("GRU World Model loaded.")
 
     # 3. Initialize or Load PPO Actor/Critic

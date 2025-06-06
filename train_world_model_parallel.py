@@ -5,22 +5,22 @@ import gymnasium as gym
 import torch
 import torch.optim as optim
 import torch.nn as nn
+from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, Dataset
 import time
 import matplotlib.pyplot as plt
 import multiprocessing as mp
 
+from utils_vae import SB3_MODEL_PATH
+from vq_conv_vae import VQVAE
 from world_model import WorldModelGRU
 from utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     LATENT_DIM,  # Default: 32
     ACTION_DIM,  # Default: 3
     NUM_STACK,  # Default: 4
-    VAE_CHECKPOINT_FILENAME,
-    transform as main_process_transform,  # transform is used by worker
-    preprocess_and_encode,
-    preprocess_and_encode_stack,
-    FrameStackWrapper, DEVICE, WM_CHECKPOINT_FILENAME_GRU, DEVICE_STR
+    # transform is used by worker
+    FrameStackWrapper, DEVICE, WM_CHECKPOINT_FILENAME_GRU, DEVICE_STR, VQ_VAE_CHECKPOINT_FILENAME, make_env_sb3
 )
 from utils_rl import PPO_ACTOR_SAVE_FILENAME
 
@@ -44,6 +44,7 @@ NUM_LOADER_WORKERS = 4  # For DataLoader for PyTorch training
 # Environment settings for data collection
 MAX_EPISODE_STEPS_COLLECT = 400  # Max steps per episode in the collection environment
 
+
 def get_config(name="default"):
     configs = {
         "default": {
@@ -51,7 +52,7 @@ def get_config(name="default"):
             "latent_dim": LATENT_DIM,
             "action_dim": ACTION_DIM,
             "num_stack": NUM_STACK,
-            "vae_checkpoint_filename": VAE_CHECKPOINT_FILENAME,
+            "vq_vae_checkpoint_filename": VQ_VAE_CHECKPOINT_FILENAME,
             "ppo_actor_save_filename": PPO_ACTOR_SAVE_FILENAME,
             "device_str": DEVICE_STR,
             "gru_hidden_dim": GRU_HIDDEN_DIM,
@@ -72,7 +73,7 @@ def get_config(name="default"):
             "latent_dim": LATENT_DIM,
             "action_dim": ACTION_DIM,
             "num_stack": NUM_STACK,
-            "vae_checkpoint_filename": VAE_CHECKPOINT_FILENAME,
+            "vq_vae_checkpoint_filename": VQ_VAE_CHECKPOINT_FILENAME,
             "ppo_actor_save_filename": PPO_ACTOR_SAVE_FILENAME,
             "device_str": DEVICE_STR,
             "gru_hidden_dim": 64,
@@ -94,9 +95,9 @@ def get_config(name="default"):
 
 # --- Worker function for parallel data collection ---
 def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_name_str,
-                             vae_checkpoint_path_str, policy_checkpoint_path_str,
+                             vq_vae_checkpoint_path_str, policy_checkpoint_path_str,
                              sequence_length_int, device_str_for_worker, num_stack_int,
-                             max_episode_steps_collect_int): # Added max_episode_steps
+                             max_episode_steps_collect_int):  # Added max_episode_steps
     try:
         import os
         import time
@@ -104,31 +105,58 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
         import gymnasium as gym
 
         from conv_vae import ConvVAE
-        from actor_critic import Actor
+        from legacy.actor_critic import Actor
         from utils_rl import PPOPolicyWrapper
         from utils import transform, preprocess_and_encode, preprocess_and_encode_stack, FrameStackWrapper
 
         print(
             f"[Worker {worker_id}, PID {os.getpid()}] Starting, assigned {num_episodes_to_collect_by_worker} episodes. Device: {device_str_for_worker}")
 
-        # 1. Initialize Environment for this worker
-        worker_env = FrameStackWrapper(gym.make(env_name_str, render_mode="rgb_array", max_episode_steps=max_episode_steps_collect_int),
-                                       num_stack=num_stack_int)
+        worker_env = FrameStackWrapper(
+            gym.make(env_name_str, render_mode="rgb_array", max_episode_steps=max_episode_steps_collect_int),
+            num_stack=num_stack_int)
 
-        # 2. Load VAE Model for this worker
-        vae_model_worker = ConvVAE().to(device_str_for_worker)
-        vae_model_worker.load_state_dict(torch.load(vae_checkpoint_path_str, map_location=device_str_for_worker))
-        vae_model_worker.eval()
+        # Load VQ-VAE Model for this worker
+        vq_vae_model_worker = VQVAE().to(device_str_for_worker)
+        vq_vae_model_worker.load_state_dict(torch.load(vq_vae_checkpoint_path_str, map_location=device_str_for_worker))
+        vq_vae_model_worker.eval()
         # print(f"[Worker {worker_id}] VAE loaded.")
 
-        # 3. Load Policy Model for this worker
-        actor_for_collection_worker = Actor().to(device_str_for_worker)
-        actor_for_collection_worker.load_state_dict(
-            torch.load(policy_checkpoint_path_str, map_location=device_str_for_worker))
-        actor_for_collection_worker.eval()
-        policy_worker = PPOPolicyWrapper(actor_for_collection_worker, device_str_for_worker, deterministic=False,
-                                         action_space_low=worker_env.action_space.low,
-                                         action_space_high=worker_env.action_space.high)
+        # Initialize Environment for this worker
+        try:
+            env = make_env_sb3(
+                env_id=env_name_str,
+                vq_vae_model_instance=vq_vae_model_worker,
+                transform_function=transform,
+                frame_stack_num=num_stack_int,
+                device_for_vae=device_str_for_worker,
+                gamma=0.99,  # Standard gamma, used by NormalizeReward
+                render_mode="rgb_array",  # Use rgb_array for frame collection
+                max_episode_steps=max_episode_steps_collect_int,
+            )
+            print("Environment created successfully with make_env_sb3.")
+        except Exception as e:
+            print(f"Error creating environment with make_env_sb3: {e}")
+            import traceback
+            traceback.print_exc()
+            return
+
+        # Load Policy Model for this worker
+        print(f"Loading trained SB3 PPO agent from: {SB3_MODEL_PATH}")
+        if not SB3_MODEL_PATH.exists():
+            print(f"ERROR: SB3 PPO Model not found at {SB3_MODEL_PATH}")
+            if hasattr(worker_env, 'close'): worker_env.close()
+            return
+        try:
+            ppo_agent = PPO.load(SB3_MODEL_PATH, device=device_str_for_worker,
+                                 env=worker_env)  # Provide env for action/obs space checks
+            print(f"Successfully loaded SB3 PPO agent. Agent device: {ppo_agent.device}")
+        except Exception as e:
+            print(f"ERROR loading SB3 PPO agent: {e}")
+            if hasattr(env, 'close'): env.close()
+            import traceback
+            traceback.print_exc()
+            return
         # print(f"[Worker {worker_id}] Policy loaded.")
 
         worker_collected_sequences = []
@@ -231,7 +259,7 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
 # --- Data Collection for GRU (Sequence Data) ---
 def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_str_main,
                               num_collection_workers_int,
-                              env_name_str_for_worker, vae_checkpoint_path_str_for_worker,
+                              env_name_str_for_worker, vq_vae_checkpoint_path_str_for_worker,
                               policy_checkpoint_path_str_for_worker, num_stack_int_for_worker,
                               max_episode_steps_collect_int
                               ):
@@ -258,7 +286,7 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
             worker_id,
             episodes_per_worker[worker_id],
             env_name_str_for_worker,
-            vae_checkpoint_path_str_for_worker,
+            vq_vae_checkpoint_path_str_for_worker,
             policy_checkpoint_path_str_for_worker,
             sequence_length_int,
             device_str_main,
@@ -287,7 +315,7 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
         filepath_results = pool.starmap(collect_sequences_worker, worker_args_list)
 
     for worker_idx, filepath_result in enumerate(filepath_results):
-        worker_actual_id = worker_args_list[worker_idx][0] # Get actual worker_id from args
+        worker_actual_id = worker_args_list[worker_idx][0]  # Get actual worker_id from args
         if filepath_result and os.path.exists(filepath_result):
             try:
                 print(f"Loading data from worker {worker_actual_id}'s file: {filepath_result}")
@@ -303,9 +331,9 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
                     print(f"Warning: Could not remove temporary file {filepath_result}: {e_remove}")
             except Exception as e_load:
                 print(f"ERROR loading data from worker {worker_actual_id}'s file {filepath_result}: {e_load}")
-        elif filepath_result: # Filepath was returned but does not exist
-             print(f"Worker {worker_actual_id} returned filepath {filepath_result}, but file not found.")
-        else: # Worker returned None (either general error or save error)
+        elif filepath_result:  # Filepath was returned but does not exist
+            print(f"Worker {worker_actual_id} returned filepath {filepath_result}, but file not found.")
+        else:  # Worker returned None (either general error or save error)
             print(f"Worker {worker_actual_id} failed to produce a data file.")
 
     print(f"Finished collecting. Total sequences from all workers: {len(all_collected_sequences)}.")
@@ -391,11 +419,11 @@ if __name__ == "__main__":
     # This replaces all the individual constant imports/definitions at the top
     action_dim = config["action_dim"]
     num_stack = config["num_stack"]
-    vae_checkpoint_filename = config["vae_checkpoint_filename"]
+    vq_vae_checkpoint_filename = config["vq_vae_checkpoint_filename"]
     ppo_actor_save_filename = config["ppo_actor_save_filename"]
-    wm_checkpoint_filename_gru = config["wm_checkpoint_filename_gru"] # Use WM checkpoint path from config
+    wm_checkpoint_filename_gru = config["wm_checkpoint_filename_gru"]  # Use WM checkpoint path from config
     device_str = config["device_str"]
-    device = torch.device(device_str) # Re-initialize DEVICE based on config string
+    device = torch.device(device_str)  # Re-initialize DEVICE based on config string
 
     gru_hidden_dim = config["gru_hidden_dim"]
     gru_num_layers = config["gru_num_layers"]
@@ -421,26 +449,27 @@ if __name__ == "__main__":
 
     print(f"Starting GRU World Model training on device: {device}")
 
-    # 1. Initialize Environment (Main process - primarily for validation, workers create their own)
+    # Initialize Environment (Main process - primarily for validation, workers create their own)
     main_env_for_setup = FrameStackWrapper(
         gym.make(env_name, render_mode="rgb_array", max_episode_steps=max_episode_steps_collect), num_stack=num_stack)
     print(f"Main environment '{env_name}' with stack {num_stack} initialized for setup.")
     main_env_for_setup.close()
     print("Closed main_env_for_setup.")
 
-    # 2. & 3. VAE and Policy loading in main process are skipped if using parallel collection,
+    # VAE and Policy loading in main process are skipped if using parallel collection,
     # as workers handle their own loading. Add checks for checkpoint files.
-    if not os.path.exists(vae_checkpoint_filename):
-        print(f"CRITICAL ERROR: VAE Checkpoint {vae_checkpoint_filename} not found. Exiting before starting workers.")
+    if not os.path.exists(vq_vae_checkpoint_filename):
+        print(
+            f"CRITICAL ERROR: VAE Checkpoint {vq_vae_checkpoint_filename} not found. Exiting before starting workers.")
         exit()
     if not os.path.exists(ppo_actor_save_filename):
         print(
             f"CRITICAL ERROR: Policy Checkpoint {ppo_actor_save_filename} not found. Exiting before starting workers.")
         exit()
-    print(f"Found VAE checkpoint: {vae_checkpoint_filename}")
+    print(f"Found VAE checkpoint: {vq_vae_checkpoint_filename}")
     print(f"Found Policy checkpoint: {ppo_actor_save_filename}")
 
-    # 4. Collect Sequence Data (Parallelized)
+    # Collect Sequence Data (Parallelized)
     print(f"Number of collection workers configured: {num_collection_workers}")
     start_collect_time = time.time()
 
@@ -450,10 +479,10 @@ if __name__ == "__main__":
         device_str_main=device_str,
         num_collection_workers_int=num_collection_workers,
         env_name_str_for_worker=env_name,
-        vae_checkpoint_path_str_for_worker=vae_checkpoint_filename,
+        vq_vae_checkpoint_path_str_for_worker=vq_vae_checkpoint_filename,
         policy_checkpoint_path_str_for_worker=ppo_actor_save_filename,
         num_stack_int_for_worker=num_stack,
-        max_episode_steps_collect_int=max_episode_steps_collect # Pass this from config
+        max_episode_steps_collect_int=max_episode_steps_collect  # Pass this from config
     )
 
     print(f"Sequence data collection (parallel/serial) took {time.time() - start_collect_time:.2f} seconds.")

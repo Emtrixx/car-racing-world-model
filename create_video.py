@@ -1,7 +1,6 @@
 import gymnasium as gym
 import torch
 import numpy as np
-import time
 import cv2
 import matplotlib.pyplot as plt
 from io import BytesIO
@@ -10,7 +9,7 @@ from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode_stack, FrameStackWrapper)
 from utils_rl import PPO_ACTOR_SAVE_FILENAME  # Make sure this is correctly defined in utils_rl
 
-from actor_critic import Actor  # Assuming Actor class is defined here or imported
+from legacy.actor_critic import Actor  # Assuming Actor class is defined here or imported
 from conv_vae import ConvVAE  # Assuming ConvVAE class is defined here or imported
 
 # --- Video Configuration ---
@@ -239,5 +238,4 @@ def play_and_record():
 
 
 if __name__ == "__main__":
-
     play_and_record()
