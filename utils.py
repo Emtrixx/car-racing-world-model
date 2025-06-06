@@ -346,6 +346,7 @@ def make_env_sb3(
         gamma: float,
         render_mode: str = None,
         max_episode_steps: int = None,
+        seed: int = 0  # Seed for reproducibility
 ):
     """
     Creates and wraps the environment for use with Stable Baselines3.
