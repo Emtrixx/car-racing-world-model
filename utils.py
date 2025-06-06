@@ -238,6 +238,7 @@ class LatentStateWrapperVQ(gym.ObservationWrapper):
             dtype=np.float32  # Quantized vectors are floats
         )
         print(f"LatentStateWrapperVQ: Initialized with observation space shape: {new_obs_shape}")
+        self.last_quantized_latent_for_render = None
 
     def observation(self, obs_stack_raw_numpy):
         # obs_stack_raw_numpy comes from FrameStackWrapper: (num_stack, H, W, C) dtype=uint8
@@ -260,6 +261,9 @@ class LatentStateWrapperVQ(gym.ObservationWrapper):
                 _, quantized_single_frame, _ = self.vq_vae_model.vq_layer(z_continuous)
 
                 # quantized_single_frame has shape (1, embedding_dim, H_feat, W_feat)
+                # Store a clone for rendering before flattening
+                self.last_quantized_latent_for_render = quantized_single_frame.clone()
+
                 # Flatten it to (embedding_dim * H_feat * W_feat)
                 flat_quantized_vector = quantized_single_frame.reshape(-1)
                 processed_quantized_vectors_list.append(flat_quantized_vector)
@@ -342,7 +346,6 @@ def make_env_sb3(
         gamma: float,
         render_mode: str = None,
         max_episode_steps: int = None,
-        seed: int = 0  # Add seed parameter
 ):
     """
     Creates and wraps the environment for use with Stable Baselines3.
