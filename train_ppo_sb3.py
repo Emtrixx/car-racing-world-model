@@ -31,7 +31,7 @@ def get_config_sb3(name="default"):
         "default": {
             # SB3 PPO Hyperparameters
             "policy": "MlpPolicy",
-            "learning_rate": 1e-4,  # Can be a schedule
+            "learning_rate": 3e-5,  # Can be a schedule
             "n_steps": 2048,  # Corresponds to STEPS_PER_BATCH (per environment)
             "batch_size": 64,  # PPO's minibatch size
             "n_epochs": 10,  # Corresponds to EPOCHS_PER_UPDATE
@@ -47,7 +47,7 @@ def get_config_sb3(name="default"):
             # Policy keyword arguments for MlpPolicy
             "policy_kwargs": dict(
                 # features_extractor_class=torch.nn.Identity, # Not needed if obs is already flat
-                net_arch=dict(pi=[256, 256], vf=[256, 256]),  # Matches Actor/Critic hidden layers
+                net_arch=dict(pi=[1024, 512], vf=[1024, 512]),
                 activation_fn=torch.nn.Tanh,
                 log_std_init=-1.0,  # Matches custom Actor's initial log_std bias
                 ortho_init=True,  # SB3 default, can be False if issues arise
@@ -66,7 +66,7 @@ def get_config_sb3(name="default"):
             "env_name_config": ENV_NAME,
             "num_stack_config": NUM_STACK,
             "gamma_config": 0.99,  # For NormalizeReward wrapper
-            "max_episode_steps_config": 1000,  # Max steps per episode in CarRacing
+            "max_episode_steps_config": 1000,
         }
     }
     configs["test"] = configs["default"].copy()
@@ -76,7 +76,13 @@ def get_config_sb3(name="default"):
         "num_envs": 2,
         "save_freq": 5_000,
         "eval_freq": 2048,
-        "learning_rate": 3e-4,
+        "learning_rate": 1e-4,
+        "policy_kwargs": dict(
+            net_arch=dict(pi=[512, 256], vf=[512, 256]),  # Test specific architecture
+            activation_fn=torch.nn.Tanh,  # Inherited or explicitly set
+            log_std_init=-1.0,  # Inherited or explicitly set
+            ortho_init=True,  # Inherited or explicitly set
+        ),
     })
     return configs[name]
 
