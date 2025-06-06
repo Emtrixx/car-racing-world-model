@@ -1,16 +1,16 @@
-import gymnasium as gym
-import torch
-import numpy as np
-import cv2
-import matplotlib.pyplot as plt
 from io import BytesIO
 
-from utils import (DEVICE, ENV_NAME, transform,
-                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode_stack, FrameStackWrapper)
-from utils_rl import PPO_ACTOR_SAVE_FILENAME  # Make sure this is correctly defined in utils_rl
+import cv2
+import matplotlib.pyplot as plt
+import numpy as np
+import torch
+from stable_baselines3 import PPO
 
-from legacy.actor_critic import Actor  # Assuming Actor class is defined here or imported
-from conv_vae import ConvVAE  # Assuming ConvVAE class is defined here or imported
+from play_game_sb3 import SB3_MODEL_PATH
+from utils import (DEVICE, ENV_NAME, transform,
+                   NUM_STACK, make_env_sb3,
+                   VQ_VAE_CHECKPOINT_FILENAME)
+from vq_conv_vae import VQVAE
 
 # --- Video Configuration ---
 NUM_EPISODES_TO_RECORD = 2  # How many episodes to record
@@ -88,38 +88,57 @@ def create_policy_viz_frame(dist_mean_tensor, dist_stddev_tensor, viz_width, viz
 
 
 def play_and_record():
-    print(f"Initializing environment: {ENV_NAME} for video recording.")
-    # Use render_mode="rgb_array" for video generation
-    env = FrameStackWrapper(gym.make(ENV_NAME, render_mode="rgb_array", max_episode_steps=1000))
-
     # --- Load Models ---
     print(f"Loading models to device: {DEVICE}")
-    vae_model = ConvVAE().to(DEVICE)
+    vq_vae_model = VQVAE().to(DEVICE)
     try:
-        vae_model.load_state_dict(torch.load(VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
-        vae_model.eval()
-        print(f"Successfully loaded VAE: {VAE_CHECKPOINT_FILENAME}")
+        vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
+        vq_vae_model.eval()
+        print(f"Successfully loaded VAE: {VQ_VAE_CHECKPOINT_FILENAME}")
     except FileNotFoundError:
-        print(f"ERROR: VAE checkpoint '{VAE_CHECKPOINT_FILENAME}' not found.")
-        env.close();
+        print(f"ERROR: VAE checkpoint '{VQ_VAE_CHECKPOINT_FILENAME}' not found.")
         return
     except Exception as e:
         print(f"ERROR loading VAE: {e}");
-        env.close();
         return
 
-    actor_model = Actor().to(DEVICE)
+    # --- Create Environment using make_env_sb3 ---
+    # make_env_sb3 handles all necessary wrappers including LatentStateWrapper and ActionTransformWrapper
+    # It needs the VAE instance.
+    # For playback, gamma for NormalizeReward wrapper doesn't strictly matter but use a sensible default.
+    print(f"Initializing environment: {ENV_NAME} for video recording.")
     try:
-        actor_model.load_state_dict(torch.load(PPO_ACTOR_SAVE_FILENAME, map_location=DEVICE))
-        actor_model.eval()
-        print(f"Successfully loaded Actor: {PPO_ACTOR_SAVE_FILENAME}")
-    except FileNotFoundError:
-        print(f"ERROR: Actor checkpoint '{PPO_ACTOR_SAVE_FILENAME}' not found.")
-        env.close();
-        return
+        env = make_env_sb3(
+            env_id=ENV_NAME,
+            vq_vae_model_instance=vq_vae_model,
+            transform_function=transform,
+            frame_stack_num=NUM_STACK,
+            device_for_vae=DEVICE,
+            gamma=0.99,  # Standard gamma, used by NormalizeReward
+            render_mode="rgb_array",
+            max_episode_steps=1000,
+        )
+        print("Environment created successfully with make_env_sb3.")
     except Exception as e:
-        print(f"ERROR loading Actor: {e}");
-        env.close();
+        print(f"Error creating environment with make_env_sb3: {e}")
+        import traceback
+        traceback.print_exc()
+        return
+
+        # --- Load Trained SB3 PPO Agent ---
+    print(f"Loading trained SB3 PPO agent from: {SB3_MODEL_PATH}")
+    if not SB3_MODEL_PATH.exists():
+        print(f"ERROR: SB3 PPO Model not found at {SB3_MODEL_PATH}")
+        if hasattr(env, 'close'): env.close()
+        return
+    try:
+        ppo_agent = PPO.load(SB3_MODEL_PATH, device=DEVICE, env=env)  # Provide env for action/obs space checks
+        print(f"Successfully loaded SB3 PPO agent. Agent device: {ppo_agent.device}")
+    except Exception as e:
+        print(f"ERROR loading SB3 PPO agent: {e}")
+        if hasattr(env, 'close'): env.close()
+        import traceback
+        traceback.print_exc()
         return
 
     # --- Video Writer Setup ---
@@ -154,44 +173,25 @@ def play_and_record():
     all_rewards = []
     for episode in range(NUM_EPISODES_TO_RECORD):
         print(f"\nStarting Episode {episode + 1}/{NUM_EPISODES_TO_RECORD}")
-        obs, info = env.reset()  # obs is already a FrameStack
+        obs_latent_state, info = env.reset()  # obs is already a FrameStack
         done = False
         truncated = False
         total_reward = 0
         step_count = 0
 
         while not done and not truncated:
-            # 1. Preprocess and Encode Observation
             with torch.no_grad():
-                z_stack_t = preprocess_and_encode_stack(obs, transform, vae_model, DEVICE)
+                obs_tensor = ppo_agent.policy.obs_to_tensor(obs_latent_state)[0]
+                distribution = ppo_agent.policy.get_distribution(obs_tensor)
 
-                # 2. Get Action Distribution from Policy (Actor)
-                dist = actor_model(z_stack_t.unsqueeze(0))  # Add batch dimension
+                # Get mean and stddev, and remove the batch dimension (which is 1)
+                dist_mean = distribution.distribution.mean.squeeze(0)  # Shape will be (3,)
+                dist_stddev = distribution.distribution.stddev.squeeze(0)  # Shape will be (3,)
 
-                # These are the parameters we will visualize
-                dist_mean = dist.mean.squeeze(0)  # Shape (3,) for [steer, gas_raw, brake_raw]
-                dist_stddev = dist.stddev.squeeze(0)  # Shape (3,)
+                action_from_agent, _states = ppo_agent.predict(obs_latent_state, deterministic=True)
 
-                # 3. Process Action for Environment Step (using mean for deterministic playback)
-                action_raw_for_env = dist.mean  # Keep batch dim for processing
-
-                action_steer = action_raw_for_env[:, :1]
-
-                # Scale/shift gas/brake: raw [-1, 1] -> env [0, 1]
-                action_processed_gb = (action_raw_for_env[:, 1:] + 1.0) / 2.0
-
-                action_processed = torch.cat([action_steer, action_processed_gb], dim=1)
-
-                # Clip to ensure bounds (important!)
-                env_low = torch.tensor(env.action_space.low, device=DEVICE, dtype=torch.float32)
-                env_high = torch.tensor(env.action_space.high, device=DEVICE, dtype=torch.float32)
-                action_clipped = torch.clamp(action_processed, env_low, env_high)
-
-                action_np = action_clipped.squeeze(0).cpu().numpy()
-
-            # 4. Step Environment
-            obs, reward, terminated, truncated, info = env.step(action_np)
-            done = terminated or truncated
+                obs_latent_state, reward, terminated, truncated, info = env.step(action_from_agent)
+                done = terminated or truncated
 
             # 5. Render Game Frame
             game_frame_rgb = env.render()
