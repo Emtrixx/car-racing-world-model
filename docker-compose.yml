@@ -3,7 +3,7 @@ services:
     build:
       context: .
     image: car-racing-rl-app
-    container_name: car-racing-rl-container
+    #    container_name: car-racing-rl-container # removed for running multiple instances
     volumes:
       - ./app:/app
 
