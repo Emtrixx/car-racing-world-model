@@ -32,13 +32,13 @@ def get_config_sb3(name="default"):
             # SB3 PPO Hyperparameters
             "policy": "MlpPolicy",
             "learning_rate": 3e-5,  # Can be a schedule
-            "n_steps": 2048,  # Corresponds to STEPS_PER_BATCH (per environment)
+            "n_steps": 1024,  # Corresponds to STEPS_PER_BATCH (per environment)
             "batch_size": 64,  # PPO's minibatch size
             "n_epochs": 10,  # Corresponds to EPOCHS_PER_UPDATE
             "gamma": 0.99,
             "gae_lambda": 0.95,
             "clip_range": 0.2,
-            "ent_coef": 0.01,  # Corresponds to INITIAL_ENTROPY_COEF (fixed for now)
+            "ent_coef": 0.02,  # Corresponds to INITIAL_ENTROPY_COEF (fixed for now)
             "vf_coef": 0.5,
             "max_grad_norm": 0.5,
             "target_kl": 0.015,  # For early stopping in PPO updates
@@ -47,7 +47,7 @@ def get_config_sb3(name="default"):
             # Policy keyword arguments for MlpPolicy
             "policy_kwargs": dict(
                 # features_extractor_class=torch.nn.Identity, # Not needed if obs is already flat
-                net_arch=dict(pi=[1024, 512], vf=[1024, 512]),
+                net_arch=dict(pi=[512, 256], vf=[512, 256]),
                 activation_fn=torch.nn.Tanh,
                 log_std_init=-1.0,  # Matches custom Actor's initial log_std bias
                 ortho_init=True,  # SB3 default, can be False if issues arise
