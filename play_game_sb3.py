@@ -10,11 +10,10 @@ from stable_baselines3 import PPO
 
 # Import from local modules
 from utils import (
-    DEVICE, ENV_NAME, transform, VAE_CHECKPOINT_FILENAME,
-    NUM_STACK, LATENT_DIM,  # Added LATENT_DIM and NUM_STACK
+    DEVICE, ENV_NAME, transform,
+    NUM_STACK,
     make_env_sb3, VQ_VAE_CHECKPOINT_FILENAME  # Use the SB3 compatible environment creation function
 )
-from conv_vae import ConvVAE
 from vq_conv_vae import VQVAE
 
 # --- Configuration ---
@@ -23,10 +22,11 @@ PLAYBACK_SPEED_DELAY = 0  # Seconds to pause between steps
 DETERMINISTIC_PLAY = True  # Use deterministic actions for playback
 
 # --- Define Model Path ---
-# SB3_MODEL_FILENAME = f"sb3_default_{ENV_NAME.lower()}_final.zip"
+# SB3_MODEL_FILENAME = f"sb3_default_{ENV_NAME.lower()}_final_2.zip"
 # SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip"  # best
 SB3_MODEL_FILENAME = f"sb3_test_carracing-v3_best/best_model.zip"  # best test
 # SB3_MODEL_FILENAME = f"sb3_default_carracing-v3/ppo_model_5000000_steps.zip" # one
+# SB3_MODEL_FILENAME = f"sb3_default_carracing-v3/ppo_model_4249320_steps.zip"  # one
 # Or use _best.zip:
 # SB3_MODEL_FILENAME = f"default_{ENV_NAME.lower()}_best/best_model.zip"
 SB3_MODEL_PATH = pathlib.Path("checkpoints") / SB3_MODEL_FILENAME

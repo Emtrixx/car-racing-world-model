@@ -137,7 +137,9 @@ class VQVAE(nn.Module):
 
         # The `encoding_indices` are the discrete tokens for your Transformer
         # Shape: [Batch, Height, Width]
-        return x_recon, vq_loss, encoding_indices
+        # `quantized` is the continuous representation used by PPO.
+        # Shape: [Batch, EmbeddingDim, Height_feat, Width_feat]
+        return x_recon, vq_loss, quantized, encoding_indices
 
 
 if __name__ == '__main__':
@@ -149,7 +151,7 @@ if __name__ == '__main__':
     dummy_input = torch.randn(16, IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
 
     # Forward pass
-    reconstruction, vq_loss, tokens = model(dummy_input)
+    reconstruction, vq_loss, quantized_output, tokens = model(dummy_input)
 
     # Calculate reconstruction loss (e.g., Mean Squared Error)
     recon_loss = F.mse_loss(reconstruction, dummy_input)
@@ -159,6 +161,7 @@ if __name__ == '__main__':
 
     print(f"Input shape:          {dummy_input.shape}")
     print(f"Reconstruction shape: {reconstruction.shape}")
+    print(f"Quantized output shape: {quantized_output.shape}")
     print(f"Tokens shape:         {tokens.shape} (These are the discrete latent codes)")
     print(f"Reconstruction Loss:  {recon_loss.item():.4f}")
     print(f"VQ Loss:              {vq_loss.item():.4f}")

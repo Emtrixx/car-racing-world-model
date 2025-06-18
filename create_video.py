@@ -9,7 +9,8 @@ from stable_baselines3 import PPO
 from play_game_sb3 import SB3_MODEL_PATH
 from utils import (ENV_NAME, transform,
                    NUM_STACK, make_env_sb3,
-                   VQ_VAE_CHECKPOINT_FILENAME, LatentStateWrapperVQ, DEVICE)
+                   VQ_VAE_CHECKPOINT_FILENAME, DEVICE)
+from utils_vae import get_vq_wrapper
 from vq_conv_vae import VQVAE
 
 # --- Video Configuration ---
@@ -86,33 +87,6 @@ def create_policy_viz_frame(dist_mean_tensor, dist_stddev_tensor, viz_width, viz
     viz_frame_bgr = cv2.imdecode(img_arr, cv2.IMREAD_COLOR)
     plt.close(fig)  # Important to close the figure to free memory
     return viz_frame_bgr
-
-
-# Helper function to get the LatentStateWrapperVQ instance
-def get_vq_wrapper(env_instance):
-    current_env = env_instance
-    while hasattr(current_env, 'env') or hasattr(current_env, 'venv'):  # Check for 'venv' for VecEnv
-        if isinstance(current_env, LatentStateWrapperVQ):
-            return current_env
-        if hasattr(current_env, 'venv'):  # If it's a VecEnv, access its environments
-            # For VecEnv, we need to get the attribute from the first environment
-            # This assumes that all sub-environments are wrapped identically.
-            # This part might need adjustment if using VecEnv and wanting a specific sub-env's wrapper.
-            # For this script, make_env_sb3 creates a single env, so 'env' chain is more likely.
-            if hasattr(current_env.venv, 'envs') and current_env.venv.envs:
-                current_env = current_env.venv.envs[0]  # Check first sub-env
-            else:  # Fallback or if it's not a typical VecEnv structure
-                current_env = current_env.env if hasattr(current_env, 'env') else current_env.venv
-
-        elif hasattr(current_env, 'env'):
-            current_env = current_env.env
-        else:
-            break  # No more 'env' or 'venv' attributes
-
-    if isinstance(current_env, LatentStateWrapperVQ):  # Check last env in chain
-        return current_env
-    print("Warning: LatentStateWrapperVQ not found in environment stack.")
-    return None
 
 
 def play_and_record():
