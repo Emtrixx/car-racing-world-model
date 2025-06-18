@@ -105,7 +105,10 @@ def linear_schedule(initial_value: float) -> Callable[[float], float]:
     return func
 
 
-def train_ppo_sb3(config_name: str):
+def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
+    """
+    Train a PPO agent using Stable Baselines3 with the specified configuration.
+    """
     print(f"Starting Stable Baselines3 PPO training with config: {config_name}...")
     config = get_config_sb3(config_name)
     start_time = time.time()
@@ -187,6 +190,17 @@ def train_ppo_sb3(config_name: str):
         device=ppo_device  # SB3 will handle moving model to this device
     )
 
+    if checkpoint_path:
+        # Load a pre-trained model if provided
+        try:
+            print(f"Loading pre-trained model from {checkpoint_path}...")
+            model.load(checkpoint_path, env=vec_env)
+            print("Pre-trained model loaded successfully.")
+        except Exception as e:
+            print(f"Error loading pre-trained model: {e}")
+            import traceback
+            traceback.print_exc()
+
     print(f"PPO Model Device: {model.device}")
     print(f"Observation Space: {model.observation_space}")
     print(f"Action Space: {model.action_space}")
@@ -225,6 +239,13 @@ if __name__ == "__main__":
         default="default",
         help="Name of the configuration to use (e.g., 'default', 'test')."
     )
+    parser.add_argument(
+        "--checkpoint",
+        type=str,
+        default=None,
+        help="Path to a pre-trained model checkpoint to load before training. If provided, "
+             "the model will be loaded and training will continue from that point."
+    )
     args = parser.parse_args()
 
-    train_ppo_sb3(args.config)
+    train_ppo_sb3(args.config, checkpoint_path=args.checkpoint)
