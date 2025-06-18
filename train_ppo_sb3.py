@@ -5,7 +5,7 @@ import time
 from typing import Callable
 
 import torch
-from stable_baselines3 import PPO
+from sb3_contrib import RecurrentPPO
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
@@ -30,27 +30,30 @@ def get_config_sb3(name="default"):
     configs = {
         "default": {
             # SB3 PPO Hyperparameters
-            "policy": "MlpPolicy",
+            "policy": "MlpLstmPolicy",  # Use MlpLstmPolicy for LSTM support
             "learning_rate": 3e-5,  # Can be a schedule
-            "n_steps": 1024,  # Corresponds to STEPS_PER_BATCH (per environment)
+            "n_steps": 256,
             "batch_size": 64,  # PPO's minibatch size
             "n_epochs": 10,  # Corresponds to EPOCHS_PER_UPDATE
             "gamma": 0.99,
             "gae_lambda": 0.95,
             "clip_range": 0.2,
-            "ent_coef": 0.02,  # Corresponds to INITIAL_ENTROPY_COEF (fixed for now)
+            "ent_coef": 0.01,
             "vf_coef": 0.5,
             "max_grad_norm": 0.5,
             "target_kl": 0.015,  # For early stopping in PPO updates
             "sde_sample_freq": -1,  # Set to -1 to disable SDE for standard PPO
 
-            # Policy keyword arguments for MlpPolicy
+            # Policy keyword arguments for MlpLstmPolicy
             "policy_kwargs": dict(
                 # features_extractor_class=torch.nn.Identity, # Not needed if obs is already flat
-                net_arch=dict(pi=[512, 256], vf=[512, 256]),
+                # net_arch is not used for MlpLstmPolicy, LSTM parameters are specified directly
+                lstm_hidden_size=256,
+                n_lstm_layers=1,
+                enable_critic_lstm=True,
                 activation_fn=torch.nn.Tanh,
-                log_std_init=-1.0,  # Matches custom Actor's initial log_std bias
-                ortho_init=True,  # SB3 default, can be False if issues arise
+                log_std_init=-1.0,
+                ortho_init=True,
             ),
 
             # Training parameters
@@ -69,19 +72,23 @@ def get_config_sb3(name="default"):
             "max_episode_steps_config": 1000,
         }
     }
-    configs["test"] = configs["default"].copy()
+    configs["test"] = configs["default"].copy()  # Start by copying default LSTM config
     configs["test"].update({
         "total_timesteps": 6_000,
-        "n_steps": 128,
+        "n_steps": 128,  # Adjusted for MlpLstmPolicy test
         "num_envs": 2,
         "save_freq": 5_000,
-        "eval_freq": 2048,
-        "learning_rate": 1e-4,
+        "eval_freq": 2048,  # Should be multiple of n_steps * num_envs for cleaner evals
+        "learning_rate": 1e-4,  # Test specific learning rate
+        "ent_coef": 0.01,  # Keep consistent with default LSTM or test specific
         "policy_kwargs": dict(
-            net_arch=dict(pi=[512, 256], vf=[512, 256]),  # Test specific architecture
-            activation_fn=torch.nn.Tanh,  # Inherited or explicitly set
-            log_std_init=-1.0,  # Inherited or explicitly set
-            ortho_init=True,  # Inherited or explicitly set
+            # net_arch is not used for MlpLstmPolicy
+            lstm_hidden_size=64,  # Smaller LSTM for test
+            n_lstm_layers=1,
+            enable_critic_lstm=True,  # Consistent with default
+            activation_fn=torch.nn.Tanh,
+            log_std_init=-1.0,
+            ortho_init=True,
         ),
     })
     return configs[name]
@@ -143,7 +150,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
     checkpoint_callback = CheckpointCallback(
         save_freq=max(config["save_freq"] // config["num_envs"], 1),  # Convert total steps to per-env steps
         save_path=str(SB3_SAVE_DIR / f"sb3_{config_name}_{ENV_NAME.lower()}"),
-        name_prefix="ppo_model"
+        name_prefix="rnn_ppo_model"
     )
 
     # Eval callback (optional, but good practice)
@@ -169,7 +176,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
     ppo_device = "cpu"
 
     # Create PPO model
-    model = PPO(
+    model = RecurrentPPO(
         policy=config["policy"],
         env=vec_env,
         learning_rate=lr_schedule,
