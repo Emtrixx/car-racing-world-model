@@ -11,12 +11,11 @@ import time
 import matplotlib.pyplot as plt
 import multiprocessing as mp
 
-from utils_vae import SB3_MODEL_PATH
-from vq_conv_vae import VQVAE
+from utils_vae import SB3_MODEL_PATH, get_vq_wrapper
+from vq_conv_vae import VQVAE, NUM_EMBEDDINGS, EMBEDDING_DIM
 from world_model import WorldModelGRU
 from utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
-    LATENT_DIM,  # Default: 32
     ACTION_DIM,  # Default: 3
     NUM_STACK,  # Default: 4
     # transform is used by worker
@@ -49,7 +48,6 @@ def get_config(name="default"):
     configs = {
         "default": {
             "env_name": ENV_NAME,
-            "latent_dim": LATENT_DIM,
             "action_dim": ACTION_DIM,
             "num_stack": NUM_STACK,
             "vq_vae_checkpoint_filename": VQ_VAE_CHECKPOINT_FILENAME,
@@ -67,35 +65,24 @@ def get_config(name="default"):
             "collect_episodes": COLLECT_EPISODES,
             "max_episode_steps_collect": MAX_EPISODE_STEPS_COLLECT,
             "wm_checkpoint_filename_gru": WM_CHECKPOINT_FILENAME_GRU,
-        },
-        "test": {
-            "env_name": ENV_NAME,
-            "latent_dim": LATENT_DIM,
-            "action_dim": ACTION_DIM,
-            "num_stack": NUM_STACK,
-            "vq_vae_checkpoint_filename": VQ_VAE_CHECKPOINT_FILENAME,
-            "ppo_actor_save_filename": PPO_ACTOR_SAVE_FILENAME,
-            "device_str": DEVICE_STR,
-            "gru_hidden_dim": 64,
-            "gru_num_layers": 1,
-            "gru_input_embed_dim": GRU_INPUT_EMBED_DIM,
-            "wm_epochs": WM_EPOCHS,
-            "wm_batch_size": WM_BATCH_SIZE,
-            "sequence_length": SEQUENCE_LENGTH,
-            "wm_learning_rate": WM_LEARNING_RATE,
-            "num_collection_workers": 2,
-            "num_loader_workers": 2,
-            "collect_episodes": 2,
-            "max_episode_steps_collect": MAX_EPISODE_STEPS_COLLECT,
-            "wm_checkpoint_filename_gru": WM_CHECKPOINT_FILENAME_GRU,
         }
     }
+    # test configuration for quick runs
+    configs["test"] = configs["default"].copy()
+    configs["test"].update({
+        "collect_episodes": 10,
+        "wm_epochs": 1,
+        "wm_batch_size": 4,
+        "sequence_length": 10,
+        "num_collection_workers": 2,
+        "num_loader_workers": 2,
+        "max_episode_steps_collect": 100,
+    })
     return configs[name]
 
 
 # --- Worker function for parallel data collection ---
 def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_name_str,
-                             vq_vae_checkpoint_path_str, policy_checkpoint_path_str,
                              sequence_length_int, device_str_for_worker, num_stack_int,
                              max_episode_steps_collect_int):  # Added max_episode_steps
     try:
@@ -112,19 +99,15 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
         print(
             f"[Worker {worker_id}, PID {os.getpid()}] Starting, assigned {num_episodes_to_collect_by_worker} episodes. Device: {device_str_for_worker}")
 
-        worker_env = FrameStackWrapper(
-            gym.make(env_name_str, render_mode="rgb_array", max_episode_steps=max_episode_steps_collect_int),
-            num_stack=num_stack_int)
-
         # Load VQ-VAE Model for this worker
         vq_vae_model_worker = VQVAE().to(device_str_for_worker)
-        vq_vae_model_worker.load_state_dict(torch.load(vq_vae_checkpoint_path_str, map_location=device_str_for_worker))
+        vq_vae_model_worker.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=device_str_for_worker))
         vq_vae_model_worker.eval()
         # print(f"[Worker {worker_id}] VAE loaded.")
 
         # Initialize Environment for this worker
         try:
-            env = make_env_sb3(
+            worker_env = make_env_sb3(
                 env_id=env_name_str,
                 vq_vae_model_instance=vq_vae_model_worker,
                 transform_function=transform,
@@ -153,15 +136,18 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
             print(f"Successfully loaded SB3 PPO agent. Agent device: {ppo_agent.device}")
         except Exception as e:
             print(f"ERROR loading SB3 PPO agent: {e}")
-            if hasattr(env, 'close'): env.close()
+            if hasattr(worker_env, 'close'): worker_env.close()
             import traceback
             traceback.print_exc()
             return
         # print(f"[Worker {worker_id}] Policy loaded.")
 
+        # Get the VQ wrapper from the environment to access single latent state
+        vq_wrapper = get_vq_wrapper(worker_env)
+
         worker_collected_sequences = []
         for episode_idx in range(num_episodes_to_collect_by_worker):
-            obs_stack_raw, _ = worker_env.reset()
+            obs_stack_latent, _ = worker_env.reset()
 
             ep_Z_inputs_cpu = []
             ep_a_actions_cpu = []
@@ -173,34 +159,24 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
             current_steps_in_episode = 0
 
             while not done and not truncated:
-                # 1. Current observation stack for PPO policy
-                Z_t_policy_input_gpu = preprocess_and_encode_stack(obs_stack_raw, transform, vae_model_worker,
-                                                                   device_str_for_worker)
-
-                # Prepare single latent vector for World Model input
-                # obs_stack_raw is (NUM_STACK, H, W, C), newest frame is at index -1
-                newest_raw_frame = obs_stack_raw[-1]
-                Z_t_wm_input_gpu = preprocess_and_encode(newest_raw_frame, transform, vae_model_worker,
-                                                         device_str_for_worker)  # Shape: (LATENT_DIM)
-                ep_Z_inputs_cpu.append(Z_t_wm_input_gpu.cpu())  # Appending single latent for WM
-
+                ep_Z_inputs_cpu.append(torch.tensor(obs_stack_latent, dtype=torch.float32).cpu())
                 # 2. Get action based on PPO policy's view of the state (stacked latents)
-                action_np = policy_worker.get_action(Z_t_policy_input_gpu.cpu().numpy())
-                action_tensor = torch.tensor(action_np, dtype=torch.float32)
+                action_from_agent, _states = ppo_agent.predict(obs_stack_latent)
+                action_tensor = torch.tensor(action_from_agent, dtype=torch.float32)
                 ep_a_actions_cpu.append(action_tensor.cpu())
 
-                next_obs_stack_raw, reward, terminated, truncated, info = worker_env.step(action_np)
+                next_obs_latent, reward, terminated, truncated, info = worker_env.step(action_from_agent)
                 current_done_flag = terminated or truncated
 
                 ep_r_rewards_cpu.append(torch.tensor(reward, dtype=torch.float32).cpu())
                 ep_d_dones_cpu.append(torch.tensor(current_done_flag, dtype=torch.float32).cpu())
 
-                single_newest_raw_frame = next_obs_stack_raw[-1]
-                z_prime_tp1_gpu = preprocess_and_encode(single_newest_raw_frame, transform, vae_model_worker,
-                                                        device_str_for_worker)
+                # 3. get only one latent obs from concatenated stack by splitting into NUM_STACK parts
+                with torch.no_grad():
+                    z_prime_tp1_gpu = vq_wrapper.last_quantized_latent_for_render
                 ep_z_single_targets_cpu.append(z_prime_tp1_gpu.cpu())
 
-                obs_stack_raw = next_obs_stack_raw
+                obs_stack_latent = next_obs_latent
                 done = current_done_flag
                 current_steps_in_episode += 1
 
@@ -259,8 +235,8 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
 # --- Data Collection for GRU (Sequence Data) ---
 def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_str_main,
                               num_collection_workers_int,
-                              env_name_str_for_worker, vq_vae_checkpoint_path_str_for_worker,
-                              policy_checkpoint_path_str_for_worker, num_stack_int_for_worker,
+                              env_name_str_for_worker,
+                              num_stack_int_for_worker,
                               max_episode_steps_collect_int
                               ):
     print(
@@ -286,8 +262,6 @@ def collect_sequences_for_gru(num_episodes_total, sequence_length_int, device_st
             worker_id,
             episodes_per_worker[worker_id],
             env_name_str_for_worker,
-            vq_vae_checkpoint_path_str_for_worker,
-            policy_checkpoint_path_str_for_worker,
             sequence_length_int,
             device_str_main,
             num_stack_int_for_worker,
@@ -410,18 +384,14 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # Load the chosen configuration
-    config = get_config(args.config_name)
-    print(f"Loaded configuration: '{args.config_name}'")
+    config = get_config(args.config)
+    print(f"Loaded configuration: '{args.config}'")
 
     # Use a single `config` object for all parameters
     env_name = config["env_name"]
-    latent_dim = config["latent_dim"]
     # This replaces all the individual constant imports/definitions at the top
     action_dim = config["action_dim"]
     num_stack = config["num_stack"]
-    vq_vae_checkpoint_filename = config["vq_vae_checkpoint_filename"]
-    ppo_actor_save_filename = config["ppo_actor_save_filename"]
-    wm_checkpoint_filename_gru = config["wm_checkpoint_filename_gru"]  # Use WM checkpoint path from config
     device_str = config["device_str"]
     device = torch.device(device_str)  # Re-initialize DEVICE based on config string
 
@@ -449,25 +419,18 @@ if __name__ == "__main__":
 
     print(f"Starting GRU World Model training on device: {device}")
 
-    # Initialize Environment (Main process - primarily for validation, workers create their own)
-    main_env_for_setup = FrameStackWrapper(
-        gym.make(env_name, render_mode="rgb_array", max_episode_steps=max_episode_steps_collect), num_stack=num_stack)
-    print(f"Main environment '{env_name}' with stack {num_stack} initialized for setup.")
-    main_env_for_setup.close()
-    print("Closed main_env_for_setup.")
-
     # VAE and Policy loading in main process are skipped if using parallel collection,
     # as workers handle their own loading. Add checks for checkpoint files.
-    if not os.path.exists(vq_vae_checkpoint_filename):
+    if not os.path.exists(VQ_VAE_CHECKPOINT_FILENAME):
         print(
-            f"CRITICAL ERROR: VAE Checkpoint {vq_vae_checkpoint_filename} not found. Exiting before starting workers.")
+            f"CRITICAL ERROR: VAE Checkpoint {VQ_VAE_CHECKPOINT_FILENAME} not found. Exiting before starting workers.")
         exit()
-    if not os.path.exists(ppo_actor_save_filename):
+    if not os.path.exists(SB3_MODEL_PATH):
         print(
-            f"CRITICAL ERROR: Policy Checkpoint {ppo_actor_save_filename} not found. Exiting before starting workers.")
+            f"CRITICAL ERROR: Policy Checkpoint {SB3_MODEL_PATH} not found. Exiting before starting workers.")
         exit()
-    print(f"Found VAE checkpoint: {vq_vae_checkpoint_filename}")
-    print(f"Found Policy checkpoint: {ppo_actor_save_filename}")
+    print(f"Found VAE checkpoint: {VQ_VAE_CHECKPOINT_FILENAME}")
+    print(f"Found Policy checkpoint: {SB3_MODEL_PATH}")
 
     # Collect Sequence Data (Parallelized)
     print(f"Number of collection workers configured: {num_collection_workers}")
@@ -479,8 +442,6 @@ if __name__ == "__main__":
         device_str_main=device_str,
         num_collection_workers_int=num_collection_workers,
         env_name_str_for_worker=env_name,
-        vq_vae_checkpoint_path_str_for_worker=vq_vae_checkpoint_filename,
-        policy_checkpoint_path_str_for_worker=ppo_actor_save_filename,
         num_stack_int_for_worker=num_stack,
         max_episode_steps_collect_int=max_episode_steps_collect  # Pass this from config
     )
@@ -497,7 +458,8 @@ if __name__ == "__main__":
 
     # 6. Initialize GRU World Model, Optimizer, Criterion
     world_model_gru = WorldModelGRU(
-        latent_dim=latent_dim,
+        codebook_size=NUM_EMBEDDINGS,
+        token_embedding_dim=EMBEDDING_DIM,
         action_dim=action_dim,
         gru_hidden_dim=gru_hidden_dim,
         gru_num_layers=gru_num_layers,
@@ -548,7 +510,7 @@ if __name__ == "__main__":
     try:
         model_state_to_save = world_model_gru.module.state_dict() if isinstance(world_model_gru,
                                                                                 nn.DataParallel) else world_model_gru.state_dict()
-        torch.save(model_state_to_save, wm_checkpoint_filename_gru)
-        print(f"GRU World Model saved to {wm_checkpoint_filename_gru}")
+        torch.save(model_state_to_save, WM_CHECKPOINT_FILENAME_GRU)
+        print(f"GRU World Model saved to {WM_CHECKPOINT_FILENAME_GRU}")
     except Exception as e:
         print(f"Error saving GRU World Model: {e}")
