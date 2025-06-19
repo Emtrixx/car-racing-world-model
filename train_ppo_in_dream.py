@@ -12,7 +12,7 @@ import matplotlib.pyplot as plt
 from torch import nn, random
 
 from legacy.actor_critic import Actor, Critic
-from conv_vae import ConvVAE
+from legacy.conv_vae import ConvVAE
 from world_model import WorldModelGRU
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,

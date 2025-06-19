@@ -7,7 +7,7 @@ import time
 
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, IMG_SIZE, CHANNELS, VAE_CHECKPOINT_FILENAME, transform)
-from conv_vae import ConvVAE
+from legacy.conv_vae import ConvVAE
 from utils_vae import collect_frames, FrameDataset, visualize_reconstruction
 
 # --- Configuration ---
@@ -61,8 +61,6 @@ def train_vae_epoch(model, dataloader, optimizer, epoch, device):
     avg_kld = kld_loss_total / len(dataloader.dataset)
     print(f'====> Epoch: {epoch} Average loss: {avg_loss:.4f} (Avg BCE: {avg_bce:.4f}, Avg KLD: {avg_kld:.4f})')
     return avg_loss
-
-
 
 
 # --- Main Execution ---

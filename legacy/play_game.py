@@ -12,7 +12,7 @@ from utils import (DEVICE, ENV_NAME, transform,
 from utils_rl import PPO_ACTOR_SAVE_FILENAME
 
 from actor_critic import Actor
-from conv_vae import ConvVAE
+from legacy.conv_vae import ConvVAE
 
 # --- Configuration ---
 NUM_EPISODES = 5  # How many episodes to play

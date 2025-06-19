@@ -8,11 +8,12 @@ import torch
 import torch.optim as optim
 
 from actor_critic import Actor, Critic
-from conv_vae import ConvVAE
+from legacy.conv_vae import ConvVAE
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, NUM_STACK,
-                   make_env, LATENT_DIM)
+                   LATENT_DIM)
+from legacy.utils_legacy import make_env
 from utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
     PPO_CRITIC_SAVE_FILENAME, PPOHyperparameters, RolloutBuffer
 
@@ -47,7 +48,6 @@ def get_config(name="default"):
     configs["test"]["INITIAL_ENTROPY_COEF"] = 0.01
     configs["test"]["FINAL_ENTROPY_COEF"] = 0.001
     configs["test"]["ENTROPY_ANNEAL_FRACTION"] = 0.75
-
 
     return configs[name]
 
@@ -126,7 +126,7 @@ def train_ppo(config):  # Added config argument
         # --- Entropy Coefficient Annealing ---
         if config["ENTROPY_ANNEAL_FRACTION"] > 0:
             entropy_anneal_progress = min(1.0, progress_fraction / config["ENTROPY_ANNEAL_FRACTION"])
-        else: # Avoid division by zero, default to initial if fraction is 0 or less
+        else:  # Avoid division by zero, default to initial if fraction is 0 or less
             entropy_anneal_progress = 0.0
         current_entropy_coef = config["INITIAL_ENTROPY_COEF"] * (1.0 - entropy_anneal_progress) + \
                                config["FINAL_ENTROPY_COEF"] * entropy_anneal_progress
@@ -205,7 +205,8 @@ def train_ppo(config):  # Added config argument
             current_entropy_coef=current_entropy_coef  # Pass annealed entropy coef
         )
 
-        print(f"Update {update}, Optimizing for {config['EPOCHS_PER_UPDATE']} epochs. Mean KL: {mean_kl:.4f}, Current LRs (A/C): {decayed_actor_lr:.2e}/{decayed_critic_lr:.2e}, Entropy Coef: {current_entropy_coef:.2e}")
+        print(
+            f"Update {update}, Optimizing for {config['EPOCHS_PER_UPDATE']} epochs. Mean KL: {mean_kl:.4f}, Current LRs (A/C): {decayed_actor_lr:.2e}/{decayed_critic_lr:.2e}, Entropy Coef: {current_entropy_coef:.2e}")
         avg_reward = np.mean(all_episode_rewards[-10:]) if all_episode_rewards else 0.0
         print(f"Total Steps: {global_step}, Avg Reward (Last 10 ep): {avg_reward:.2f}")
 
