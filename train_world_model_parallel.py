@@ -20,7 +20,6 @@ from utils import (
     # transform is used by worker
     DEVICE, WM_CHECKPOINT_FILENAME_GRU, DEVICE_STR, VQ_VAE_CHECKPOINT_FILENAME, make_env_sb3
 )
-from utils_rl import PPO_ACTOR_SAVE_FILENAME
 
 # --- Configuration ---
 # GRU Model Hyperparameters
@@ -49,8 +48,6 @@ def get_config(name="default"):
             "env_name": ENV_NAME,
             "action_dim": ACTION_DIM,
             "num_stack": NUM_STACK,
-            "vq_vae_checkpoint_filename": VQ_VAE_CHECKPOINT_FILENAME,
-            "ppo_actor_save_filename": PPO_ACTOR_SAVE_FILENAME,
             "device_str": DEVICE_STR,
             "gru_hidden_dim": GRU_HIDDEN_DIM,
             "gru_num_layers": GRU_NUM_LAYERS,
@@ -92,7 +89,7 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
 
         from legacy.conv_vae import ConvVAE
         from legacy.actor_critic import Actor
-        from utils_rl import PPOPolicyWrapper
+        from legacy.utils_rl import PPOPolicyWrapper
         from utils import transform, preprocess_and_encode, preprocess_and_encode_stack, FrameStackWrapper
 
         print(

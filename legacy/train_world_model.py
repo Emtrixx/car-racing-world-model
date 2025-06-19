@@ -15,7 +15,7 @@ from utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK, prep
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME,  # WM_CHECKPOINT_FILENAME (will change suffix)
                    preprocess_and_encode_stack)
-from utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
+from legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4

@@ -17,7 +17,7 @@ from world_model import WorldModelGRU
 # Import from local modules
 from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
-from utils_rl import RandomPolicy, PPOHyperparameters, PPO_DREAM_ACTOR_SAVE_FILENAME, \
+from legacy.utils_rl import RandomPolicy, PPOHyperparameters, PPO_DREAM_ACTOR_SAVE_FILENAME, \
     PPO_DREAM_CRITIC_SAVE_FILENAME, RolloutBuffer
 
 # Import GRU WM parameters and checkpoint path from its training script

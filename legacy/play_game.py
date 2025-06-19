@@ -9,7 +9,7 @@ from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode_stack, FrameStackWrapper)
 # Assuming PPO filenames were also added to utils, or define them here
 # PPO_ACTOR_SAVE_FILENAME = f"{ENV_NAME}_ppo_actor_ld{LATENT_DIM}.pth" # Define if not in utils
-from utils_rl import PPO_ACTOR_SAVE_FILENAME
+from legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME
 
 from actor_critic import Actor
 from legacy.conv_vae import ConvVAE

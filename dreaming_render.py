@@ -16,7 +16,7 @@ from world_model import WorldModelGRU
 from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
                    VAE_CHECKPOINT_FILENAME, preprocess_and_encode_stack, FrameStackWrapper, NUM_STACK,
                    preprocess_and_encode)
-from utils_rl import PPO_ACTOR_SAVE_FILENAME, RandomPolicy, PPOPolicyWrapper
+from legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME, RandomPolicy, PPOPolicyWrapper
 
 # Assuming GRU hyperparams and checkpoint name are correctly sourced.
 # If they are defined in train_world_model.py at global scope:
