@@ -8,7 +8,7 @@ import time
 import matplotlib.pyplot as plt
 
 from legacy.actor_critic import Actor
-from conv_vae import ConvVAE
+from legacy.conv_vae import ConvVAE
 from world_model import WorldModelGRU
 from utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK, preprocess_and_encode
 # Import from local modules
