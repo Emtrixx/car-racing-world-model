@@ -1,7 +1,6 @@
 import argparse
 import os
 
-import gymnasium as gym
 import torch
 import torch.optim as optim
 import torch.nn as nn
@@ -19,7 +18,7 @@ from utils import (
     ACTION_DIM,  # Default: 3
     NUM_STACK,  # Default: 4
     # transform is used by worker
-    FrameStackWrapper, DEVICE, WM_CHECKPOINT_FILENAME_GRU, DEVICE_STR, VQ_VAE_CHECKPOINT_FILENAME, make_env_sb3
+    DEVICE, WM_CHECKPOINT_FILENAME_GRU, DEVICE_STR, VQ_VAE_CHECKPOINT_FILENAME, make_env_sb3
 )
 from utils_rl import PPO_ACTOR_SAVE_FILENAME
 
@@ -91,7 +90,7 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
         import torch
         import gymnasium as gym
 
-        from conv_vae import ConvVAE
+        from legacy.conv_vae import ConvVAE
         from legacy.actor_critic import Actor
         from utils_rl import PPOPolicyWrapper
         from utils import transform, preprocess_and_encode, preprocess_and_encode_stack, FrameStackWrapper
