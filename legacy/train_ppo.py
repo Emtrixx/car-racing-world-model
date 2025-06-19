@@ -14,7 +14,7 @@ from utils import (DEVICE, ENV_NAME, transform,
                    VAE_CHECKPOINT_FILENAME, NUM_STACK,
                    LATENT_DIM)
 from legacy.utils_legacy import make_env
-from utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
+from legacy.utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
     PPO_CRITIC_SAVE_FILENAME, PPOHyperparameters, RolloutBuffer
 
 print(f"Using device: {DEVICE}")
