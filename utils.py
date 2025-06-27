@@ -343,7 +343,6 @@ class FrameSkip(gym.Wrapper):
 def make_env_sb3(
         env_id: str,
         vq_vae_model_instance: torch.nn.Module,  # Pass the loaded VAE model
-        transform_function,
         frame_stack_num: int,
         device_for_vae: torch.device,
         gamma: float,
