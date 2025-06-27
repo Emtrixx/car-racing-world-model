@@ -1,6 +1,7 @@
 # train_ppo_sb3.py
 import argparse
 import pathlib
+import random
 import time
 from typing import Callable
 
@@ -60,7 +61,7 @@ def get_config_sb3(name="default"):
             # Let's use a step-based frequency for SB3 CheckpointCallback
             "eval_freq": 20480,  # Timesteps per eval environment
             "n_eval_episodes": 5,
-            "seed": 42,
+            "seed": random.randint(0, 2 ** 31 - 1),  # generate a random seed for reproducibility
 
             # Environment parameters (passed to make_env_sb3 via _init_env_fn_sb3)
             "env_name_config": ENV_NAME,
@@ -113,6 +114,9 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
     config = get_config_sb3(config_name)
     start_time = time.time()
 
+    # generate seed and print it
+    seed = config["seed"]
+    print(f"Using seed: {seed}")
     set_random_seed(config["seed"])
 
     # Prepare parameters for environment creation

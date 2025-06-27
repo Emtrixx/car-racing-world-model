@@ -1,4 +1,5 @@
 # utils.py
+import cv2
 import torch
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
@@ -36,6 +37,35 @@ transform = transforms.Compose([
     transforms.Resize((IMG_SIZE, IMG_SIZE)),
     transforms.ToTensor(),  # Convert PIL Image to tensor (C, H, W) and scales to [0, 1]
 ])
+
+
+# --- Preprocessing Function --- new
+def preprocess_observation(obs, resize_dim=(64, 64)):
+    """
+    Applies preprocessing steps to a raw observation from the CarRacing-v3 environment.
+
+    Args:
+        obs (np.ndarray): A raw observation from the environment (96x96x3 RGB).
+        resize_dim (tuple): The target dimensions (height, width) for resizing.
+
+    Returns:
+        np.ndarray: The preprocessed observation (height, width, 1) with values in [0, 1].
+    """
+    # 1. Crop the bottom HUD
+    # The HUD is in the bottom 12 pixels of the 96x96 image.
+    cropped_obs = obs[:-12, :, :]
+
+    # 2. Grayscaling
+    gray_obs = cv2.cvtColor(cropped_obs, cv2.COLOR_RGB2GRAY)
+
+    # 3. Resizing
+    resized_obs = cv2.resize(gray_obs, resize_dim, interpolation=cv2.INTER_AREA)
+
+    # 4. Normalization
+    normalized_obs = resized_obs / 255.0
+
+    # Add channel dimension for consistency (e.g., for TensorFlow or PyTorch)
+    return normalized_obs.reshape(resize_dim[0], resize_dim[1], 1)
 
 
 # --- Helper Function to Preprocess and Encode Observation ---
@@ -170,10 +200,9 @@ class ActionClipWrapper(gym.ActionWrapper):
 
 
 class LatentStateWrapperVQ(gym.ObservationWrapper):
-    def __init__(self, env, vq_vae_model: torch.nn.Module, transform_fn, num_stack: int, device: torch.device):
+    def __init__(self, env, vq_vae_model: torch.nn.Module, num_stack: int, device: torch.device):
         super().__init__(env)
         self.vq_vae_model = vq_vae_model.to(device).eval()
-        self.transform_fn = transform_fn
         self.num_stack = num_stack
         self.device = device
 
@@ -208,8 +237,10 @@ class LatentStateWrapperVQ(gym.ObservationWrapper):
         for i in range(obs_stack_raw_numpy.shape[0]):  # Iterate through N frames in the stack
             raw_frame = obs_stack_raw_numpy[i]  # Single raw frame (H, W, C)
 
-            # Apply torchvision transform
-            processed_frame_tensor = self.transform_fn(raw_frame)
+            # Apply preprocessing
+            processed_frame = preprocess_observation(raw_frame)
+            processed_frame_tensor = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0,
+                                                                                                1)  # Convert to CxHxW format
 
             # Add batch dim, move to device for VQ-VAE
             processed_frame_tensor = processed_frame_tensor.unsqueeze(0).to(self.device)
@@ -275,6 +306,40 @@ class ActionTransformWrapper(gym.ActionWrapper):
         return clipped_transformed_action
 
 
+class FrameSkip(gym.Wrapper):
+    """
+    Return only every `skip`-th frame and repeat the same action `skip` times.
+    The reward is the sum of rewards over the skipped frames.
+    """
+
+    def __init__(self, env, skip=4):
+        super().__init__(env)
+        if skip <= 0:
+            raise ValueError(f"Frame skip must be a positive integer, got {skip}")
+        self._skip = skip
+
+    def step(self, action):
+        """
+        Repeat action, sum reward, and return the last observation.
+        """
+        total_reward = 0.0
+
+        for _ in range(self._skip):
+            # The core of the frame skip
+            obs, reward, terminated, truncated, info = self.env.step(action)
+            total_reward += reward
+
+            # If the episode ends, stop skipping and return the last state
+            if terminated or truncated:
+                break
+
+        return obs, total_reward, terminated, truncated, info
+
+    def reset(self, **kwargs):
+        # The reset is not affected by frame skipping
+        return self.env.reset(**kwargs)
+
+
 def make_env_sb3(
         env_id: str,
         vq_vae_model_instance: torch.nn.Module,  # Pass the loaded VAE model
@@ -310,28 +375,31 @@ def make_env_sb3(
     # obs, info = env.reset(seed=seed) # Initial reset with seed
 
     # --- Action Wrappers ---
-    # 1. ActionTransformWrapper:
+    # ActionTransformWrapper:
     #    - Agent outputs actions in [-1, 1]^3.
     #    - This wrapper transforms them to CarRacing's native ranges ([~,ガス,ブレーキ]).
     #    - It defines self.action_space = Box([-1, 1]^3, ...) which SB3 will see.
     env = ActionTransformWrapper(env)
 
-    # 2. ActionClipWrapper:
+    # ActionClipWrapper:
     #    - Clips actions received from the agent (which are in [-1, 1]^3 as per ActionTransformWrapper's space)
     #    - This ensures actions are strictly within the [-1, 1]^3 bounds before transformation by ActionTransformWrapper.
     #    - The ActionTransformWrapper then does its own clipping to the *underlying* environment's true bounds.
     env = ActionClipWrapper(env)  # This will clip to the action_space defined by ActionTransformWrapper
 
     # --- Observation Wrappers ---
-    # 3. FrameStackWrapper: Stacks raw frames.
+    # FrameSkip: Skips frames to reduce data size and speed up training and inference.
+    env = FrameSkip(env, skip=4)  # Skip every 4th frame
+
+    # FrameStackWrapper: Stacks raw frames.
     env = FrameStackWrapper(env, frame_stack_num)
 
-    # 4. LatentStateWrapper: Encodes stacked frames into quantized latent vectors using VQ-VAE.
-    env = LatentStateWrapperVQ(env, vq_vae_model_instance, transform_function,
+    # LatentStateWrapper: Encodes stacked frames into quantized latent vectors using VQ-VAE.
+    env = LatentStateWrapperVQ(env, vq_vae_model_instance,
                                frame_stack_num, device_for_vae)
 
     # --- Reward Wrapper ---
-    # 5. NormalizeReward: Normalizes rewards.
+    # NormalizeReward: Normalizes rewards.
     env = gym.wrappers.NormalizeReward(env, gamma=gamma)
 
     # For SB3, RecordEpisodeStatistics is often useful when using VecEnvs for logging.
