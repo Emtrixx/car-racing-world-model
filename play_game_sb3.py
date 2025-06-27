@@ -57,7 +57,6 @@ def play_sb3():
         env = make_env_sb3(
             env_id=ENV_NAME,
             vq_vae_model_instance=vq_vae_model,
-            transform_function=transform,
             frame_stack_num=NUM_STACK,
             device_for_vae=DEVICE,
             gamma=0.99,  # Standard gamma, used by NormalizeReward
