@@ -1,15 +1,14 @@
 import pathlib
 
-import cv2
+import gymnasium as gym
 import numpy as np
 import torch
 from huggingface_sb3 import load_from_hub
 from matplotlib import pyplot as plt
 from stable_baselines3 import PPO
 from torch.utils.data import Dataset
-import gymnasium as gym
 
-from utils import LatentStateWrapperVQ
+from utils import LatentStateWrapperVQ, preprocess_observation
 
 # SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip"  # best
 SB3_MODEL_FILENAME = f"sb3_default_carracing-v3/ppo_model_4249320_steps.zip"  # one
@@ -26,35 +25,6 @@ class FrameDataset(Dataset):
 
     def __getitem__(self, idx):
         return self.data[idx]
-
-
-# --- Preprocessing Function ---
-def preprocess_observation(obs, resize_dim=(64, 64)):
-    """
-    Applies preprocessing steps to a raw observation from the CarRacing-v3 environment.
-
-    Args:
-        obs (np.ndarray): A raw observation from the environment (96x96x3 RGB).
-        resize_dim (tuple): The target dimensions (height, width) for resizing.
-
-    Returns:
-        np.ndarray: The preprocessed observation (height, width, 1) with values in [0, 1].
-    """
-    # 1. Crop the bottom HUD
-    # The HUD is in the bottom 12 pixels of the 96x96 image.
-    cropped_obs = obs[:-12, :, :]
-
-    # 2. Grayscaling
-    gray_obs = cv2.cvtColor(cropped_obs, cv2.COLOR_RGB2GRAY)
-
-    # 3. Resizing
-    resized_obs = cv2.resize(gray_obs, resize_dim, interpolation=cv2.INTER_AREA)
-
-    # 4. Normalization
-    normalized_obs = resized_obs / 255.0
-
-    # Add channel dimension for consistency (e.g., for TensorFlow or PyTorch)
-    return normalized_obs.reshape(resize_dim[0], resize_dim[1], 1)
 
 
 # --- Data Collection --- (uses pre-trained SB3 PPO agent)
@@ -94,7 +64,7 @@ def collect_frames(num_frames):
             frame = env.render()  # could also use observation here since env is raw
 
             if frame is not None:
-                processed_frame = preprocess_observation(observation)  # Use transform from utils
+                processed_frame = preprocess_observation(observation)
                 processed_frame = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0,
                                                                                              1)  # Convert to CxHxW format
                 frames.append(processed_frame)
