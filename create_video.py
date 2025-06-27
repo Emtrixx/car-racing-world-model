@@ -7,8 +7,7 @@ import torch
 from stable_baselines3 import PPO
 
 from play_game_sb3 import SB3_MODEL_PATH
-from utils import (ENV_NAME, transform,
-                   NUM_STACK, make_env_sb3,
+from utils import (ENV_NAME, NUM_STACK, make_env_sb3,
                    VQ_VAE_CHECKPOINT_FILENAME, DEVICE)
 from utils_vae import get_vq_wrapper
 from vq_conv_vae import VQVAE
@@ -90,7 +89,7 @@ def create_policy_viz_frame(dist_mean_tensor, dist_stddev_tensor, viz_width, viz
 
 
 def play_and_record():
-    # --- Load Models ---
+    # --- Load VQ-VAE model ---
     print(f"Loading models to device: {DEVICE}")
     vq_vae_model = VQVAE().to(DEVICE)
     try:
@@ -113,7 +112,6 @@ def play_and_record():
         env = make_env_sb3(
             env_id=ENV_NAME,
             vq_vae_model_instance=vq_vae_model,
-            transform_function=transform,
             frame_stack_num=NUM_STACK,
             device_for_vae=DEVICE,
             gamma=0.99,  # Standard gamma, used by NormalizeReward
@@ -127,7 +125,7 @@ def play_and_record():
         traceback.print_exc()
         return
 
-        # --- Load Trained SB3 PPO Agent ---
+    # --- Load Trained SB3 PPO Agent ---
     print(f"Loading trained SB3 PPO agent from: {SB3_MODEL_PATH}")
     if not SB3_MODEL_PATH.exists():
         print(f"ERROR: SB3 PPO Model not found at {SB3_MODEL_PATH}")
