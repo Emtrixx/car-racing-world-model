@@ -75,7 +75,6 @@ class VectorQuantizer(nn.Module):
 class Encoder(nn.Module):
     """
     The CNN Encoder.
-    This is similar to your original encoder but stops at the feature map.
     """
 
     def __init__(self, in_channels, out_channels):

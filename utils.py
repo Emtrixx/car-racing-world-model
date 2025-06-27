@@ -14,7 +14,8 @@ from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
 ENV_NAME = "CarRacing-v3"
 WM_HIDDEN_DIM = 256  # Hidden dimension for the World Model MLP
 IMG_SIZE = 64  # Resize frames
-CHANNELS = 3  # RGB channels
+# CHANNELS = 3  # RGB channels
+CHANNELS = 1  # Grayscale channel
 NUM_STACK = 4  # Number of latent vectors to stack
 LATENT_DIM = 32  # Size of the latent space vector z
 ACTION_DIM = 3  # CarRacing: Steering, Gas, Brake

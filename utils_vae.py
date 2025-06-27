@@ -1,9 +1,13 @@
 import pathlib
 
+import cv2
 import numpy as np
 import torch
+from huggingface_sb3 import load_from_hub
 from matplotlib import pyplot as plt
+from stable_baselines3 import PPO
 from torch.utils.data import Dataset
+import gymnasium as gym
 
 from utils import LatentStateWrapperVQ
 
@@ -24,6 +28,92 @@ class FrameDataset(Dataset):
         return self.data[idx]
 
 
+# --- Preprocessing Function ---
+def preprocess_observation(obs, resize_dim=(64, 64)):
+    """
+    Applies preprocessing steps to a raw observation from the CarRacing-v3 environment.
+
+    Args:
+        obs (np.ndarray): A raw observation from the environment (96x96x3 RGB).
+        resize_dim (tuple): The target dimensions (height, width) for resizing.
+
+    Returns:
+        np.ndarray: The preprocessed observation (height, width, 1) with values in [0, 1].
+    """
+    # 1. Crop the bottom HUD
+    # The HUD is in the bottom 12 pixels of the 96x96 image.
+    cropped_obs = obs[:-12, :, :]
+
+    # 2. Grayscaling
+    gray_obs = cv2.cvtColor(cropped_obs, cv2.COLOR_RGB2GRAY)
+
+    # 3. Resizing
+    resized_obs = cv2.resize(gray_obs, resize_dim, interpolation=cv2.INTER_AREA)
+
+    # 4. Normalization
+    normalized_obs = resized_obs / 255.0
+
+    # Add channel dimension for consistency (e.g., for TensorFlow or PyTorch)
+    return normalized_obs.reshape(resize_dim[0], resize_dim[1], 1)
+
+
+# --- Data Collection --- (uses pre-trained SB3 PPO agent)
+def collect_frames(num_frames):
+    print(f"Collecting {num_frames} frames for VAE training...")
+
+    model_id = "Pyro-X2/CarRacingSB3"
+    model_filename = "ppo-CarRacing-v3.zip"
+
+    try:
+        checkpoint = load_from_hub(model_id, model_filename)  # Load the model from Hugging Face Hub
+    except Exception as e:
+        print(f"Failed to load model from Hugging Face Hub: {e}")
+        exit(1)
+
+    # Create the environment
+    env = gym.make("CarRacing-v3", render_mode="rgb_array")
+    # Load the model
+    model = PPO.load(checkpoint, env=env)
+
+    frames = []
+    observation, info = env.reset()
+
+    # Skip the first 50 frames to leave out initial zooming in
+    for _ in range(50):
+        action, _state = model.predict(observation, deterministic=True)
+        observation, reward, terminated, truncated, info = env.step(action)
+
+    # Collect frames
+    frame_skip = 4  # Skip frames to reduce data size
+    frame_count = 0
+    for i in range(num_frames * frame_skip):
+        action, _state = model.predict(observation, deterministic=True)
+
+        observation, reward, terminated, truncated, info = env.step(action)
+        if i % frame_skip == 0:  # Collect every 4th frame
+            frame = env.render()  # could also use observation here since env is raw
+
+            if frame is not None:
+                processed_frame = preprocess_observation(observation)  # Use transform from utils
+                processed_frame = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0,
+                                                                                             1)  # Convert to CxHxW format
+                frames.append(processed_frame)
+                frame_count += 1
+
+            if frame_count % 500 == 0 and frame_count > 0:
+                print(f"  Collected {frame_count}/{num_frames} frames...")
+        if terminated or truncated:
+            observation, info = env.reset()
+            # Skip the first 50 frames to leave out initial zooming in
+            for _ in range(50):
+                action, _state = model.predict(observation, deterministic=True)
+                observation, reward, terminated, truncated, info = env.step(action)
+
+    env.close()
+    print(f"Finished collecting {len(frames)} frames.")
+    return torch.stack(frames)
+
+
 # --- Visualization ---
 def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
     model.eval()
@@ -31,7 +121,7 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
     if data.size(0) > n_samples: data = data[:n_samples]
 
     with torch.no_grad():
-        recon_batch, _, _ = model(data)
+        recon_batch, _, _, _ = model(data)
 
     original = data.cpu()
     reconstructed = recon_batch.cpu()
@@ -39,11 +129,11 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
     fig, axes = plt.subplots(2, n_samples, figsize=(n_samples * 2, 4))
     fig.suptitle(f'Epoch {epoch} - Original vs. Reconstructed', fontsize=16)
     for i in range(n_samples):
-        img_orig = original[i].permute(1, 2, 0).numpy()
+        img_orig = original[i].squeeze().numpy()
         axes[0, i].imshow(np.clip(img_orig, 0, 1))
         axes[0, i].set_title(f'Original {i + 1}')
         axes[0, i].axis('off')
-        img_recon = reconstructed[i].permute(1, 2, 0).numpy()
+        img_recon = reconstructed[i].squeeze().numpy()
         axes[1, i].imshow(np.clip(img_recon, 0, 1))
         axes[1, i].set_title(f'Recon {i + 1}')
         axes[1, i].axis('off')

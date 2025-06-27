@@ -39,7 +39,7 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device):
         data = data.to(device)
         optimizer.zero_grad()
 
-        recon_batch, vq_loss, quantized = model(data)
+        recon_batch, vq_loss, _quantized, _encoding_indices = model(data)
         # Calculate the loss
         loss = vq_loss + F.mse_loss(recon_batch, data)  # VQ loss + reconstruction loss
         loss.backward()
@@ -68,14 +68,14 @@ if __name__ == "__main__":
     config = get_config(args.config)
 
     # 1. Collect Data
-    frame_data = collect_frames(ENV_NAME, config["num_frames_collect"], transform)  # Use transform from utils
+    frame_data = collect_frames(config["num_frames_collect"])  # Use transform from utils
 
     # 2. Create Dataset and DataLoader
     dataset = FrameDataset(frame_data)
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True)
 
     # 3. Initialize Model and Optimizer
-    model = VQVAE().to(DEVICE)  # Uses constants from utils implicitly via models.py
+    model = VQVAE(in_channels=1).to(DEVICE)  # Uses constants from utils implicitly via models.py
     optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
 
     # 4. Training Loop
