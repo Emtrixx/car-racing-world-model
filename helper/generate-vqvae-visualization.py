@@ -38,12 +38,12 @@ def save_tensor_as_image(tensor, filename):
 
 # --- Main Execution ---
 if __name__ == '__main__':
-    # --- 1. Setup Directories ---
+    # --- Setup Directories ---
     print(f"Creating output directories at: {OUTPUT_DIR.resolve()}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     PATCHES_DIR.mkdir(exist_ok=True)
 
-    # --- 2. Load Model and Codebook ---
+    # --- Load Model and Codebook ---
     model = VQVAE().to(DEVICE)
 
     # Check if a trained model file exists, otherwise use random weights
@@ -57,17 +57,17 @@ if __name__ == '__main__':
     model.eval()
     codebook_weights = model.vq_layer.embedding.weight.data.cpu().numpy()
 
-    # --- 3. Project Codebook to 2D using t-SNE ---
+    # --- Project Codebook to 2D using t-SNE ---
     print("Projecting codebook to 2D using t-SNE... (This may take a moment)")
     tsne = TSNE(n_components=2, perplexity=30, n_iter=1000, random_state=42)
     projected_vectors = tsne.fit_transform(codebook_weights)
     print("Projection complete.")
 
-    # --- 4. Decode Each Vector and Save Image ---
+    # --- Decode Each Vector and Save Image ---
     print(f"Decoding {NUM_EMBEDDINGS} codebook vectors to image patches...")
     codebook_data = []
 
-    # The feature map size of your encoder is 4x4 (64 -> 32 -> 16 -> 8 -> 4)
+    # The feature map size of the encoder is 4x4 (64 -> 32 -> 16 -> 8 -> 4)
     # So the decoder expects an input of shape [1, embedding_dim, 4, 4]
     # We will decode each vector as if it were a full 4x4 feature map of that single vector.
 
@@ -76,7 +76,7 @@ if __name__ == '__main__':
         vector = torch.tensor(codebook_weights[i], device=DEVICE).view(1, EMBEDDING_DIM, 1, 1)
 
         # Expand the vector to match the expected feature map size (e.g., 4x4)
-        # Your decoder was trained on feature maps of a certain spatial size.
+        # The decoder was trained on feature maps of a certain spatial size.
         # We need to replicate the single vector across that spatial dimension.
         # The encoder output is 4x4, so we expand to that.
         decoder_input = vector.repeat(1, 1, 4, 4)
@@ -85,14 +85,15 @@ if __name__ == '__main__':
             decoded_patch = model.decoder(decoder_input)
 
         # Define the path for the frontend (relative path with forward slashes)
-        image_relative_path = f"/assets/decoded_patches/patch_{i}.png"
+        # assets folder is symlinked to the public folder and renamed to "data" in the frontend.
+        image_relative_path = f"/data/decoded_patches/patch_{i}.png"
 
         # Define the full path for saving the file
         image_save_path = OUTPUT_DIR.parent / image_relative_path.lstrip('/')
 
         save_tensor_as_image(decoded_patch, image_save_path)
 
-        # --- 5. Assemble JSON data ---
+        # --- Assemble JSON data ---
         codebook_data.append({
             "index": i,
             "x": float(projected_vectors[i, 0]),
@@ -104,7 +105,7 @@ if __name__ == '__main__':
 
     print("\nDecoding complete.")
 
-    # --- 6. Save the JSON File ---
+    # --- Save the JSON File ---
     json_path = OUTPUT_DIR / "codebook_data.json"
     print(f"Saving data to: {json_path}")
     with open(json_path, "w") as f:

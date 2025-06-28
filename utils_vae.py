@@ -61,9 +61,8 @@ def collect_frames(num_frames):
 
         observation, reward, terminated, truncated, info = env.step(action)
         if i % frame_skip == 0:  # Collect every 4th frame
-            frame = env.render()  # could also use observation here since env is raw
 
-            if frame is not None:
+            if observation is not None:
                 processed_frame = preprocess_observation(observation)
                 processed_frame = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0,
                                                                                              1)  # Convert to CxHxW format

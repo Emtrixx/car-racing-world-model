@@ -1,11 +1,13 @@
 import gymnasium as gym
+import torch
 from stable_baselines3 import PPO
 from huggingface_sb3 import load_from_hub
 from pathlib import Path
 from PIL import Image
 import numpy as np
 
-from utils import preprocess_observation
+from utils import preprocess_observation, DEVICE, VQ_VAE_CHECKPOINT_FILENAME
+from vq_conv_vae import VQVAE
 
 # --- Configuration ---
 # You can change these parameters
@@ -26,17 +28,17 @@ def save_preprocessed_observation(preprocessed_obs, filename):
 
 
 def main():
-    # --- 1. Setup Directories ---
+    # --- Setup Directories ---
     print(f"Creating output directory at: {OUTPUT_DIR.resolve()}")
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
 
-    # --- 2. Load Pre-trained Model ---
+    # --- Load Pre-trained Model ---
     print(f"Loading model '{MODEL_ID}' from Hugging Face Hub...")
     try:
         # Load the model from Hugging Face Hub
         checkpoint = load_from_hub(MODEL_ID, MODEL_FILENAME)
         # Create the environment *without* human rendering to speed it up
-        env = gym.make("CarRacing-v3")
+        env = gym.make("CarRacing-v3", render_mode="rgb_array")
         # Load the model into the PPO class
         model = PPO.load(checkpoint, env=env)
         print("Model loaded successfully.")
@@ -44,9 +46,21 @@ def main():
         print(f"Failed to load model from Hugging Face Hub: {e}")
         return
 
-    # --- 3. Play and Collect Images ---
+    # --- load VQ-VAE model for reconstructing images ---
+    vqvae_model = VQVAE().to(DEVICE)
+    try:
+        vqvae_model.load_state_dict(torch.load("../" + VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
+        print(f"VQ-VAE model loaded from '{VQ_VAE_CHECKPOINT_FILENAME}'.")
+    except FileNotFoundError:
+        print(f"VQ-VAE model file '{VQ_VAE_CHECKPOINT_FILENAME}' not found. Please train your model first.")
+        return
+
+    vqvae_model.eval()
+
+    # --- Play and Collect Images ---
     saved_count = 0
     step_count = 0
+    reconstruction_data = []
 
     # Run multiple episodes until we have enough images
     while saved_count < NUM_IMAGES_TO_SAVE:
@@ -65,14 +79,44 @@ def main():
                 # Apply the preprocessing function to the raw observation
                 preprocessed_obs = preprocess_observation(observation)
 
-                image_path = OUTPUT_DIR / f"frame_{saved_count:04d}.png"
+                # save sample image
+                image_filename = f"frame_{saved_count:04d}.png"
+                image_path = OUTPUT_DIR / image_filename
                 print(f"  - Saving preprocessed frame {saved_count + 1} to {image_path}")
                 save_preprocessed_observation(preprocessed_obs, image_path)
+
+                # save reconstructed image using VQ-VAE
+                with torch.no_grad():
+                    preprocessed_obs = torch.tensor(preprocessed_obs, dtype=torch.float32).permute(2, 0,
+                                                                                                   1)
+                    obs_tensor = preprocessed_obs.unsqueeze(0).to(DEVICE)  # Add batch dimension and move to device
+                    reconstructed_image, _, _, encoding_indices = vqvae_model(obs_tensor)
+                    reconstructed_image = reconstructed_image.squeeze(0)
+                    reconstructed_image = reconstructed_image.permute(1, 2, 0).cpu().numpy()
+                    reconstructed_image = np.clip(reconstructed_image, 0, 1)  # Ensure values are in [0, 1]
+                    reconstructed_image = (reconstructed_image * 255).astype(np.uint8)
+                    reconstructed_image_filename = f"reconstructed_frame_{saved_count:04d}.png"
+                    reconstructed_image_path = OUTPUT_DIR / reconstructed_image_filename
+                    Image.fromarray(np.squeeze(reconstructed_image)).save(reconstructed_image_path)
+
+                # Save the preprocessed observation for potential further analysis
+                reconstruction_data.append({
+                    "example_id": saved_count,
+                    "original_image_path": "data/sample_images/" + image_filename,
+                    "reconstructed_image_path": "data/sample_images/" + reconstructed_image_filename,
+                    "token_grid": encoding_indices.cpu().numpy().tolist()
+                })
+
                 saved_count += 1
 
+    # Save reconstruction data to a JSON file
+    reconstruction_data_path = OUTPUT_DIR.parent / "reconstruction_data.json"
+    print(f"Saving reconstruction data to {reconstruction_data_path}")
+    with open(reconstruction_data_path, 'w') as f:
+        import json
+        json.dump(reconstruction_data, f, indent=4)
+
     env.close()
-    print(f"\nFinished. Saved {saved_count} sample images to '{OUTPUT_DIR.resolve()}'.")
-    print("You can now use this folder as input for the `generate_assets.py` script.")
 
 
 if __name__ == '__main__':
