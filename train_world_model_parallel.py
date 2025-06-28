@@ -1,18 +1,15 @@
 import argparse
+import multiprocessing as mp
 import os
+import time
 
+import matplotlib.pyplot as plt
 import torch
-import torch.optim as optim
 import torch.nn as nn
+import torch.optim as optim
 from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, Dataset
-import time
-import matplotlib.pyplot as plt
-import multiprocessing as mp
 
-from utils_vae import SB3_MODEL_PATH, get_vq_wrapper
-from vq_conv_vae import VQVAE, NUM_EMBEDDINGS, EMBEDDING_DIM
-from world_model import WorldModelGRU
 from utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     ACTION_DIM,  # Default: 3
@@ -20,6 +17,9 @@ from utils import (
     # transform is used by worker
     DEVICE, WM_CHECKPOINT_FILENAME_GRU, DEVICE_STR, VQ_VAE_CHECKPOINT_FILENAME, make_env_sb3
 )
+from utils_vae import SB3_MODEL_PATH, get_vq_wrapper
+from vq_conv_vae import VQVAE, NUM_EMBEDDINGS, EMBEDDING_DIM
+from world_model import WorldModelGRU
 
 # --- Configuration ---
 # GRU Model Hyperparameters
@@ -90,7 +90,7 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
         from legacy.conv_vae import ConvVAE
         from legacy.actor_critic import Actor
         from legacy.utils_rl import PPOPolicyWrapper
-        from utils import transform, preprocess_and_encode, preprocess_and_encode_stack, FrameStackWrapper
+        from utils import FrameStackWrapper
 
         print(
             f"[Worker {worker_id}, PID {os.getpid()}] Starting, assigned {num_episodes_to_collect_by_worker} episodes. Device: {device_str_for_worker}")
@@ -106,7 +106,6 @@ def collect_sequences_worker(worker_id, num_episodes_to_collect_by_worker, env_n
             worker_env = make_env_sb3(
                 env_id=env_name_str,
                 vq_vae_model_instance=vq_vae_model_worker,
-                transform_function=transform,
                 frame_stack_num=num_stack_int,
                 device_for_vae=device_str_for_worker,
                 gamma=0.99,  # Standard gamma, used by NormalizeReward

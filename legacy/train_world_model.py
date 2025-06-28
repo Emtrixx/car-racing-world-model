@@ -10,11 +10,12 @@ import matplotlib.pyplot as plt
 from legacy.actor_critic import Actor
 from legacy.conv_vae import ConvVAE
 from world_model import WorldModelGRU
-from utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK, preprocess_and_encode
+from utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
+from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM,
                    VAE_CHECKPOINT_FILENAME,  # WM_CHECKPOINT_FILENAME (will change suffix)
-                   preprocess_and_encode_stack)
+                   )
+from legacy.utils_legacy import transform, preprocess_and_encode, preprocess_and_encode_stack
 from legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 
 # --- Configuration ---

@@ -5,8 +5,8 @@ import numpy as np
 import time
 
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, transform,
-                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode_stack, FrameStackWrapper)
+from utils import (DEVICE, ENV_NAME, VAE_CHECKPOINT_FILENAME, FrameStackWrapper)
+from legacy.utils_legacy import transform, preprocess_and_encode_stack
 # Assuming PPO filenames were also added to utils, or define them here
 # PPO_ACTOR_SAVE_FILENAME = f"{ENV_NAME}_ppo_actor_ld{LATENT_DIM}.pth" # Define if not in utils
 from legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME
