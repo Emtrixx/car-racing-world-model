@@ -8,7 +8,8 @@ import traceback
 
 from sympy.printing.pytorch import torch
 
-from utils import DEVICE, VQ_VAE_CHECKPOINT_FILENAME, make_env_sb3, ENV_NAME, transform, NUM_STACK
+from utils import DEVICE, VQ_VAE_CHECKPOINT_FILENAME, make_env_sb3, ENV_NAME, NUM_STACK
+from legacy.utils_legacy import transform
 from vq_conv_vae import VQVAE
 
 """
@@ -16,7 +17,7 @@ OpenEvolve Evaluator for Reinforcement Learning programs
 """
 
 SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip"  # best
-SB3_MODEL_PATH = pathlib.Path("../checkpoints") / SB3_MODEL_FILENAME
+SB3_MODEL_PATH = pathlib.Path("../../checkpoints") / SB3_MODEL_FILENAME
 
 
 def evaluate_agent(agent_path: str, env_name: str, n_eval_episodes: int = 100) -> Dict[str, Any]:

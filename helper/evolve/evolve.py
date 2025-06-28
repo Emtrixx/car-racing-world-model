@@ -5,8 +5,8 @@ import asyncio
 evolve = OpenEvolve(
     # initial_program_path="../train_ppo_sb3.py",
     initial_program_path="../test.py",
-    evaluation_file="./evaluator.py",
-    config_path="./config.yaml"
+    evaluation_file="evaluator.py",
+    config_path="config.yaml"
 )
 
 
