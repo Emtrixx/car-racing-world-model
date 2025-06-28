@@ -37,5 +37,9 @@ Thumbs.db
 # IDE files
 .idea/
 .vscode/
+
+# Checkpoints
 checkpoints/sb3_test_carracing-v3*
 openevolve/
+checkpoints/imported/
+assets/
