@@ -3,7 +3,6 @@ import cv2
 import torch
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
-from torchvision import transforms
 import gymnasium as gym
 from gymnasium import spaces
 from collections import deque
@@ -31,15 +30,8 @@ WM_MODEL_SUFFIX = f"ld{LATENT_DIM}_ac{ACTION_DIM}"
 WM_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
 WM_CHECKPOINT_FILENAME_GRU = f"checkpoints/{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
 
-# --- Data Preprocessing Transform (Identical for all parts) ---
-transform = transforms.Compose([
-    transforms.ToPILImage(),  # Convert numpy array to PIL Image
-    transforms.Resize((IMG_SIZE, IMG_SIZE)),
-    transforms.ToTensor(),  # Convert PIL Image to tensor (C, H, W) and scales to [0, 1]
-])
 
-
-# --- Preprocessing Function --- new
+# --- Preprocessing Function ---
 def preprocess_observation(obs, resize_dim=(64, 64)):
     """
     Applies preprocessing steps to a raw observation from the CarRacing-v3 environment.
@@ -66,48 +58,6 @@ def preprocess_observation(obs, resize_dim=(64, 64)):
 
     # Add channel dimension for consistency (e.g., for TensorFlow or PyTorch)
     return normalized_obs.reshape(resize_dim[0], resize_dim[1], 1)
-
-
-# --- Helper Function to Preprocess and Encode Observation ---
-def preprocess_and_encode(obs, transform_fn, vae_model, device):
-    """
-    Applies transform and encodes observation using the VAE encoder's mean.
-
-    Args:
-        obs (np.array): Raw observation from environment.
-        transform_fn (callable): The preprocessing transform.
-        vae_model (nn.Module): The loaded VAE model (in eval mode).
-        device (torch.device): The target device.
-
-    Returns:
-        torch.Tensor: Latent state vector z (mean) on the specified device.
-                      Shape: (LATENT_DIM)
-    """
-    processed_obs = transform_fn(obs).unsqueeze(0).to(device)  # Add batch dim and move to device
-    with torch.no_grad():  # We don't need gradients for VAE encoding
-        mu, logvar = vae_model.encode(processed_obs)
-        # Using the mean (mu) is common for downstream tasks
-        z = mu  # Shape: (1, LATENT_DIM)
-    return z.squeeze(0)  # Remove batch dim -> Shape: (LATENT_DIM)
-
-
-# --- Helper Function to Preprocess and Encode Observation Stack ---
-def preprocess_and_encode_stack(
-        raw_frame_stack,  # NumPy array from FrameStackWrapper: (num_stack, H, W, C)
-        transform_fn,  # Your existing torchvision transform
-        vae_model,  # Your loaded VAE model (in eval mode)
-        device
-):
-    latent_vectors = []
-    for i in range(raw_frame_stack.shape[0]):
-        # same logic as for single frame
-        raw_frame = raw_frame_stack[i]
-        processed_frame = transform_fn(raw_frame).unsqueeze(0).to(device)
-        with torch.no_grad():
-            mu, _ = vae_model.encode(processed_frame)
-            latent_vectors.append(mu.squeeze(0))
-    concatenated_latents = torch.cat(latent_vectors, dim=0)
-    return concatenated_latents
 
 
 class FrameStackWrapper(gym.Wrapper):
@@ -449,7 +399,6 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
     env = make_env_sb3(
         env_id=config_env_params.get("env_name_config", ENV_NAME),
         vq_vae_model_instance=vq_vae_model,
-        transform_function=transform,  # Global transform from utils.py
         frame_stack_num=config_env_params.get("num_stack_config", NUM_STACK),
         device_for_vae=vae_device_for_subprocess,
         gamma=config_env_params.get("gamma_config", 0.99),

@@ -6,7 +6,8 @@ from torch.utils.data import DataLoader
 import time
 
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, IMG_SIZE, CHANNELS, VAE_CHECKPOINT_FILENAME, transform)
+from utils import (DEVICE, ENV_NAME, IMG_SIZE, CHANNELS, VAE_CHECKPOINT_FILENAME)
+from legacy.utils_legacy import transform
 from legacy.conv_vae import ConvVAE
 from utils_vae import collect_frames, FrameDataset, visualize_reconstruction
 

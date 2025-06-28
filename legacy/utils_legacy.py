@@ -2,8 +2,9 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
+from torchvision import transforms
 
-from utils import ENV_NAME, NUM_STACK, LATENT_DIM, DEVICE, ActionClipWrapper, FrameStackWrapper
+from utils import ENV_NAME, NUM_STACK, LATENT_DIM, DEVICE, ActionClipWrapper, FrameStackWrapper, IMG_SIZE
 
 
 class LatentStateWrapper(gym.ObservationWrapper):
@@ -67,3 +68,53 @@ def make_env(vae_model_instance,  # The loaded and initialized VAE model
     print(f"Sample observation shape from final env: {env.observation_space.sample().shape}")
 
     return env
+
+
+# --- Data Preprocessing Transform (Identical for all parts) ---
+transform = transforms.Compose([
+    transforms.ToPILImage(),  # Convert numpy array to PIL Image
+    transforms.Resize((IMG_SIZE, IMG_SIZE)),
+    transforms.ToTensor(),  # Convert PIL Image to tensor (C, H, W) and scales to [0, 1]
+])
+
+
+# --- Helper Function to Preprocess and Encode Observation ---
+def preprocess_and_encode(obs, transform_fn, vae_model, device):
+    """
+    Applies transform and encodes observation using the VAE encoder's mean.
+
+    Args:
+        obs (np.array): Raw observation from environment.
+        transform_fn (callable): The preprocessing transform.
+        vae_model (nn.Module): The loaded VAE model (in eval mode).
+        device (torch.device): The target device.
+
+    Returns:
+        torch.Tensor: Latent state vector z (mean) on the specified device.
+                      Shape: (LATENT_DIM)
+    """
+    processed_obs = transform_fn(obs).unsqueeze(0).to(device)  # Add batch dim and move to device
+    with torch.no_grad():  # We don't need gradients for VAE encoding
+        mu, logvar = vae_model.encode(processed_obs)
+        # Using the mean (mu) is common for downstream tasks
+        z = mu  # Shape: (1, LATENT_DIM)
+    return z.squeeze(0)  # Remove batch dim -> Shape: (LATENT_DIM)
+
+
+# --- Helper Function to Preprocess and Encode Observation Stack ---
+def preprocess_and_encode_stack(
+        raw_frame_stack,  # NumPy array from FrameStackWrapper: (num_stack, H, W, C)
+        transform_fn,  # Your existing torchvision transform
+        vae_model,  # Your loaded VAE model (in eval mode)
+        device
+):
+    latent_vectors = []
+    for i in range(raw_frame_stack.shape[0]):
+        # same logic as for single frame
+        raw_frame = raw_frame_stack[i]
+        processed_frame = transform_fn(raw_frame).unsqueeze(0).to(device)
+        with torch.no_grad():
+            mu, _ = vae_model.encode(processed_frame)
+            latent_vectors.append(mu.squeeze(0))
+    concatenated_latents = torch.cat(latent_vectors, dim=0)
+    return concatenated_latents

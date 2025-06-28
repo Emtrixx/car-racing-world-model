@@ -10,10 +10,9 @@ import torch.optim as optim
 from actor_critic import Actor, Critic
 from legacy.conv_vae import ConvVAE
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, transform,
-                   VAE_CHECKPOINT_FILENAME, NUM_STACK,
+from utils import (DEVICE, ENV_NAME, VAE_CHECKPOINT_FILENAME, NUM_STACK,
                    LATENT_DIM)
-from legacy.utils_legacy import make_env
+from legacy.utils_legacy import make_env, transform
 from legacy.utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
     PPO_CRITIC_SAVE_FILENAME, PPOHyperparameters, RolloutBuffer
 
