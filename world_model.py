@@ -1,161 +1,179 @@
 import torch
 from torch import nn as nn
-from torch.nn import functional as F
-
-from utils import ACTION_DIM
-
-
-# --- MLP-based World Model ---
-class WorldModelMLP(nn.Module):
-    # Use WM_HIDDEN_DIM from utils or define a default
-    def __init__(self, latent_dim=32, action_dim=ACTION_DIM, hidden_dim=256):
-        super().__init__()
-        self.fc1 = nn.Linear(latent_dim + action_dim, hidden_dim)
-        self.fc2 = nn.Linear(hidden_dim, hidden_dim)
-        self.fc_z_pred = nn.Linear(hidden_dim, latent_dim)
-        # Optional heads can be added later
-        # self.fc_r_pred = nn.Linear(hidden_dim, 1)
-
-    def forward(self, z, a):
-        # Ensure a is float tensor and on same device as z
-        if not isinstance(a, torch.Tensor):
-            a = torch.tensor(a, dtype=torch.float32, device=z.device)
-        elif a.dtype != torch.float32:
-            a = a.float()
-        a = a.to(z.device)
-
-        # Handle batch dimension if missing (e.g., during single step prediction)
-        if z.ndim == 1: z = z.unsqueeze(0)
-        if a.ndim == 1: a = a.unsqueeze(0)
-
-        za = torch.cat([z, a], dim=-1)
-        hidden = F.relu(self.fc1(za))
-        hidden = F.relu(self.fc2(hidden))
-        next_z_pred = self.fc_z_pred(hidden)
-        return next_z_pred
 
 
 # --- GRU-based World Model ---
 class WorldModelGRU(nn.Module):
-    def __init__(self,
-                 action_dim,
-                 codebook_size,  # K: Size of your VQ-VAE codebook
-                 token_embedding_dim,  # Embedding dimension for the single observation token
-                 gru_hidden_dim=256,
-                 gru_num_layers=1,
-                 gru_input_embed_dim=None):  # Optional: dimension after projecting combined obs+action
+    """
+    A GRU-based world model that predicts the next state, reward, and done flag.
+
+    This model assumes the state representation is a grid of latent
+    vectors from a model a VQ-VAE. It flattens this grid before
+    processing it with the GRU.
+    """
+
+    def __init__(
+            self,
+            latent_dim: int,
+            action_dim: int,
+            hidden_dim: int,
+            codebook_size: int,
+            grid_size: int = 4
+    ):
+        """
+        Initializes the World Model layers.
+
+        Args:
+            latent_dim (int): The dimension of each latent vector in the grid.
+            action_dim (int): The dimension of the action vector.
+            hidden_dim (int): The dimension of the GRU's hidden state.
+            codebook_size (int): The size of the VQ-VAE codebook for predicting logits.
+            grid_size (int): The size of the input grid (e.g., 4 for a 4x4 map).
+        """
         super().__init__()
-        self.action_dim = action_dim
+        self.hidden_dim = hidden_dim
+        self.grid_size = grid_size
         self.codebook_size = codebook_size
-        self.token_embedding_dim = token_embedding_dim
-        self.gru_hidden_dim = gru_hidden_dim
-        self.gru_num_layers = gru_num_layers
+
+        # Total dimension of the flattened 4x4 latent grid
+        flattened_latent_dim = grid_size * grid_size * latent_dim
 
         # --- Input Processing Layers ---
-        # 1. Embedding layer for the single observation token
-        self.obs_token_embed = nn.Embedding(codebook_size, token_embedding_dim)
-
-        # The input size to the (optional) projection layer or GRU
-        # is the sum of the single token's embedding dim and action dim
-        input_to_projection_size = token_embedding_dim + action_dim
-
-        if gru_input_embed_dim is None:
-            self.gru_input_size = input_to_projection_size
-            self.input_embed_projection = None  # No separate projection layer before GRU
-        else:
-            self.gru_input_size = gru_input_embed_dim
-            # 2. Linear layer to project concatenated (embedded_obs_token + action)
-            self.input_embed_projection = nn.Linear(input_to_projection_size, gru_input_embed_dim)
-
-        # 3. GRU layer
-        self.gru = nn.GRU(
-            input_size=self.gru_input_size,
-            hidden_size=gru_hidden_dim,
-            num_layers=gru_num_layers,
-            batch_first=True
+        # A simple MLP to combine flattened latents and actions
+        self.input_processor = nn.Sequential(
+            nn.Linear(flattened_latent_dim + action_dim, hidden_dim),
+            nn.GELU(),
+            nn.LayerNorm(hidden_dim)
         )
 
-        # --- Output Layers (Predicting Next Token Logits) ---
-        # The GRU output will be used to predict the logits for the single next observation token.
-        self.fc_out_obs_logits = nn.Linear(gru_hidden_dim, codebook_size)
-        self.fc_r_pred = nn.Linear(gru_hidden_dim, 1)
-        self.fc_d_pred = nn.Linear(gru_hidden_dim, 1)
+        # --- Recurrent Core ---
+        # GRUCell processes one timestep at a time
+        self.gru = nn.GRUCell(hidden_dim, hidden_dim)
 
-    def forward(self, obs_token_indices_sequence, a_sequence, h_initial=None):
+        # --- Output Prediction Heads ---
+        # These project the GRU's hidden state to the desired outputs.
+        # Predicts the logits for the next latent state (4x4 grid)
+        self.next_latent_head = nn.Linear(hidden_dim, grid_size * grid_size * codebook_size)
+
+        # Predicts the scalar reward
+        self.reward_head = nn.Linear(hidden_dim, 1)
+
+        # Predicts the 'done' logit (before applying sigmoid)
+        self.done_head = nn.Linear(hidden_dim, 1)
+
+    def forward(self, current_latents: torch.Tensor, action: torch.Tensor, hidden_state: torch.Tensor):
         """
+        Performs a single step of the world model prediction.
+
         Args:
-            obs_token_indices_sequence (torch.Tensor): Sequence of single observation token indices.
-                                            Shape: (batch_size, sequence_length), dtype=torch.long
-            a_sequence (torch.Tensor): Actions sequence.
-                                       Shape: (batch_size, sequence_length, action_dim)
-            h_initial (torch.Tensor, optional): Initial hidden state for GRU.
+            current_latents (torch.Tensor): The current state's latent grid.
+                                            Shape: [batch_size, grid_size, grid_size, latent_dim]
+            action (torch.Tensor): The action taken in the current state.
+                                   Shape: [batch_size, action_dim]
+            hidden_state (torch.Tensor): The previous hidden state of the GRU.
+                                         Shape: [batch_size, hidden_dim]
+
         Returns:
-            next_obs_logits_sequence (torch.Tensor): Predicted logits for the next single observation token.
-                                          Shape: (batch_size, sequence_length, codebook_size)
-            next_r_pred_sequence (torch.Tensor): Predicted rewards.
-            next_d_pred_logits (torch.Tensor): Predicted done logits.
-            h_final (torch.Tensor): Final hidden state of GRU.
+            Tuple containing:
+            - predicted_latent_logits (torch.Tensor): Logits for the next latent grid.
+              Shape: [batch_size, grid_size, grid_size, num_vq_codes]
+            - predicted_reward (torch.Tensor): The predicted scalar reward.
+              Shape: [batch_size, 1]
+            - predicted_done_logits (torch.Tensor): The predicted done logit.
+              Shape: [batch_size, 1]
+            - next_hidden_state (torch.Tensor): The updated GRU hidden state.
+              Shape: [batch_size, hidden_dim]
         """
-        # Ensure actions are float and on the same device
-        if a_sequence.dtype != torch.float32:
-            a_sequence = a_sequence.float()
-        a_sequence = a_sequence.to(obs_token_indices_sequence.device)
+        batch_size = current_latents.size(0)
 
-        # Embed observation tokens
-        # Input: (batch, seq)
-        # Output: (batch, seq, token_embedding_dim)
-        embedded_obs_tokens = self.obs_token_embed(obs_token_indices_sequence)
+        # Flatten the 4x4 latent grid into a single vector
+        # Shape: [batch_size, 4, 4, latent_dim] -> [batch_size, 16 * latent_dim]
+        flattened_latents = current_latents.view(batch_size, -1)
 
-        # Concatenate embedded observation tokens with actions
-        # Output: (batch, seq, token_embedding_dim + action_dim)
-        obs_action_combined = torch.cat([embedded_obs_tokens, a_sequence], dim=-1)
+        # Combine flattened latents and action into a single input vector
+        # Shape: [batch_size, 16 * latent_dim + action_dim]
+        model_input = torch.cat([flattened_latents, action], dim=-1)
 
-        # Optional: Project to gru_input_embed_dim
-        if self.input_embed_projection:
-            projected_input = F.relu(self.input_embed_projection(obs_action_combined))
-        else:
-            projected_input = obs_action_combined
+        # Process the combined input to match the GRU's input dimension
+        # Shape: [batch_size, hidden_dim]
+        gru_input = self.input_processor(model_input)
 
-        # Pass through GRU
-        gru_output, h_final = self.gru(projected_input, h_initial)
+        # Perform one step of the GRU
+        # Input: [b, hidden_dim], Hidden: [b, hidden_dim] -> Output: [b, hidden_dim]
+        next_hidden_state = self.gru(gru_input, hidden_state)
 
-        # Predict next observation token logits, reward, and done
-        # Output shape: (batch_size, sequence_length, codebook_size)
-        next_obs_logits_sequence = self.fc_out_obs_logits(gru_output)
+        # Predict the outputs from the new hidden state
+        latent_logits_flat = self.next_latent_head(next_hidden_state)
+        predicted_reward = self.reward_head(next_hidden_state)
+        predicted_done_logits = self.done_head(next_hidden_state)
 
-        next_r_pred_sequence = self.fc_r_pred(gru_output)
-        next_d_pred_logits = self.fc_d_pred(gru_output)
+        # Reshape the latent logits back to a 4x4 grid
+        # Shape: [b, 16 * num_codes] -> [b, 4, 4, num_codes]
+        predicted_latent_logits = latent_logits_flat.view(
+            batch_size, self.grid_size, self.grid_size, self.codebook_size
+        )
 
-        return next_obs_logits_sequence, next_r_pred_sequence, next_d_pred_logits, h_final
+        return predicted_latent_logits, predicted_reward, predicted_done_logits, next_hidden_state
 
-    def step(self, obs_token_idx_t, a_t, h_prev):
-        """
-        Performs a single step prediction.
-        Args:
-            obs_token_idx_t (torch.Tensor): Current single observation token index.
-                                      Shape: (batch_size,), dtype=torch.long
-            a_t (torch.Tensor): Current action. Shape: (batch_size, action_dim)
-            h_prev (torch.Tensor): Previous hidden state.
-        Returns:
-            next_obs_logits (torch.Tensor): Predicted logits for the next single obs token.
-                                 Shape: (batch_size, codebook_size)
-            next_r_pred (torch.Tensor): Predicted reward.
-            next_d_pred_logit (torch.Tensor): Predicted done logit.
-            h_next (torch.Tensor): Next hidden state.
-        """
-        # Reshape inputs to (batch_size, sequence_length=1, features)
-        # obs_token_idx_t shape: (batch_size,) -> (batch_size, 1)
-        obs_token_idx_t_seq = obs_token_idx_t.unsqueeze(1)
-        # a_t shape: (batch_size, action_dim) -> (batch_size, 1, action_dim)
-        a_t_seq = a_t.unsqueeze(1)
+    def get_initial_hidden_state(self, batch_size: int, device: torch.device) -> torch.Tensor:
+        """Helper function to get a zero-initialized hidden state."""
+        return torch.zeros(batch_size, self.hidden_dim, device=device)
 
-        next_obs_logits_seq, next_r_pred_seq, next_d_logits_seq, h_next = \
-            self.forward(obs_token_idx_t_seq, a_t_seq, h_initial=h_prev)
 
-        # Squeeze the sequence_length=1 dimension
-        # Output shape: (batch_size, codebook_size)
-        next_obs_logits = next_obs_logits_seq.squeeze(1)
-        next_r_pred = next_r_pred_seq.squeeze(1)
-        next_d_pred_logit = next_d_logits_seq.squeeze(1)
+# --- Usage Example ---
+if __name__ == '__main__':
+    # --- Model Hyperparameters ---
+    BATCH_SIZE = 32
+    LATENT_DIM = 64  # Dimension of each vector in the VQ-VAE grid
+    ACTION_DIM = 10  # e.g., 10 discrete actions
+    HIDDEN_DIM = 256  # Size of the GRU's memory
+    CODEBOOK_SIZE = 512  # Size of the VQ-VAE codebook
+    GRID_SIZE = 4
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-        return next_obs_logits, next_r_pred, next_d_pred_logit, h_next
+    # --- Instantiate the Model ---
+    world_model = WorldModelGRU(
+        latent_dim=LATENT_DIM,
+        action_dim=ACTION_DIM,
+        hidden_dim=HIDDEN_DIM,
+        codebook_size=CODEBOOK_SIZE,
+        grid_size=GRID_SIZE
+    ).to(DEVICE)
+
+    print(f"World Model created on device: {DEVICE}")
+    print(f"Number of parameters: {sum(p.numel() for p in world_model.parameters()):,}")
+
+    # --- Create Dummy Input Data ---
+    # This simulates the output of a VQ-VAE encoder
+    current_latents_dummy = torch.randn(BATCH_SIZE, GRID_SIZE, GRID_SIZE, LATENT_DIM).to(DEVICE)
+    # A random action
+    action_dummy = torch.randn(BATCH_SIZE, ACTION_DIM).to(DEVICE)
+    # Initial hidden state for the GRU (usually all zeros at the start of an episode)
+    hidden_state_dummy = world_model.get_initial_hidden_state(BATCH_SIZE, DEVICE)
+
+    # --- Perform a Forward Pass ---
+    predicted_logits, reward, done_logits, next_hidden = world_model(
+        current_latents_dummy, action_dummy, hidden_state_dummy
+    )
+
+    # --- Print Output Shapes to Verify ---
+    print("\n--- Input Shapes ---")
+    print(f"Current Latents: {current_latents_dummy.shape}")
+    print(f"Action:          {action_dummy.shape}")
+    print(f"Hidden State:    {hidden_state_dummy.shape}")
+
+    print("\n--- Output Shapes ---")
+    print(f"Predicted Logits:  {predicted_logits.shape}")
+    print(f"Predicted Reward:  {reward.shape}")
+    print(f"Predicted Done:    {done_logits.shape}")
+    print(f"Next Hidden State: {next_hidden.shape}")
+
+    # --- How to use the outputs ---
+    # Get the predicted next state by sampling from the logits
+    # The temperature can be used to control the randomness of the prediction.
+    predicted_latent_indices = torch.distributions.Categorical(logits=predicted_logits).sample()
+    print(f"\nSampled next state indices shape: {predicted_latent_indices.shape}")
+
+    # Get the probability of the episode being done
+    done_probability = torch.sigmoid(done_logits)
+    print(f"Done probability shape: {done_probability.shape}")
