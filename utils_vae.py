@@ -172,7 +172,8 @@ def visualize_single_frame(frame_tensor, title="Sample Frame"):
 def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
     model.eval()
     data = next(iter(dataloader)).to(device)
-    if data.size(0) > n_samples: data = data[:n_samples]
+    if data.size(0) > n_samples:
+        data = data[:n_samples]
 
     with torch.no_grad():
         recon_batch, _, _, _ = model(data)
@@ -183,19 +184,25 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
     fig, axes = plt.subplots(2, n_samples, figsize=(n_samples * 2, 4))
     fig.suptitle(f'Epoch {epoch} - Original vs. Reconstructed', fontsize=16)
     for i in range(n_samples):
+        # Display Original Image in Grayscale
         img_orig = original[i].squeeze().numpy()
-        axes[0, i].imshow(np.clip(img_orig, 0, 1))
+        axes[0, i].imshow(np.clip(img_orig, 0, 1), cmap='gray')  # <-- Set colormap
         axes[0, i].set_title(f'Original {i + 1}')
         axes[0, i].axis('off')
+
+        # Display Reconstructed Image in Grayscale
         img_recon = reconstructed[i].squeeze().numpy()
-        axes[1, i].imshow(np.clip(img_recon, 0, 1))
+        axes[1, i].imshow(np.clip(img_recon, 0, 1), cmap='gray')  # <-- Set colormap
         axes[1, i].set_title(f'Recon {i + 1}')
         axes[1, i].axis('off')
+
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
+    # Create images directory if it doesn't exist
+    pathlib.Path("images").mkdir(exist_ok=True)
     save_path = f"images/vqvae_reconstruction_epoch_{epoch}.png"
     plt.savefig(save_path)
     print(f"Saved reconstruction visualization to {save_path}")
-    plt.close(fig)  # Close the figure to free memory
+    plt.close(fig)
 
 
 # Helper function to get the VaeEncodeWrapper instance
