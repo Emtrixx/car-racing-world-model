@@ -5,13 +5,16 @@ services:
     image: car-racing-rl-app
     #    container_name: car-racing-rl-container # removed for running multiple instances
     volumes:
-      - ./app:/app
+      - ./checkpoints:/app/checkpoints
+      - ./logs:/app/logs
+      - ./images:/app/images
+
 
     # docker compose run app python train_world_model_parallel.py --config test
 
     # Keep the container running if needed, or allow interactive sessions
-#    tty: true
-#    stdin_open: true
+    #    tty: true
+    #    stdin_open: true
 
     # GPU Configuration
     deploy:
@@ -19,8 +22,9 @@ services:
         reservations:
           devices:
             - driver: nvidia
-              count: all
-              capabilities: [gpu]
+              device_ids: [ '0', '1' ]
+              #count: all
+              capabilities: [ gpu ]
 
 networks:
   default:
