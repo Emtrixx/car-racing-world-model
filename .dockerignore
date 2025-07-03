@@ -1,6 +1,8 @@
 videos/
 legacy/
 images/
+assets/
+data/
 checkpoints/sb3_default_carracing-v3/
 checkpoints/sb3_test_carracing-v3/
 checkpoints/sb3_test_carracing-v3_best/
