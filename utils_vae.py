@@ -10,7 +10,7 @@ from stable_baselines3 import PPO
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from utils import LatentStateWrapperVQ, preprocess_observation
+from utils import preprocess_observation, VaeEncodeWrapper
 
 # SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip"  # best
 SB3_MODEL_FILENAME = f"sb3_default_carracing-v3/ppo_model_4249320_steps.zip"  # one
@@ -30,16 +30,16 @@ class FrameDataset(Dataset):
 
 
 # --- Data Collection and Saving ---
-def collect_and_save_frames(num_frames, save_dir="data/frames"):
+def collect_and_save_frames(num_frames, save_dir="data/frames", batch_size=1000):
     """
-    Collects frames from the CarRacing environment using a pre-trained agent
-    and saves them individually to disk.
+    Collects frames and saves them to disk in batches to avoid creating too many files.
 
     Args:
         num_frames (int): The total number of frames to collect and save.
-        save_dir (str): The directory where frames will be saved.
+        save_dir (str): The directory where frame batches will be saved.
+        batch_size (int): The number of frames to save in each file.
     """
-    print(f"Collecting and saving {num_frames} frames to '{save_dir}'...")
+    print(f"Collecting and saving {num_frames} frames to '{save_dir}' in batches of {batch_size}...")
 
     # --- Create Save Directory ---
     if not os.path.exists(save_dir):
@@ -50,7 +50,6 @@ def collect_and_save_frames(num_frames, save_dir="data/frames"):
     model_id = "Pyro-X2/CarRacingSB3"
     model_filename = "ppo-CarRacing-v3.zip"
     try:
-        # Load the model from Hugging Face Hub
         checkpoint = load_from_hub(model_id, model_filename)
     except Exception as e:
         print(f"Failed to load model from Hugging Face Hub: {e}")
@@ -62,9 +61,10 @@ def collect_and_save_frames(num_frames, save_dir="data/frames"):
 
     observation, info = env.reset()
     frames_collected = 0
+    batch_counter = 0
+    current_batch = []
 
     # --- Initial Frame Skip ---
-    # Skip the first 50 frames to leave out the initial zooming-in animation.
     for _ in range(50):
         action, _ = model.predict(observation, deterministic=True)
         observation, _, terminated, truncated, _ = env.step(action)
@@ -78,85 +78,93 @@ def collect_and_save_frames(num_frames, save_dir="data/frames"):
         action, _ = model.predict(observation, deterministic=True)
         observation, _, terminated, truncated, _ = env.step(action)
 
-        # Preprocess and save the frame
         processed_frame = preprocess_observation(observation)
-        # Convert to tensor and change format from HxWxC to CxHxW
         frame_tensor = torch.tensor(processed_frame, dtype=torch.uint8).permute(2, 0, 1)
+        current_batch.append(frame_tensor)
 
-        # Save the individual frame tensor to disk
-        save_path = os.path.join(save_dir, f"frame_{frames_collected:06d}.pt")
-        torch.save(frame_tensor, save_path)
+        # If batch is full, save it to disk
+        if len(current_batch) == batch_size:
+            batch_tensor = torch.stack(current_batch)
+            save_path = os.path.join(save_dir, f"batch_{batch_counter:04d}.pt")
+            torch.save(batch_tensor, save_path)
+            batch_counter += 1
+            current_batch = []  # Reset for the next batch
 
         frames_collected += 1
         pbar.update(1)
 
         if terminated or truncated:
             observation, info = env.reset()
-            # Skip zoom-in on reset
             for _ in range(50):
                 action, _ = model.predict(observation, deterministic=True)
                 observation, _, terminated, truncated, _ = env.step(action)
                 if terminated or truncated:
                     observation, _ = env.reset()
 
+    # Save any remaining frames in the last batch
+    if current_batch:
+        batch_tensor = torch.stack(current_batch)
+        save_path = os.path.join(save_dir, f"batch_{batch_counter:04d}.pt")
+        torch.save(batch_tensor, save_path)
+
     pbar.close()
     env.close()
-    print(f"Finished collecting and saving {frames_collected} frames in '{save_dir}'.")
+    print(f"Finished collecting. Saved {frames_collected} frames in {batch_counter + 1} batches.")
 
 
-# --- Data Loading ---
-def load_frames(load_dir="data/frames", num_frames_to_load=None, normalize=False):
+# --- Data Loading (Batched) ---
+def load_frames(load_dir="data/frames", num_frames_to_load=None, normalize=True):
     """
-    Loads frames from disk that were saved by collect_and_save_frames.
+    Loads frames from batched files.
 
     Args:
-        load_dir (str): The directory where frames are saved.
+        load_dir (str): The directory where frame batches are saved.
         num_frames_to_load (int, optional): The maximum number of frames to load.
-                                            If None, loads all frames in the directory.
-        normalize (bool): If True, converts frames to float and normalizes to [0, 1].
+                                            If None, loads all frames.
+        normalize (bool): If True, normalizes pixel values to the [0, 1] range.
 
     Returns:
-        torch.Tensor: A tensor containing all the loaded frames, stacked together.
+        torch.Tensor: A tensor containing all the loaded frames.
     """
     if not os.path.isdir(load_dir):
         print(f"Error: Directory not found at {load_dir}")
         return torch.empty(0)
 
-    print(f"Loading frames from '{load_dir}'...")
-    # Get a sorted list of all frame files
-    frame_files = sorted([f for f in os.listdir(load_dir) if f.endswith('.pt')])
+    print(f"Loading batched frames from '{load_dir}'...")
+    batch_files = sorted([f for f in os.listdir(load_dir) if f.startswith('batch_') and f.endswith('.pt')])
 
-    if not frame_files:
-        print("No '.pt' files found in the directory.")
+    if not batch_files:
+        print("No 'batch_*.pt' files found in the directory.")
         return torch.empty(0)
 
-    # Determine how many frames to load
-    if num_frames_to_load is not None:
-        frame_files = frame_files[:num_frames_to_load]
-
-    loaded_frames = []
-    # Use tqdm for a progress bar
-    for filename in tqdm(frame_files, desc="Loading frames"):
+    loaded_batches = []
+    for filename in tqdm(batch_files, desc="Loading batches"):
         file_path = os.path.join(load_dir, filename)
         try:
-            frame_tensor = torch.load(file_path)
-            loaded_frames.append(frame_tensor)
+            batch_tensor = torch.load(file_path)
+            loaded_batches.append(batch_tensor)
         except Exception as e:
-            print(f"Could not load file {filename}: {e}")
+            print(f"Could not load batch file {filename}: {e}")
 
-    if not loaded_frames:
+    if not loaded_batches:
         return torch.empty(0)
 
-    # Stack all loaded frames into a single tensor
-    stacked_frames = torch.stack(loaded_frames)
-    stacked_frames = stacked_frames.float()
+    # Concatenate all batches into a single tensor
+    all_frames = torch.cat(loaded_batches, dim=0)
+
+    # If a specific number of frames is requested, slice the tensor
+    if num_frames_to_load is not None:
+        all_frames = all_frames[:num_frames_to_load]
+
+    # Convert to float, as models expect float tensors.
+    all_frames = all_frames.float()
 
     if normalize:
-        # normalize pixel values to the [0, 1] range
-        stacked_frames = stacked_frames / 255.0
+        # Normalize pixel values to the [0, 1] range
+        all_frames = all_frames / 255.0
 
-    print(f"Finished loading {len(loaded_frames)} frames.")
-    return stacked_frames
+    print(f"Finished loading {all_frames.shape[0]} frames.")
+    return all_frames
 
 
 # --- Visualization ---
@@ -189,11 +197,11 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
     plt.close(fig)  # Close the figure to free memory
 
 
-# Helper function to get the LatentStateWrapperVQ instance
+# Helper function to get the VaeEncodeWrapper instance
 def get_vq_wrapper(env_instance):
     current_env = env_instance
     while hasattr(current_env, 'env') or hasattr(current_env, 'venv'):  # Check for 'venv' for VecEnv
-        if isinstance(current_env, LatentStateWrapperVQ):
+        if isinstance(current_env, VaeEncodeWrapper):
             return current_env
         if hasattr(current_env, 'venv'):  # If it's a VecEnv, access its environments
             # For VecEnv, we need to get the attribute from the first environment
@@ -210,7 +218,7 @@ def get_vq_wrapper(env_instance):
         else:
             break  # No more 'env' or 'venv' attributes
 
-    if isinstance(current_env, LatentStateWrapperVQ):  # Check last env in chain
+    if isinstance(current_env, VaeEncodeWrapper):  # Check last env in chain
         return current_env
-    print("Warning: LatentStateWrapperVQ not found in environment stack.")
+    print("Warning: VaeEncodeWrapper not found in environment stack.")
     return None
