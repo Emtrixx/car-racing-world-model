@@ -149,76 +149,6 @@ class ActionClipWrapper(gym.ActionWrapper):
             return action
 
 
-class LatentStateWrapperVQ(gym.ObservationWrapper):
-    def __init__(self, env, vq_vae_model: torch.nn.Module, num_stack: int, device: torch.device):
-        super().__init__(env)
-        self.vq_vae_model = vq_vae_model.to(device).eval()
-        self.num_stack = num_stack
-        self.device = device
-
-        # Determine the shape of the flattened quantized output for a single frame
-        # by doing a dummy forward pass.
-        # Ensure IMG_CHANNELS, IMG_SIZE are correctly defined where this wrapper is used.
-        # These should match the input expected by your VQVAE and transform_fn.
-        dummy_input = torch.randn(1, CHANNELS, IMG_SIZE, IMG_SIZE).to(self.device)
-        with torch.no_grad():
-            z_continuous = self.vq_vae_model.encoder(dummy_input)
-            # _, quantized_sample, _, encoding_indices_sample = self.vq_vae_model.vq_layer(z_continuous)
-            # The vq_layer.forward returns: vq_loss, quantized_latents, encoding_indices
-            _, quantized_sample, _ = self.vq_vae_model.vq_layer(z_continuous)
-
-        # quantized_sample has shape (1, embedding_dim, H_feat, W_feat)
-        # We will flatten the (embedding_dim, H_feat, W_feat) part
-        self.flat_quantized_dim_per_frame = np.prod(quantized_sample.shape[1:])
-
-        # New observation space is the concatenated flattened quantized vectors
-        new_obs_shape = (self.num_stack * self.flat_quantized_dim_per_frame,)
-        self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf,
-            shape=new_obs_shape,
-            dtype=np.float32  # Quantized vectors are floats
-        )
-        print(f"LatentStateWrapperVQ: Initialized with observation space shape: {new_obs_shape}")
-        self.last_quantized_latent_for_render = None
-
-    def observation(self, obs_stack_raw_numpy):
-        # obs_stack_raw_numpy comes from FrameStackWrapper: (num_stack, H, W, C) dtype=uint8
-        processed_quantized_vectors_list = []
-        for i in range(obs_stack_raw_numpy.shape[0]):  # Iterate through N frames in the stack
-            raw_frame = obs_stack_raw_numpy[i]  # Single raw frame (H, W, C)
-
-            # Apply preprocessing
-            processed_frame = preprocess_observation(raw_frame)
-            processed_frame_tensor = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0,
-                                                                                                1)  # Convert to CxHxW format
-
-            # Add batch dim, move to device for VQ-VAE
-            processed_frame_tensor = processed_frame_tensor.unsqueeze(0).to(self.device)
-
-            with torch.no_grad():
-                # 1. Encode the frame
-                z_continuous = self.vq_vae_model.encoder(processed_frame_tensor)
-                # 2. Get the quantized representation from the VQ layer
-                # vq_loss, quantized_single_frame, encoding_indices = self.vq_vae_model.vq_layer(z_continuous)
-                # We only need the quantized_single_frame for the observation
-                _, quantized_single_frame, _ = self.vq_vae_model.vq_layer(z_continuous)
-
-                # quantized_single_frame has shape (1, embedding_dim, H_feat, W_feat)
-                # Store a clone for rendering before flattening
-                self.last_quantized_latent_for_render = quantized_single_frame.clone()
-
-                # Flatten it to (embedding_dim * H_feat * W_feat)
-                flat_quantized_vector = quantized_single_frame.reshape(-1)
-                processed_quantized_vectors_list.append(flat_quantized_vector)
-
-        # Concatenate the N flattened quantized latent vectors (still on device)
-        # Each element in the list is a tensor of shape (flat_quantized_dim_per_frame,)
-        concatenated_quantized_tensor = torch.cat(processed_quantized_vectors_list, dim=0)
-
-        # Environment observations should be NumPy arrays on CPU
-        return concatenated_quantized_tensor.cpu().numpy()
-
-
 class VaeEncodeWrapper(gym.ObservationWrapper):
     def __init__(self, env, vq_vae_model: torch.nn.Module, device: torch.device, save_latent_for_render=False):
         """
@@ -343,6 +273,7 @@ def make_env_sb3(
         gamma: float,
         render_mode: str = None,
         max_episode_steps: int = None,
+        save_latent_for_render: bool = False,
         seed: int = 0  # Seed for reproducibility
 ):
     """
@@ -386,7 +317,7 @@ def make_env_sb3(
     env = FrameSkip(env, skip=4)  # Skip every 4th frame
 
     # VaeEncodeWrapper: Preprocess and encode raw frame into quantized latent vectors using VQ-VAE and returns a single flattened latent vector
-    env = VaeEncodeWrapper(env, vq_vae_model_instance, device_for_vae)
+    env = VaeEncodeWrapper(env, vq_vae_model_instance, device_for_vae, save_latent_for_render)
 
     # FrameStackWrapper: Stacks the last N observations (quantized latent vectors) to create a temporal context.
     env = FrameStackWrapper(env, frame_stack_num)

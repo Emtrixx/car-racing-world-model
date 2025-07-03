@@ -117,6 +117,7 @@ def play_and_record():
             gamma=0.99,  # Standard gamma, used by NormalizeReward
             render_mode="rgb_array",
             max_episode_steps=1000,
+            save_latent_for_render=True,  # Ensure we save latent state for rendering
         )
         print("Environment created successfully with make_env_sb3.")
     except Exception as e:
@@ -147,7 +148,7 @@ def play_and_record():
 
     vq_wrapper = get_vq_wrapper(env)
     if vq_wrapper is None:
-        print("Error: Could not find LatentStateWrapperVQ. Video generation relies on it.")
+        print("Error: Could not find VaeEncodeWrapper. Video generation relies on it.")
         if hasattr(env, 'close'): env.close()
         return
 
