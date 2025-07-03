@@ -84,15 +84,17 @@ if __name__ == '__main__':
         with torch.no_grad():
             decoded_patch = model.decoder(decoder_input)
 
-        # Define the path for the frontend (relative path with forward slashes)
-        # assets folder is symlinked to the public folder and renamed to "data" in the frontend.
-        image_relative_path = f"/data/decoded_patches/patch_{i}.png"
+        # Define the path for saving the image
+        image_relative_path = f"/assets/decoded_patches/patch_{i}.png"
 
         # Define the full path for saving the file
         image_save_path = OUTPUT_DIR.parent / image_relative_path.lstrip('/')
 
         save_tensor_as_image(decoded_patch, image_save_path)
 
+        # Define the path for the frontend (relative path with forward slashes)
+        # assets folder is symlinked to the public folder and renamed to "data" in the frontend.
+        image_relative_path = f"/data/decoded_patches/patch_{i}.png"
         # --- Assemble JSON data ---
         codebook_data.append({
             "index": i,
