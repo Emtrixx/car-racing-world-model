@@ -29,142 +29,143 @@ class FrameDataset(Dataset):
         return self.data[idx]
 
 
-# --- Data Collection and Saving ---
-def collect_and_save_frames(num_frames, save_dir="data/frames", batch_size=1000):
+def collect_and_save_frames(num_frames, save_dir="data/frames", batch_size=500, frame_skip=4):
     """
-    Collects frames and saves them to disk in batches to avoid creating too many files.
+    Collects frames using a pre-trained agent and saves them to disk in batches.
 
     Args:
-        num_frames (int): The total number of frames to collect and save.
+        num_frames (int): The total number of frames to collect.
         save_dir (str): The directory where frame batches will be saved.
         batch_size (int): The number of frames to save in each file.
+        frame_skip (int): How many simulation steps to skip between saved frames.
     """
-    print(f"Collecting and saving {num_frames} frames to '{save_dir}' in batches of {batch_size}...")
+    print(f"Collecting {num_frames} frames, saving to '{save_dir}'...")
+    pathlib.Path(save_dir).mkdir(parents=True, exist_ok=True)
 
-    # --- Create Save Directory ---
-    if not os.path.exists(save_dir):
-        os.makedirs(save_dir)
-        print(f"Created directory: {save_dir}")
-
-    # --- Load Model ---
     model_id = "Pyro-X2/CarRacingSB3"
     model_filename = "ppo-CarRacing-v3.zip"
     try:
         checkpoint = load_from_hub(model_id, model_filename)
     except Exception as e:
         print(f"Failed to load model from Hugging Face Hub: {e}")
-        exit(1)
+        return
 
-    # --- Environment and Model Setup ---
     env = gym.make("CarRacing-v3", render_mode="rgb_array")
     model = PPO.load(checkpoint, env=env)
 
-    observation, info = env.reset()
-    frames_collected = 0
-    batch_counter = 0
-    current_batch = []
+    batch_frames = []
+    batch_num = 0
 
-    # --- Initial Frame Skip ---
+    observation, _ = env.reset()
     for _ in range(50):
         action, _ = model.predict(observation, deterministic=True)
-        observation, _, terminated, truncated, _ = env.step(action)
-        if terminated or truncated:
-            observation, _ = env.reset()
+        observation, _, _, _, _ = env.step(action)
 
-    # --- Frame Collection Loop ---
-    print("Starting frame collection loop...")
-    pbar = tqdm(total=num_frames, desc="Collecting frames")
-    while frames_collected < num_frames:
-        action, _ = model.predict(observation, deterministic=True)
-        observation, _, terminated, truncated, _ = env.step(action)
+    step = 0
+    # Initialize tqdm progress bar
+    with tqdm(total=num_frames, desc="Collecting frames") as pbar:
+        while pbar.n < num_frames:
+            action, _ = model.predict(observation, deterministic=True)
+            observation, _, terminated, truncated, _ = env.step(action)
 
-        processed_frame = preprocess_observation(observation)
-        frame_tensor = torch.tensor(processed_frame, dtype=torch.uint8).permute(2, 0, 1)
-        current_batch.append(frame_tensor)
+            if step % frame_skip == 0:
+                processed_frame = preprocess_observation(observation)
+                frame_tensor = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0, 1)
+                batch_frames.append(frame_tensor)
+                pbar.update(1)  # Increment the progress bar
 
-        # If batch is full, save it to disk
-        if len(current_batch) == batch_size:
-            batch_tensor = torch.stack(current_batch)
-            save_path = os.path.join(save_dir, f"batch_{batch_counter:04d}.pt")
-            torch.save(batch_tensor, save_path)
-            batch_counter += 1
-            current_batch = []  # Reset for the next batch
+                if len(batch_frames) == batch_size:
+                    batch_path = os.path.join(save_dir, f"batch_{batch_num}.pt")
+                    torch.save(torch.stack(batch_frames), batch_path)
+                    batch_frames.clear()
+                    batch_num += 1
 
-        frames_collected += 1
-        pbar.update(1)
+            if terminated or truncated:
+                observation, _ = env.reset()
+                for _ in range(50):
+                    action, _ = model.predict(observation, deterministic=True)
+                    observation, _, _, _, _ = env.step(action)
 
-        if terminated or truncated:
-            observation, info = env.reset()
-            for _ in range(50):
-                action, _ = model.predict(observation, deterministic=True)
-                observation, _, terminated, truncated, _ = env.step(action)
-                if terminated or truncated:
-                    observation, _ = env.reset()
+            step += 1
 
-    # Save any remaining frames in the last batch
-    if current_batch:
-        batch_tensor = torch.stack(current_batch)
-        save_path = os.path.join(save_dir, f"batch_{batch_counter:04d}.pt")
-        torch.save(batch_tensor, save_path)
+    if batch_frames:
+        batch_path = os.path.join(save_dir, f"batch_{batch_num}.pt")
+        torch.save(torch.stack(batch_frames), batch_path)
 
-    pbar.close()
     env.close()
-    print(f"Finished collecting. Saved {frames_collected} frames in {batch_counter + 1} batches.")
+    print(f"\n✅ Finished collecting and saving {num_frames} frames.")
 
 
-# --- Data Loading (Batched) ---
-def load_frames(load_dir="data/frames", num_frames_to_load=None, normalize=True):
+# --- Load All Frame Batches from Disk ---
+def load_frames_from_disk(load_dir="data/frames", max_frames_to_load=None):
     """
-    Loads frames from batched files.
+    Loads frame batches from a directory with a progress bar and an optional frame limit.
 
     Args:
-        load_dir (str): The directory where frame batches are saved.
-        num_frames_to_load (int, optional): The maximum number of frames to load.
-                                            If None, loads all frames.
-        normalize (bool): If True, normalizes pixel values to the [0, 1] range.
+        load_dir (str): The directory containing the saved frame batches.
+        max_frames_to_load (int, optional): The maximum number of frames to load.
+                                            If None, all frames are loaded. Defaults to None.
 
     Returns:
-        torch.Tensor: A tensor containing all the loaded frames.
+        torch.Tensor: A single tensor containing all loaded frames, or None if no files found.
     """
-    if not os.path.isdir(load_dir):
-        print(f"Error: Directory not found at {load_dir}")
-        return torch.empty(0)
+    print(f"Loading frames from '{load_dir}'...")
+    frame_files = sorted(pathlib.Path(load_dir).glob('batch_*.pt'), key=lambda p: int(p.stem.split('_')[1]))
 
-    print(f"Loading batched frames from '{load_dir}'...")
-    batch_files = sorted([f for f in os.listdir(load_dir) if f.startswith('batch_') and f.endswith('.pt')])
+    if not frame_files:
+        print(f"❌ Error: No 'batch_*.pt' files found in '{load_dir}'.")
+        return None
 
-    if not batch_files:
-        print("No 'batch_*.pt' files found in the directory.")
-        return torch.empty(0)
+    all_batches = []
+    total_loaded = 0
 
-    loaded_batches = []
-    for filename in tqdm(batch_files, desc="Loading batches"):
-        file_path = os.path.join(load_dir, filename)
-        try:
-            batch_tensor = torch.load(file_path)
-            loaded_batches.append(batch_tensor)
-        except Exception as e:
-            print(f"Could not load batch file {filename}: {e}")
+    # Wrap file iteration with tqdm for a progress bar
+    for file_path in tqdm(frame_files, desc="Loading batches"):
+        if max_frames_to_load is not None and total_loaded >= max_frames_to_load:
+            print(f"\nReached frame limit of {max_frames_to_load}. Stopping.")
+            break
 
-    if not loaded_batches:
-        return torch.empty(0)
+        batch = torch.load(file_path)
 
-    # Concatenate all batches into a single tensor
-    all_frames = torch.cat(loaded_batches, dim=0)
+        # If loading this batch would exceed the limit, slice it
+        if max_frames_to_load is not None:
+            remaining_needed = max_frames_to_load - total_loaded
+            if len(batch) > remaining_needed:
+                batch = batch[:remaining_needed]
 
-    # If a specific number of frames is requested, slice the tensor
-    if num_frames_to_load is not None:
-        all_frames = all_frames[:num_frames_to_load]
+        all_batches.append(batch)
+        total_loaded += len(batch)
 
-    # Convert to float, as models expect float tensors.
-    all_frames = all_frames.float()
+    if not all_batches:
+        print("No frames were loaded.")
+        return None
 
-    if normalize:
-        # Normalize pixel values to the [0, 1] range
-        all_frames = all_frames / 255.0
+    full_dataset = torch.cat(all_batches, dim=0)
+    print(f"\n✅ Successfully loaded a total of {len(full_dataset)} frames.")
+    return full_dataset
 
-    print(f"Finished loading {all_frames.shape[0]} frames.")
-    return all_frames
+
+# --- Debugging Function to Display a Frame ---
+def visualize_single_frame(frame_tensor, title="Sample Frame"):
+    """
+    Displays a single grayscale frame tensor using matplotlib.
+
+    Args:
+        frame_tensor (torch.Tensor): A single frame tensor with shape (1, H, W).
+        title (str): The title for the plot.
+    """
+    if not isinstance(frame_tensor, torch.Tensor) or frame_tensor.dim() != 3:
+        print("Error: Input must be a 3D PyTorch tensor of shape (1, H, W).")
+        return
+
+    # Remove channel dimension (1, H, W) -> (H, W) and convert to numpy
+    img_np = frame_tensor.squeeze().cpu().numpy()
+
+    plt.figure(figsize=(4, 4))
+    plt.imshow(img_np, cmap='gray')
+    plt.title(title)
+    plt.axis('off')
+    plt.show()
 
 
 # --- Visualization ---
@@ -222,3 +223,14 @@ def get_vq_wrapper(env_instance):
         return current_env
     print("Warning: VaeEncodeWrapper not found in environment stack.")
     return None
+
+
+if __name__ == '__main__':
+    loaded_frames = load_frames_from_disk()
+    if loaded_frames is not None:
+        print(f"\nShape of the loaded dataset: {loaded_frames.shape}")
+
+        # --- Step 3: Use the debugging function to view a sample frame ---
+        print("Displaying a sample frame for verification...")
+        # Display the 100th frame from the loaded dataset
+        visualize_single_frame(loaded_frames[100], title="Frame #100")
