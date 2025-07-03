@@ -1,3 +1,4 @@
+import os
 import pathlib
 
 import gymnasium as gym
@@ -7,6 +8,7 @@ from huggingface_sb3 import load_from_hub
 from matplotlib import pyplot as plt
 from stable_baselines3 import PPO
 from torch.utils.data import Dataset
+from tqdm import tqdm
 
 from utils import LatentStateWrapperVQ, preprocess_observation
 
@@ -27,60 +29,134 @@ class FrameDataset(Dataset):
         return self.data[idx]
 
 
-# --- Data Collection --- (uses pre-trained SB3 PPO agent)
-def collect_frames(num_frames):
-    print(f"Collecting {num_frames} frames for VAE training...")
+# --- Data Collection and Saving ---
+def collect_and_save_frames(num_frames, save_dir="data/frames"):
+    """
+    Collects frames from the CarRacing environment using a pre-trained agent
+    and saves them individually to disk.
 
+    Args:
+        num_frames (int): The total number of frames to collect and save.
+        save_dir (str): The directory where frames will be saved.
+    """
+    print(f"Collecting and saving {num_frames} frames to '{save_dir}'...")
+
+    # --- Create Save Directory ---
+    if not os.path.exists(save_dir):
+        os.makedirs(save_dir)
+        print(f"Created directory: {save_dir}")
+
+    # --- Load Model ---
     model_id = "Pyro-X2/CarRacingSB3"
     model_filename = "ppo-CarRacing-v3.zip"
-
     try:
-        checkpoint = load_from_hub(model_id, model_filename)  # Load the model from Hugging Face Hub
+        # Load the model from Hugging Face Hub
+        checkpoint = load_from_hub(model_id, model_filename)
     except Exception as e:
         print(f"Failed to load model from Hugging Face Hub: {e}")
         exit(1)
 
-    # Create the environment
+    # --- Environment and Model Setup ---
     env = gym.make("CarRacing-v3", render_mode="rgb_array")
-    # Load the model
     model = PPO.load(checkpoint, env=env)
 
-    frames = []
     observation, info = env.reset()
+    frames_collected = 0
 
-    # Skip the first 50 frames to leave out initial zooming in
+    # --- Initial Frame Skip ---
+    # Skip the first 50 frames to leave out the initial zooming-in animation.
     for _ in range(50):
-        action, _state = model.predict(observation, deterministic=True)
-        observation, reward, terminated, truncated, info = env.step(action)
+        action, _ = model.predict(observation, deterministic=True)
+        observation, _, terminated, truncated, _ = env.step(action)
+        if terminated or truncated:
+            observation, _ = env.reset()
 
-    # Collect frames
-    frame_skip = 4  # Skip frames to reduce data size
-    frame_count = 0
-    for i in range(num_frames * frame_skip):
-        action, _state = model.predict(observation, deterministic=True)
+    # --- Frame Collection Loop ---
+    print("Starting frame collection loop...")
+    pbar = tqdm(total=num_frames, desc="Collecting frames")
+    while frames_collected < num_frames:
+        action, _ = model.predict(observation, deterministic=True)
+        observation, _, terminated, truncated, _ = env.step(action)
 
-        observation, reward, terminated, truncated, info = env.step(action)
-        if i % frame_skip == 0:  # Collect every 4th frame
+        # Preprocess and save the frame
+        processed_frame = preprocess_observation(observation)
+        # Convert to tensor and change format from HxWxC to CxHxW
+        frame_tensor = torch.tensor(processed_frame, dtype=torch.uint8).permute(2, 0, 1)
 
-            if observation is not None:
-                processed_frame = preprocess_observation(observation)
-                processed_frame = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0,
-                                                                                             1)  # Convert to CxHxW format
-                frames.append(processed_frame)
-                frame_count += 1
+        # Save the individual frame tensor to disk
+        save_path = os.path.join(save_dir, f"frame_{frames_collected:06d}.pt")
+        torch.save(frame_tensor, save_path)
 
-            if frame_count % 500 == 0 and frame_count > 0:
-                print(f"  Collected {frame_count}/{num_frames} frames...")
+        frames_collected += 1
+        pbar.update(1)
+
         if terminated or truncated:
             observation, info = env.reset()
-            # Skip the first 50 frames to leave out initial zooming in
+            # Skip zoom-in on reset
             for _ in range(50):
-                action, _state = model.predict(observation, deterministic=True)
-                observation, reward, terminated, truncated, info = env.step(action)
+                action, _ = model.predict(observation, deterministic=True)
+                observation, _, terminated, truncated, _ = env.step(action)
+                if terminated or truncated:
+                    observation, _ = env.reset()
 
+    pbar.close()
     env.close()
-    print(f"Finished collecting {len(frames)} frames.")
-    return torch.stack(frames)
+    print(f"Finished collecting and saving {frames_collected} frames in '{save_dir}'.")
+
+
+# --- Data Loading ---
+def load_frames(load_dir="data/frames", num_frames_to_load=None, normalize=False):
+    """
+    Loads frames from disk that were saved by collect_and_save_frames.
+
+    Args:
+        load_dir (str): The directory where frames are saved.
+        num_frames_to_load (int, optional): The maximum number of frames to load.
+                                            If None, loads all frames in the directory.
+        normalize (bool): If True, converts frames to float and normalizes to [0, 1].
+
+    Returns:
+        torch.Tensor: A tensor containing all the loaded frames, stacked together.
+    """
+    if not os.path.isdir(load_dir):
+        print(f"Error: Directory not found at {load_dir}")
+        return torch.empty(0)
+
+    print(f"Loading frames from '{load_dir}'...")
+    # Get a sorted list of all frame files
+    frame_files = sorted([f for f in os.listdir(load_dir) if f.endswith('.pt')])
+
+    if not frame_files:
+        print("No '.pt' files found in the directory.")
+        return torch.empty(0)
+
+    # Determine how many frames to load
+    if num_frames_to_load is not None:
+        frame_files = frame_files[:num_frames_to_load]
+
+    loaded_frames = []
+    # Use tqdm for a progress bar
+    for filename in tqdm(frame_files, desc="Loading frames"):
+        file_path = os.path.join(load_dir, filename)
+        try:
+            frame_tensor = torch.load(file_path)
+            loaded_frames.append(frame_tensor)
+        except Exception as e:
+            print(f"Could not load file {filename}: {e}")
+
+    if not loaded_frames:
+        return torch.empty(0)
+
+    # Stack all loaded frames into a single tensor
+    stacked_frames = torch.stack(loaded_frames)
+    stacked_frames = stacked_frames.float()
+
+    if normalize:
+        # normalize pixel values to the [0, 1] range
+        stacked_frames = stacked_frames / 255.0
+
+    print(f"Finished loading {len(loaded_frames)} frames.")
+    return stacked_frames
 
 
 # --- Visualization ---

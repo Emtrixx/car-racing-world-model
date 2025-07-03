@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from utils import DEVICE, ENV_NAME, VQ_VAE_CHECKPOINT_FILENAME
-from utils_vae import FrameDataset, visualize_reconstruction, collect_frames
+from utils_vae import FrameDataset, visualize_reconstruction, collect_and_save_frames, load_frames
 from vq_conv_vae import VQVAE
 
 
@@ -62,23 +62,31 @@ if __name__ == "__main__":
 
     parser = argparse.ArgumentParser(description="Train a VQ-VAE on collected frames from the environment.")
     parser.add_argument("--config", type=str, default="default", help="Configuration name to use (default/test)")
+    parser.add_argument("--collect", action="store_true",
+                        )
     args = parser.parse_args()
 
     # Load configuration
     config = get_config(args.config)
 
-    # 1. Collect Data
-    frame_data = collect_frames(config["num_frames_collect"])  # Use transform from utils
+    # Collect Data if needed
+    if args.collect:
+        # This will collect frames and save them to the default directory
+        print(f"Collecting {config['num_frames_collect']} frames from the environment...")
+        collect_and_save_frames(config["num_frames_collect"])
 
-    # 2. Create Dataset and DataLoader
+    # Load frames from disk
+    frame_data = load_frames()
+
+    # Create Dataset and DataLoader
     dataset = FrameDataset(frame_data)
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True)
 
-    # 3. Initialize Model and Optimizer
+    # Initialize Model and Optimizer
     model = VQVAE(in_channels=1).to(DEVICE)  # Uses constants from utils implicitly via models.py
     optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
 
-    # 4. Training Loop
+    # Training Loop
     start_time = time.time()
     for epoch in range(1, config["epochs"] + 1):
         train_vqvae_epoch(model, dataloader, optimizer, epoch, DEVICE)
@@ -87,7 +95,7 @@ if __name__ == "__main__":
     end_time = time.time()
     print(f"\nVAE Training finished in {end_time - start_time:.2f} seconds.")
 
-    # 5. Save the trained model
+    # Save the trained model
     try:
         torch.save(model.state_dict(), VQ_VAE_CHECKPOINT_FILENAME)  # Use path from utils
         print(f"Model saved to {VQ_VAE_CHECKPOINT_FILENAME}")

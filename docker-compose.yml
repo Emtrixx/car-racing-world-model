@@ -8,6 +8,7 @@ services:
       - ./checkpoints:/app/checkpoints
       - ./logs:/app/logs
       - ./images:/app/images
+      - ./data:/app/data
 
 
     # docker compose run app python train_world_model_parallel.py --config test
