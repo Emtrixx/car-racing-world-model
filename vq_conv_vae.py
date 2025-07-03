@@ -8,9 +8,9 @@ IMG_CHANNELS = 1  # For grayscale images
 IMG_SIZE = 64
 # VQ-VAE Hyperparameters
 # The embedding_dim must match the output channels of the Encoder
-EMBEDDING_DIM = 256
+EMBEDDING_DIM = 128
 # The number of discrete codes in the codebook (K)
-NUM_EMBEDDINGS = 512
+NUM_EMBEDDINGS = 256
 # The commitment cost is a weighting factor for the commitment loss term
 COMMITMENT_COST = 0.25
 
