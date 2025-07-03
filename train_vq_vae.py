@@ -8,7 +8,7 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from utils import DEVICE, ENV_NAME, VQ_VAE_CHECKPOINT_FILENAME
-from utils_vae import FrameDataset, visualize_reconstruction, collect_and_save_frames, load_frames
+from utils_vae import FrameDataset, visualize_reconstruction, collect_and_save_frames, load_frames_from_disk
 from vq_conv_vae import VQVAE
 
 
@@ -76,7 +76,7 @@ if __name__ == "__main__":
         collect_and_save_frames(config["num_frames_collect"])
 
     # Load frames from disk
-    frame_data = load_frames()
+    frame_data = load_frames_from_disk()
 
     # Create Dataset and DataLoader
     dataset = FrameDataset(frame_data)
