@@ -67,8 +67,8 @@ class FrameStackWrapper(gym.Wrapper):
         self.frames = deque(maxlen=num_stack)
         original_shape = self.env.observation_space.shape
         self.observation_space = spaces.Box(
-            low=0,
-            high=255,
+            low=-np.inf,
+            high=np.inf,
             shape=(num_stack, *original_shape),  # (num_stack, H, W, C)
             dtype=self.env.observation_space.dtype
         )
@@ -219,6 +219,51 @@ class LatentStateWrapperVQ(gym.ObservationWrapper):
         return concatenated_quantized_tensor.cpu().numpy()
 
 
+class VaeEncodeWrapper(gym.ObservationWrapper):
+    def __init__(self, env, vq_vae_model: torch.nn.Module, device: torch.device, save_latent_for_render=False):
+        """
+        A wrapper that encodes the raw observation from the environment into a quantized latent vector
+        using a VQ-VAE model. The observation space is transformed to a single flattened latent vector.
+        """
+        super().__init__(env)
+        self.vq_vae_model = vq_vae_model.to(device).eval()
+        self.device = device
+        self.save_latent_for_render = save_latent_for_render
+
+        # Determine the shape of the flattened quantized output for a single frame
+        dummy_input = torch.randn(1, CHANNELS, IMG_SIZE, IMG_SIZE).to(self.device)
+        with torch.no_grad():
+            z_continuous = self.vq_vae_model.encoder(dummy_input)
+            _, quantized_sample, _ = self.vq_vae_model.vq_layer(z_continuous)
+
+        # The new observation space is a single flattened latent vector
+        flat_latent_shape = (np.prod(quantized_sample.shape[1:]),)
+        self.observation_space = spaces.Box(
+            low=-np.inf, high=np.inf,
+            shape=flat_latent_shape,
+            dtype=np.float32
+        )
+
+        self.last_quantized_latent_for_render = None  # For rendering purposes
+
+    def observation(self, obs_raw_numpy):
+        # Preprocess the raw frame
+        processed_frame = preprocess_observation(obs_raw_numpy)
+        processed_tensor = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0, 1)  # HWC to CHW
+        processed_tensor = processed_tensor.unsqueeze(0).to(self.device)  # Add batch dim
+
+        # Encode to get the quantized latent vector
+        with torch.no_grad():
+            z_continuous = self.vq_vae_model.encoder(processed_tensor)
+            _, quantized, _ = self.vq_vae_model.vq_layer(z_continuous)
+
+        if self.save_latent_for_render:
+            self.last_quantized_latent_for_render = quantized.clone()  # Store for rendering
+
+        # Flatten and return as a numpy array
+        return quantized.reshape(-1).cpu().numpy()
+
+
 # For SB3
 class ActionTransformWrapper(gym.ActionWrapper):
     def __init__(self, env):
@@ -326,7 +371,7 @@ def make_env_sb3(
     # --- Action Wrappers ---
     # ActionTransformWrapper:
     #    - Agent outputs actions in [-1, 1]^3.
-    #    - This wrapper transforms them to CarRacing's native ranges ([~,ガス,ブレーキ]).
+    #    - This wrapper transforms them to CarRacing's native ranges
     #    - It defines self.action_space = Box([-1, 1]^3, ...) which SB3 will see.
     env = ActionTransformWrapper(env)
 
@@ -340,12 +385,11 @@ def make_env_sb3(
     # FrameSkip: Skips frames to reduce data size and speed up training and inference.
     env = FrameSkip(env, skip=4)  # Skip every 4th frame
 
-    # FrameStackWrapper: Stacks raw frames.
-    env = FrameStackWrapper(env, frame_stack_num)
+    # VaeEncodeWrapper: Preprocess and encode raw frame into quantized latent vectors using VQ-VAE and returns a single flattened latent vector
+    env = VaeEncodeWrapper(env, vq_vae_model_instance, device_for_vae)
 
-    # LatentStateWrapper: Encodes stacked frames into quantized latent vectors using VQ-VAE.
-    env = LatentStateWrapperVQ(env, vq_vae_model_instance,
-                               frame_stack_num, device_for_vae)
+    # FrameStackWrapper: Stacks the last N observations (quantized latent vectors) to create a temporal context.
+    env = FrameStackWrapper(env, frame_stack_num)
 
     # --- Reward Wrapper ---
     # NormalizeReward: Normalizes rewards.
