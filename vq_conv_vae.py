@@ -103,17 +103,29 @@ class Decoder(nn.Module):
 
     def __init__(self, in_channels, out_channels):
         super(Decoder, self).__init__()
-        self.convT1 = nn.ConvTranspose2d(in_channels, 128, kernel_size=4, stride=2, padding=1)
-        self.convT2 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)
-        self.convT3 = nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1)
-        self.convT4 = nn.ConvTranspose2d(32, out_channels, kernel_size=4, stride=2, padding=1)
+        self.up_conv1 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(in_channels, 128, kernel_size=3, stride=1, padding=1)
+        )
+        self.up_conv2 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(128, 64, kernel_size=3, stride=1, padding=1)
+        )
+        self.up_conv3 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(64, 32, kernel_size=3, stride=1, padding=1)
+        )
+        self.up_conv4 = nn.Sequential(
+            nn.Upsample(scale_factor=2, mode='bilinear', align_corners=False),
+            nn.Conv2d(32, out_channels, kernel_size=3, stride=1, padding=1)
+        )
 
     def forward(self, x):
-        x = F.relu(self.convT1(x))
-        x = F.relu(self.convT2(x))
-        x = F.relu(self.convT3(x))
+        x = F.relu(self.up_conv1(x))
+        x = F.relu(self.up_conv2(x))
+        x = F.relu(self.up_conv3(x))
         # Use sigmoid to ensure output pixels are in the [0, 1] range
-        return torch.sigmoid(self.convT4(x))
+        return torch.sigmoid(self.up_conv4(x))
 
 
 class VQVAE(nn.Module):

@@ -29,7 +29,7 @@ class FrameDataset(Dataset):
         return self.data[idx]
 
 
-def collect_and_save_frames(num_frames, save_dir="data/frames", batch_size=500, frame_skip=4):
+def collect_and_save_frames(num_frames, save_dir="data/frames", batch_size=1000, frame_skip=4):
     """
     Collects frames using a pre-trained agent and saves them to disk in batches.
 
