@@ -149,7 +149,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
     # Callbacks
     checkpoint_callback = CheckpointCallback(
         save_freq=max(config["save_freq"] // config["num_envs"], 1),  # Convert total steps to per-env steps
-        save_path=str(SB3_SAVE_DIR / f"sb3_{config_name}_{ENV_NAME.lower()}"),
+        save_path=str(SB3_SAVE_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}"),
         name_prefix="ppo_model"
     )
 
@@ -161,8 +161,8 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
 
     eval_callback = EvalCallback(
         eval_env,
-        best_model_save_path=str(SB3_SAVE_DIR / f"sb3_{config_name}_{ENV_NAME.lower()}_best"),
-        log_path=str(SB3_LOG_DIR / f"sb3_{config_name}_{ENV_NAME.lower()}_eval"),
+        best_model_save_path=str(SB3_SAVE_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}_best"),
+        log_path=str(SB3_LOG_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}_eval"),
         eval_freq=max(config["eval_freq"] // config["num_envs"], 1),
         n_eval_episodes=config["n_eval_episodes"],
         deterministic=True,
@@ -191,7 +191,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
         max_grad_norm=config["max_grad_norm"],
         target_kl=config["target_kl"],
         policy_kwargs=config["policy_kwargs"],
-        tensorboard_log=str(SB3_LOG_DIR / f"sb3_{config_name}_{ENV_NAME.lower()}"),
+        tensorboard_log=str(SB3_LOG_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}"),
         verbose=1,
         seed=config["seed"],
         device=ppo_device  # SB3 will handle moving model to this device
@@ -226,7 +226,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
         traceback.print_exc()
     finally:
         # Save the final model
-        final_model_path = SB3_SAVE_DIR / f"sb3_{config_name}_{ENV_NAME.lower()}_final.zip"
+        final_model_path = SB3_SAVE_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}_final.zip"
         model.save(final_model_path)
         print(f"Final model saved to {final_model_path}")
 

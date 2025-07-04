@@ -12,10 +12,6 @@ from tqdm import tqdm
 
 from utils import preprocess_observation, VaeEncodeWrapper
 
-# SB3_MODEL_FILENAME = f"sb3_default_carracing-v3_best/best_model.zip"  # best
-SB3_MODEL_FILENAME = f"sb3_default_carracing-v3/ppo_model_4249320_steps.zip"  # one
-SB3_MODEL_PATH = pathlib.Path("checkpoints") / SB3_MODEL_FILENAME
-
 
 # --- Dataset Class ---
 class FrameDataset(Dataset):
