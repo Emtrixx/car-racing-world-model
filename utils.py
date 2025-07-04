@@ -1,4 +1,5 @@
 # utils.py
+import os
 from collections import deque
 
 import cv2
@@ -6,8 +7,11 @@ import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
+from matplotlib import pyplot as plt
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
+from torch import nn
+from torch.optim import Adam
 
 # --- Configuration Constants ---
 ENV_NAME = "CarRacing-v3"
@@ -241,9 +245,6 @@ def make_env_sb3(
     return env
 
 
-print(f"Utils loaded. Using device: {DEVICE}")
-
-
 def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
     """
     Creates an environment instance for SubprocVecEnv or DummyVecEnv.
@@ -266,3 +267,218 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
     # especially when using DummyVecEnv or if RecordEpisodeStatistics is not used inside make_env_sb3.
     env = Monitor(env)
     return env
+
+
+class WorldModelDataCollector:
+    """
+    Collects training data for the World Model by running a pretrained policy.
+    """
+
+    def __init__(self, env, ppo_agent, vq_vae_model, device):
+        self.env = env
+        self.ppo_agent = ppo_agent
+        self.vq_vae_model = vq_vae_model
+        self.device = device
+        # Use a simple deque as a replay buffer
+        self.replay_buffer = deque(maxlen=50_000)
+
+    def get_vq_indices(self, obs_raw_numpy: np.ndarray) -> torch.Tensor:
+        """
+        Helper function to preprocess a raw observation and get VQ-VAE token indices.
+
+        Args:
+            obs_raw_numpy (np.ndarray): A single raw frame from the environment.
+
+        Returns:
+            torch.Tensor: A tensor of token indices with shape [1, 16].
+        """
+        # Preprocess the raw observation
+        processed_frame = preprocess_observation(obs_raw_numpy)
+
+        # Convert to tensor, add batch dim, and send to device
+        processed_tensor = torch.tensor(processed_frame, dtype=torch.float32, device=self.device)
+        processed_tensor = processed_tensor.permute(2, 0, 1)  # to CHW
+        processed_tensor = processed_tensor.unsqueeze(0)  # to BCHW
+
+        # Encode to get the token indices from the VQ-VAE
+        with torch.no_grad():
+            z_continuous = self.vq_vae_model.encoder(processed_tensor)
+            _, _, indices = self.vq_vae_model.vq_layer(z_continuous)
+
+        return indices.view(1, -1)  # Flatten to [1, 16]
+
+    def collect_steps(self, num_steps: int):
+        """
+        Runs the PPO agent in the environment for a given number of steps.
+
+        Args:
+            num_steps (int): The total number of steps to collect.
+        """
+        print(f"Collecting {num_steps} steps of experience...")
+        obs, _ = self.env.reset()
+
+        for step in range(num_steps):
+            # Get action from the pretrained PPO agent
+            action, _ = self.ppo_agent.predict(obs, deterministic=False)
+
+            # Step the environment with the action
+            next_obs, reward, done, truncated, info = self.env.step(action)
+
+            # Get the ground truth token indices for the next observation
+            next_state_tokens = self.get_vq_indices(next_obs)
+
+            # Store the relevant data tuple for world model training
+            # We store the action, reward, done flag, and the tokenized *next* state.
+            self.replay_buffer.append({
+                "action": torch.tensor(action, dtype=torch.float32),
+                "reward": torch.tensor([reward], dtype=torch.float32),
+                "done": torch.tensor([done], dtype=torch.float32),
+                "next_tokens": next_state_tokens.squeeze(0).to(torch.int64)  # Store as [16]
+            })
+
+            # Update observation and reset if the episode is over
+            obs = next_obs
+            if done or truncated:
+                obs, _ = self.env.reset()
+                print(f"Episode finished. Buffer size: {len(self.replay_buffer)}")
+
+        print(f"Collection complete. Final buffer size: {len(self.replay_buffer)}")
+
+
+class WorldModelTrainer:
+    """Handles the training loop for the WorldModelGRU."""
+
+    def __init__(self, world_model, vq_vae_model, config):
+        self.world_model = world_model
+        self.vq_vae_model = vq_vae_model  # Needed for weight copying
+        self.config = config
+        self.device = config['device']
+
+        # Define optimizers and loss functions
+        self.optimizer = Adam(self.world_model.parameters(), lr=config['learning_rate'])
+        self.token_loss_fn = nn.CrossEntropyLoss()
+        self.reward_loss_fn = nn.MSELoss()
+        self.done_loss_fn = nn.BCEWithLogitsLoss()
+
+        # For logging and plotting
+        self.loss_history = {'total': [], 'token': [], 'reward': [], 'done': []}
+        self.steps_history = []
+
+    def plot_losses(self):
+        """Plots the collected loss history and saves it to a file."""
+        print("Plotting training losses...")
+        plt.figure(figsize=(12, 8))
+
+        # Plot each loss component
+        for loss_name, loss_values in self.loss_history.items():
+            plt.plot(self.steps_history, loss_values, label=loss_name.capitalize() + ' Loss')
+
+        plt.title(f"World Model Training Loss (SeqLen {self.config['sequence_length']})")
+        plt.xlabel("Training Steps")
+        plt.ylabel("Loss")
+        plt.legend()
+        plt.grid(True)
+
+        # Ensure the save directory exists
+        save_dir = self.config.get("plot_save_dir", "images")
+        os.makedirs(save_dir, exist_ok=True)
+
+        save_path = os.path.join(save_dir, "world_model_loss_plot.png")
+        plt.savefig(save_path)
+        print(f"Saved loss plot to {save_path}")
+        plt.close()
+
+    def train(self, dataloader, num_epochs):
+        """Main training loop that iterates over a DataLoader."""
+        print("Starting world model training...")
+        if isinstance(self.world_model, nn.DataParallel):
+            self.world_model.module.token_embedding.weight.data.copy_(
+                self.vq_vae_model.vq_layer.embedding.weight.data
+            )
+        else:
+            self.world_model.token_embedding.weight.data.copy_(
+                self.vq_vae_model.vq_layer.embedding.weight.data
+            )
+        print("Copied VQ-VAE weights to world model token embedding.")
+
+        self.world_model.train()
+
+        # Initialize step counters
+        global_step = 0
+        total_train_steps = len(dataloader) * num_epochs
+        log_freq = self.config.get('log_freq', 100)
+        checkpoint_freq = self.config.get('checkpoint_freq', 1000)
+
+        for epoch in range(1, num_epochs + 1):
+            for batch_idx, batch in enumerate(dataloader):
+                global_step += 1
+
+                for key in batch:
+                    batch[key] = batch[key].to(self.device)
+
+                # Initialize hidden state for the start of the sequences
+                batch_size = batch['actions'].size(0)
+                hidden_state = self.world_model.get_initial_hidden_state(batch_size, self.device) \
+                    if not isinstance(self.world_model, nn.DataParallel) \
+                    else self.world_model.module.get_initial_hidden_state(batch_size, self.device)
+
+                total_token_loss, total_reward_loss, total_done_loss = 0, 0, 0
+                sequence_length = batch['actions'].size(1)
+
+                for t in range(sequence_length):
+                    action_t = batch['actions'][:, t]
+                    ground_truth_tokens_t = batch['next_tokens'][:, t]
+                    ground_truth_reward_t = batch['rewards'][:, t]
+                    ground_truth_done_t = batch['dones'][:, t]
+
+                    pred_logits, pred_reward, pred_done_logits, next_hidden_state = self.world_model(
+                        action_t, hidden_state, ground_truth_tokens=ground_truth_tokens_t
+                    )
+
+                    b, h, w, c = pred_logits.shape
+                    token_loss = self.token_loss_fn(
+                        pred_logits.reshape(b * h * w, c),
+                        ground_truth_tokens_t.reshape(b * h * w))
+                    reward_loss = self.reward_loss_fn(pred_reward, ground_truth_reward_t)
+                    done_loss = self.done_loss_fn(pred_done_logits, ground_truth_done_t)
+
+                    total_token_loss += token_loss
+                    total_reward_loss += reward_loss
+                    total_done_loss += done_loss
+                    hidden_state = next_hidden_state
+
+                avg_token_loss = total_token_loss / sequence_length
+                avg_reward_loss = total_reward_loss / sequence_length
+                avg_done_loss = total_done_loss / sequence_length
+                total_loss = avg_token_loss + avg_reward_loss + avg_done_loss
+
+                self.optimizer.zero_grad()
+                total_loss.backward()
+                nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
+                self.optimizer.step()
+
+                # Logging
+                if global_step % log_freq == 0:
+                    print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
+                          f"Total Loss: {total_loss.item():.4f} | "
+                          f"Token Loss: {avg_token_loss.item():.4f} | "
+                          f"Reward Loss: {avg_reward_loss.item():.4f} | "
+                          f"Done Loss: {avg_done_loss.item():.4f}")
+
+                    # Store loss values for plotting
+                    self.loss_history['total'].append(total_loss.item())
+                    self.loss_history['token'].append(avg_token_loss.item())
+                    self.loss_history['reward'].append(avg_reward_loss.item())
+                    self.loss_history['done'].append(avg_done_loss.item())
+                    self.steps_history.append(global_step)
+
+                # Save model checkpoint
+                if global_step > 0 and global_step % checkpoint_freq == 0:
+                    model_state_to_save = self.world_model.module.state_dict() if isinstance(self.world_model,
+                                                                                             nn.DataParallel) else self.world_model.state_dict()
+                    torch.save(model_state_to_save, f"world_model_step_{global_step}.pth")
+                    print(f"Saved model checkpoint at step {global_step}.")
+
+        print("Training finished.")
+        # Plot the final losses
+        self.plot_losses()
