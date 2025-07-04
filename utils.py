@@ -1,21 +1,17 @@
 # utils.py
+from collections import deque
+
 import cv2
+import gymnasium as gym
+import numpy as np
 import torch
+from gymnasium import spaces
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
-import gymnasium as gym
-from gymnasium import spaces
-from collections import deque
-import numpy as np
-
-from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
 
 # --- Configuration Constants ---
 ENV_NAME = "CarRacing-v3"
 WM_HIDDEN_DIM = 256  # Hidden dimension for the World Model MLP
-IMG_SIZE = 64  # Resize frames
-# CHANNELS = 3  # RGB channels
-CHANNELS = 1  # Grayscale channel
 NUM_STACK = 4  # Number of latent vectors to stack
 LATENT_DIM = 32  # Size of the latent space vector z
 ACTION_DIM = 3  # CarRacing: Steering, Gas, Brake
@@ -67,9 +63,9 @@ class FrameStackWrapper(gym.Wrapper):
         self.frames = deque(maxlen=num_stack)
         original_shape = self.env.observation_space.shape
         self.observation_space = spaces.Box(
-            low=-np.inf,
-            high=np.inf,
-            shape=(num_stack, *original_shape),  # (num_stack, H, W, C)
+            low=0.0,
+            high=1.0,
+            shape=(num_stack, *original_shape),  # (num_stack, height, width, channels)
             dtype=self.env.observation_space.dtype
         )
 
@@ -89,109 +85,28 @@ class FrameStackWrapper(gym.Wrapper):
         return self._get_observation(), reward, terminated, truncated, info
 
 
-class ActionClipWrapper(gym.ActionWrapper):
+class PreprocessWrapper(gym.ObservationWrapper):
     """
-    A wrapper that clips the actions passed to the environment to ensure they
-    are within the valid action space bounds.
-
-    This is particularly useful for continuous action spaces where the policy
-    (e.g., a neural network) might output values slightly outside the
-    defined [-1, 1] or other ranges.
+    A wrapper that preprocesses the raw observation from the CarRacing-v3 environment
     """
 
-    def __init__(self, env: gym.Env):
-        """
-        Initializes the ActionClipWrapper.
-
-        Args:
-            env: The environment to wrap.
-        """
+    def __init__(self, env):
         super().__init__(env)
-        # The action space itself is not changed by this wrapper.
-        # We rely on self.action_space (which is self.env.action_space)
-        # to provide the low and high bounds for clipping.
-        # Ensure the environment has a Box action space for clipping to make sense.
-        if not isinstance(self.env.action_space, spaces.Box):
-            print(f"Warning: ActionClipWrapper is typically used with Box action spaces. "
-                  f"The current action space is {self.env.action_space}.")
+        dummy_input = np.zeros((93, 93, 3), dtype=np.uint8)  # Dummy input for preprocessing
+        processed_frame = preprocess_observation(dummy_input)
+        shape = processed_frame.shape
 
-    def action(self, action: np.ndarray) -> np.ndarray:
-        """
-        Clips the given action to the bounds of the environment's action space.
-
-        Args:
-            action: The action to be clipped. Expected to be a NumPy array
-                    compatible with the environment's action space.
-
-        Returns:
-            The clipped action as a NumPy array.
-        """
-        # self.action_space refers to the underlying environment's action space
-        # as gym.ActionWrapper does not modify it by default.
-        if isinstance(self.action_space, spaces.Box):
-            # Ensure action is a numpy array if it's not already (e.g. if coming from PyTorch tensor)
-            # However, typically the agent framework would convert to numpy before env.step()
-            # For robustness, we can ensure it here if there's doubt.
-            # if not isinstance(action, np.ndarray):
-            #     action = np.array(action) # This line can be risky if types are unexpected
-
-            clipped_action = np.clip(
-                action,
-                self.action_space.low,
-                self.action_space.high
-            )
-            return clipped_action
-        else:
-            # This case should ideally not be reached if wrappers are correctly stacked.
-            # If action_space is not Box, clipping is ill-defined.
-            print(
-                f"Warning: Action space for ActionClipWrapper is not Box ({self.action_space}), returning action unclipped.")
-            return action
-
-
-class VaeEncodeWrapper(gym.ObservationWrapper):
-    def __init__(self, env, vq_vae_model: torch.nn.Module, device: torch.device, save_latent_for_render=False):
-        """
-        A wrapper that encodes the raw observation from the environment into a quantized latent vector
-        using a VQ-VAE model. The observation space is transformed to a single flattened latent vector.
-        """
-        super().__init__(env)
-        self.vq_vae_model = vq_vae_model.to(device).eval()
-        self.device = device
-        self.save_latent_for_render = save_latent_for_render
-
-        # Determine the shape of the flattened quantized output for a single frame
-        dummy_input = torch.randn(1, CHANNELS, IMG_SIZE, IMG_SIZE).to(self.device)
-        with torch.no_grad():
-            z_continuous = self.vq_vae_model.encoder(dummy_input)
-            _, quantized_sample, _ = self.vq_vae_model.vq_layer(z_continuous)
-
-        # The new observation space is a single flattened latent vector
-        flat_latent_shape = (np.prod(quantized_sample.shape[1:]),)
         self.observation_space = spaces.Box(
-            low=-np.inf, high=np.inf,
-            shape=flat_latent_shape,
+            low=0.0,
+            high=1.0,
+            shape=shape,  # (height, width, channels)
             dtype=np.float32
         )
-
-        self.last_quantized_latent_for_render = None  # For rendering purposes
 
     def observation(self, obs_raw_numpy):
         # Preprocess the raw frame
         processed_frame = preprocess_observation(obs_raw_numpy)
-        processed_tensor = torch.tensor(processed_frame, dtype=torch.float32).permute(2, 0, 1)  # HWC to CHW
-        processed_tensor = processed_tensor.unsqueeze(0).to(self.device)  # Add batch dim
-
-        # Encode to get the quantized latent vector
-        with torch.no_grad():
-            z_continuous = self.vq_vae_model.encoder(processed_tensor)
-            _, quantized, _ = self.vq_vae_model.vq_layer(z_continuous)
-
-        if self.save_latent_for_render:
-            self.last_quantized_latent_for_render = quantized.clone()  # Store for rendering
-
-        # Flatten and return as a numpy array
-        return quantized.reshape(-1).cpu().numpy()
+        return processed_frame
 
 
 # For SB3
@@ -267,13 +182,10 @@ class FrameSkip(gym.Wrapper):
 
 def make_env_sb3(
         env_id: str,
-        vq_vae_model_instance: torch.nn.Module,  # Pass the loaded VAE model
         frame_stack_num: int,
-        device_for_vae: torch.device,
         gamma: float,
         render_mode: str = None,
         max_episode_steps: int = None,
-        save_latent_for_render: bool = False,
         seed: int = 0  # Seed for reproducibility
 ):
     """
@@ -281,8 +193,6 @@ def make_env_sb3(
     The VAE model instance must be passed.
     """
     # Create the base environment
-    # For Gymnasium 0.26+, max_episode_steps is part of gym.make()
-    # For older versions, it might be applied via a TimeLimit wrapper later if not None.
     env_kwargs = {}
     if render_mode:
         env_kwargs['render_mode'] = render_mode
@@ -306,18 +216,12 @@ def make_env_sb3(
     #    - It defines self.action_space = Box([-1, 1]^3, ...) which SB3 will see.
     env = ActionTransformWrapper(env)
 
-    # ActionClipWrapper:
-    #    - Clips actions received from the agent (which are in [-1, 1]^3 as per ActionTransformWrapper's space)
-    #    - This ensures actions are strictly within the [-1, 1]^3 bounds before transformation by ActionTransformWrapper.
-    #    - The ActionTransformWrapper then does its own clipping to the *underlying* environment's true bounds.
-    env = ActionClipWrapper(env)  # This will clip to the action_space defined by ActionTransformWrapper
-
     # --- Observation Wrappers ---
     # FrameSkip: Skips frames to reduce data size and speed up training and inference.
     env = FrameSkip(env, skip=4)  # Skip every 4th frame
 
     # VaeEncodeWrapper: Preprocess and encode raw frame into quantized latent vectors using VQ-VAE and returns a single flattened latent vector
-    env = VaeEncodeWrapper(env, vq_vae_model_instance, device_for_vae, save_latent_for_render)
+    env = PreprocessWrapper(env)
 
     # FrameStackWrapper: Stacks the last N observations (quantized latent vectors) to create a temporal context.
     env = FrameStackWrapper(env, frame_stack_num)
@@ -338,8 +242,6 @@ def make_env_sb3(
 
 
 print(f"Utils loaded. Using device: {DEVICE}")
-print(f"VQ-VAE Path: {VQ_VAE_CHECKPOINT_FILENAME}")
-print(f"WM Path: {WM_CHECKPOINT_FILENAME}")
 
 
 def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
@@ -352,30 +254,9 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
 
     set_random_seed(seed + rank)  # Ensure each environment has a different seed
 
-    vae_device_for_subprocess = torch.device(DEVICE_STR)
-
-    # print(f"Rank {rank}: Attempting to load VAE on device: {vae_device_for_subprocess}")
-
-    vq_vae_model = VQVAE(in_channels=CHANNELS, embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS).to(
-        vae_device_for_subprocess)
-    vq_vae_checkpoint_path = VQ_VAE_CHECKPOINT_FILENAME
-
-    try:
-        vq_vae_model.load_state_dict(torch.load(vq_vae_checkpoint_path, map_location=vae_device_for_subprocess))
-        vq_vae_model.eval()
-        # print(f"Rank {rank}: Successfully loaded VAE from {vae_checkpoint_path} to {vae_device_for_subprocess}")
-    except FileNotFoundError:
-        print(f"Rank {rank}: ERROR: VAE checkpoint '{vq_vae_checkpoint_path}' not found. Train VAE first.")
-        raise
-    except Exception as e:
-        print(f"Rank {rank}: ERROR loading VAE: {e}")
-        raise
-
     env = make_env_sb3(
         env_id=config_env_params.get("env_name_config", ENV_NAME),
-        vq_vae_model_instance=vq_vae_model,
         frame_stack_num=config_env_params.get("num_stack_config", NUM_STACK),
-        device_for_vae=vae_device_for_subprocess,
         gamma=config_env_params.get("gamma_config", 0.99),
         render_mode=config_env_params.get("render_mode", None),
         max_episode_steps=config_env_params.get("max_episode_steps_config", 1000),

@@ -11,6 +11,7 @@ from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
+from impala_cnn import CustomCNN
 # Import from local modules
 from utils import (
     DEVICE, ENV_NAME, NUM_STACK, _init_env_fn_sb3
@@ -31,7 +32,7 @@ def get_config_sb3(name="default"):
     configs = {
         "default": {
             # SB3 PPO Hyperparameters
-            "policy": "MlpPolicy",
+            "policy": "CnnPolicy",
             "learning_rate": 3e-5,  # Can be a schedule
             "n_steps": 1024,  # Corresponds to STEPS_PER_BATCH (per environment)
             "batch_size": 64,  # PPO's minibatch size
@@ -47,8 +48,9 @@ def get_config_sb3(name="default"):
 
             # Policy keyword arguments for MlpPolicy
             "policy_kwargs": dict(
-                # features_extractor_class=torch.nn.Identity, # Not needed if obs is already flat
-                net_arch=dict(pi=[512, 256], vf=[512, 256]),
+                features_extractor_class=CustomCNN,
+                features_extractor_kwargs=dict(features_dim=1024),
+                net_arch=dict(pi=[256], vf=[256]),
                 activation_fn=torch.nn.Tanh,
                 log_std_init=-1.0,  # Matches custom Actor's initial log_std bias
                 ortho_init=True,  # SB3 default, can be False if issues arise
@@ -74,12 +76,14 @@ def get_config_sb3(name="default"):
     configs["test"].update({
         "total_timesteps": 6_000,
         "n_steps": 128,
-        "num_envs": 2,
+        "num_envs": 1,
         "save_freq": 5_000,
         "eval_freq": 2048,
         "learning_rate": 1e-4,
         "policy_kwargs": dict(
-            net_arch=dict(pi=[512, 256], vf=[512, 256]),  # Test specific architecture
+            features_extractor_class=CustomCNN,
+            features_extractor_kwargs=dict(features_dim=512),  # Test with a smaller feature dim
+            net_arch=dict(pi=[64], vf=[64]),  # Test specific architecture
             activation_fn=torch.nn.Tanh,  # Inherited or explicitly set
             log_std_init=-1.0,  # Inherited or explicitly set
             ortho_init=True,  # Inherited or explicitly set
