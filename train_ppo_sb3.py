@@ -125,7 +125,6 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
         "num_stack_config": config["num_stack_config"],
         "gamma_config": config["gamma_config"],
         "max_episode_steps_config": config["max_episode_steps_config"],
-        "num_envs_for_vae_device_check": config["num_envs"],  # Pass num_envs for VAE device heuristic
         # "render_mode": "human" if config["num_envs"] == 1 else None # Example for rendering
     }
 
@@ -153,7 +152,6 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
     # Eval callback (optional, but good practice)
     # Create a separate evaluation environment (usually single, non-vectorized)
     eval_env_params = env_params_for_creation.copy()
-    eval_env_params["num_envs_for_vae_device_check"] = 1  # Eval env is usually single
     eval_env = DummyVecEnv([lambda: _init_env_fn_sb3(rank=config["num_envs"], seed=config["seed"] + 1000,
                                                      config_env_params=eval_env_params)])
 
@@ -170,7 +168,8 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
     callbacks = [checkpoint_callback, eval_callback]
 
     # PPO should be run on CPU
-    ppo_device = "cpu"
+    # ppo_device = "cpu"
+    ppo_device = DEVICE
 
     # Create PPO model
     model = PPO(
