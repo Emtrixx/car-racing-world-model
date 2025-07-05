@@ -1,9 +1,13 @@
 import os
+from collections import deque
 from typing import List
 
 import imageio
+import numpy as np
 import torch
+from stable_baselines3 import PPO
 
+from play_game_sb3 import SB3_MODEL_PATH
 from utils import WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM
 from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
 from world_model import WorldModelGRU, GRU_HIDDEN_DIM
@@ -70,7 +74,7 @@ def get_starting_state_from_sequence(image_paths: List[str], world_model: WorldM
     """
     print(f"Initializing dream from a sequence of {len(image_paths)} images...")
 
-    # 1. Initialize the hidden state for the GRU
+    # Initialize the hidden state for the GRU
     hidden_state = world_model.get_initial_hidden_state(batch_size=1, device=device)
     last_frame_reconstruction = None
 
@@ -102,20 +106,30 @@ def get_starting_state_from_sequence(image_paths: List[str], world_model: WorldM
             )
 
     print("Priming complete. Final hidden state captured.")
-    # 4. Return the final hidden state and the last frame
-    return hidden_state, last_frame_reconstruction
+    # Return the final hidden state and the last frame
+    return hidden_state, last_frame_reconstruction, frame_tensor
 
 
-def dream(world_model, vq_vae, num_steps, initial_hidden_state, initial_action, device):
+def dream(world_model,
+          vq_vae: VQVAE,
+          ppo_agent,
+          initial_hidden_state,
+          initial_frame: np.ndarray,
+          num_steps: int,
+          num_stack: int = 4,
+          device=torch.device("cpu"),
+          ):
     """
     Generates a sequence of imagined frames by running the world model in a loop.
 
     Args:
-        world_model (WorldModelGRU): The trained world model.
-        vq_vae (VQVAE): The trained VQ-VAE for decoding frames.
+        world_model: The trained GRU world model.
+        vq_vae: The trained VQ-VAE for decoding frames.
+        ppo_agent: The trained PPO agent (e.g., from Stable Baselines 3).
+        initial_hidden_state: The starting hidden state for the world model.
+        initial_frame (torch.Tensor): The first single frame (H, W) to seed the dream.
         num_steps (int): The number of steps to dream for.
-        initial_hidden_state (torch.Tensor): The starting hidden state for the dream.
-        initial_action (torch.Tensor): The first action to kick off the dream.
+        num_stack (int): The number of frames to stack for the agent's observation.
         device: The torch device to run the models on.
 
     Returns:
@@ -129,16 +143,22 @@ def dream(world_model, vq_vae, num_steps, initial_hidden_state, initial_action, 
     dreamed_frames = []
 
     hidden_state = initial_hidden_state.to(device)
-    action = initial_action.to(device)
+
+    # frame stacking for the agent
+    frame_buffer = deque([initial_frame] * num_stack, maxlen=num_stack)
 
     with torch.no_grad():
         for step in range(num_steps):
             if step % 50 == 0:
                 print(f"  Dream step {step}/{num_steps}")
 
+            agent_obs = np.array(frame_buffer)
+            action, _ = ppo_agent.predict(agent_obs, deterministic=True)
+            action_tensor = torch.tensor(action, device=device).float().unsqueeze(0)
+
             # Run the world model for one step in inference mode
             # We don't provide ground_truth_tokens, so it uses its own predictions.
-            pred_logits, _, _, next_hidden_state = world_model(action, hidden_state, ground_truth_tokens=None)
+            pred_logits, _, _, next_hidden_state = world_model(action_tensor, hidden_state, ground_truth_tokens=None)
 
             # Get the predicted next state tokens by sampling from the logits
             # Reshape logits to [batch_size, num_tokens, codebook_size] for sampling
@@ -159,6 +179,7 @@ def dream(world_model, vq_vae, num_steps, initial_hidden_state, initial_action, 
 
             # Decode to get the image
             decoded_image = vq_vae.decoder(quantized_grid_permuted)  # Shape: [1, 3, 96, 96]
+            frame_buffer.append(decoded_image.squeeze(0).permute(1, 2, 0).cpu().numpy())
 
             # Post-process the frame for saving
             # Remove batch dimension, convert to HWC, and scale to 0-255 uint8
@@ -166,11 +187,8 @@ def dream(world_model, vq_vae, num_steps, initial_hidden_state, initial_action, 
             frame = (frame * 255).clamp(0, 255).to(torch.uint8)
             dreamed_frames.append(frame.cpu().numpy())
 
-            # 5. Prepare for the next step
+            # Prepare for the next step
             hidden_state = next_hidden_state
-            # For this example, we keep taking the same "do nothing" action
-            # You could also have a simple policy here that changes the action
-            action.zero_()
 
     print("Dreaming complete.")
     return dreamed_frames
@@ -221,6 +239,21 @@ if __name__ == '__main__':
     vq_vae = VQVAE(embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS).to(DEVICE)
     vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
 
+    # --- Load Trained SB3 PPO Agent ---
+    print(f"Loading trained SB3 PPO agent from: {SB3_MODEL_PATH}")
+    if not SB3_MODEL_PATH.exists():
+        print(f"ERROR: SB3 PPO Model not found at {SB3_MODEL_PATH}")
+        exit(1)
+    try:
+        ppo_agent = PPO.load(SB3_MODEL_PATH, device=DEVICE)
+        print(f"Successfully loaded SB3 PPO agent. Agent device: {ppo_agent.device}")
+    except Exception as e:
+        print(f"ERROR loading SB3 PPO agent: {e}")
+        import traceback
+
+        traceback.print_exc()
+        exit(1)
+
     # --- setup for dreaming from a single image ---
     # Select a random image and prime the starting state
     # image_files = [f for f in os.listdir(SAMPLE_IMAGE_DIR) if f.endswith('.png') and not f.startswith('frame_')]
@@ -236,21 +269,24 @@ if __name__ == '__main__':
     # --- setup for dreaming from a sequence of images ---
     image_files = sorted([os.path.join("./data/init_frames", f) for f in os.listdir("./data/init_frames")])
     priming_sequence = image_files[:10]
-    primed_h, first_frame_tensor = get_starting_state_from_sequence(priming_sequence, world_model, vq_vae, DEVICE)
+    primed_h, last_frame_reconstruction, frame_tensor = get_starting_state_from_sequence(priming_sequence, world_model,
+                                                                                         vq_vae, DEVICE)
 
     initial_a = torch.zeros(1, ACTION_DIM, device=DEVICE)
 
     # Generate the dream sequence
+    initial_frame_np = frame_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
     dreamed_frames_list = dream(
         world_model=world_model,
         vq_vae=vq_vae,
+        ppo_agent=ppo_agent,
+        initial_frame=initial_frame_np,
         num_steps=DREAM_STEPS,
         initial_hidden_state=primed_h,
-        initial_action=initial_a,
         device=DEVICE
     )
 
     # Save the frames as a video
     if dreamed_frames_list:
         video_path = os.path.join(OUTPUT_DIR, "world_model_dream.mp4")
-        generate_video(dreamed_frames_list, video_path, fps=20)
+        generate_video(dreamed_frames_list, video_path, fps=7)
