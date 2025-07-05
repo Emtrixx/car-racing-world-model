@@ -9,15 +9,14 @@ from stable_baselines3 import PPO
 from play_game_sb3 import SB3_MODEL_PATH
 from utils import (ENV_NAME, NUM_STACK, make_env_sb3,
                    VQ_VAE_CHECKPOINT_FILENAME, DEVICE)
-from utils_vae import get_vq_wrapper
 from vq_conv_vae import VQVAE
 
 # --- Video Configuration ---
 NUM_EPISODES_TO_RECORD = 2  # How many episodes to record
 VIDEO_FILENAME = f"videos/{ENV_NAME}_policy_visualization.mp4"
-FPS = 30  # Frames per second for the output video
+FPS = 7  # Frames per second for the output video
 VIZ_WIDTH = 500  # Width of the policy visualization panel
-UPSCALE_FACTOR = 8
+UPSCALE_FACTOR = 1
 
 
 # --- Matplotlib Visualization Function ---
@@ -89,35 +88,17 @@ def create_policy_viz_frame(dist_mean_tensor, dist_stddev_tensor, viz_width, viz
 
 
 def play_and_record():
-    # --- Load VQ-VAE model ---
-    print(f"Loading models to device: {DEVICE}")
-    vq_vae_model = VQVAE().to(DEVICE)
-    try:
-        vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
-        vq_vae_model.eval()
-        print(f"Successfully loaded VAE: {VQ_VAE_CHECKPOINT_FILENAME}")
-    except FileNotFoundError:
-        print(f"ERROR: VAE checkpoint '{VQ_VAE_CHECKPOINT_FILENAME}' not found.")
-        return
-    except Exception as e:
-        print(f"ERROR loading VAE: {e}");
-        return
-
     # --- Create Environment using make_env_sb3 ---
-    # make_env_sb3 handles all necessary wrappers including LatentStateWrapper and ActionTransformWrapper
-    # It needs the VAE instance.
+    # make_env_sb3 handles all necessary wrappers
     # For playback, gamma for NormalizeReward wrapper doesn't strictly matter but use a sensible default.
     print(f"Initializing environment: {ENV_NAME} for video recording.")
     try:
         env = make_env_sb3(
             env_id=ENV_NAME,
-            vq_vae_model_instance=vq_vae_model,
             frame_stack_num=NUM_STACK,
-            device_for_vae=DEVICE,
             gamma=0.99,  # Standard gamma, used by NormalizeReward
             render_mode="rgb_array",
             max_episode_steps=1000,
-            save_latent_for_render=True,  # Ensure we save latent state for rendering
         )
         print("Environment created successfully with make_env_sb3.")
     except Exception as e:
@@ -146,41 +127,7 @@ def play_and_record():
     # Get sample frame for dimensions
     _obs_latent_state, _info = env.reset()  # obs_latent_state is used later by PPO agent
 
-    vq_wrapper = get_vq_wrapper(env)
-    if vq_wrapper is None:
-        print("Error: Could not find VaeEncodeWrapper. Video generation relies on it.")
-        if hasattr(env, 'close'): env.close()
-        return
-
-    quantized_tensor_initial = vq_wrapper.last_quantized_latent_for_render
-    if quantized_tensor_initial is None:
-        # This might happen if reset doesn't trigger observation() in the wrapper in a way that
-        # last_quantized_latent_for_render is populated.
-        # Let's try one step to ensure it's populated.
-        print("Initial quantized_tensor is None, trying one env step to populate...")
-        action_dummy = env.action_space.sample()  # Get a dummy action
-        # The PPO agent isn't used yet, so this step is just to prime the wrapper.
-        # The observation from this step isn't used to start the PPO loop.
-        _, _, _, _, _ = env.step(action_dummy)
-        quantized_tensor_initial = vq_wrapper.last_quantized_latent_for_render
-        _obs_latent_state, _info = env.reset()  # Reset again to ensure a clean start for the PPO loop
-
-    if quantized_tensor_initial is None:
-        print("Error: last_quantized_latent_for_render is None even after a step. Cannot get frame dimensions.")
-        if hasattr(env, 'close'): env.close()
-        return
-
-    with torch.no_grad():
-        decoded_tensor_initial = vq_vae_model.decoder(quantized_tensor_initial.to(DEVICE))
-
-    # Convert decoded_tensor to sample_game_frame_rgb (HWC, NumPy, uint8, RGB)
-    decoded_img_initial = decoded_tensor_initial.squeeze(0).permute(1, 2, 0).cpu().numpy()
-    sample_game_frame_rgb = (np.clip(decoded_img_initial, 0, 1) * 255).astype(np.uint8)  # Clip to ensure valid range
-
-    if sample_game_frame_rgb is None:  # Should not happen if decoded_tensor_initial was valid
-        print("Error: Decoded initial frame is None. Cannot get frame dimensions.")
-        if hasattr(env, 'close'): env.close()
-        return
+    sample_game_frame_rgb = env.render()  # Get a sample frame in RGB format
 
     # Get original dimensions
     original_game_height, original_game_width, _ = sample_game_frame_rgb.shape
@@ -230,33 +177,18 @@ def play_and_record():
                 obs_latent_state, reward, terminated, truncated, info = env.step(action_from_agent)
                 done = terminated or truncated
 
-            # 5. Get VQ-VAE Decoded Game Frame
-            # vq_wrapper should still be valid from the initial setup
-            quantized_tensor_loop = vq_wrapper.last_quantized_latent_for_render
-            if quantized_tensor_loop is None:
-                print("Warning: last_quantized_latent_for_render is None during episode loop.")
-                # Use a black frame as a fallback
-                game_frame_bgr = np.zeros((game_height, game_width, 3), dtype=np.uint8)
-            else:
-                with torch.no_grad():
-                    decoded_tensor_loop = vq_vae_model.decoder(quantized_tensor_loop.to(DEVICE))
+            game_frame_rgb = env.render()  # Get the game frame in RGB format
+            game_frame_bgr = cv2.cvtColor(game_frame_rgb, cv2.COLOR_RGB2BGR)
+            game_frame_bgr = cv2.resize(game_frame_bgr, (game_width, game_height), interpolation=cv2.INTER_LINEAR)
 
-                # Convert decoded_tensor to game_frame_bgr for cv2.VideoWriter
-                decoded_img_chw_loop = decoded_tensor_loop.squeeze(0)  # Shape C, H, W, range [0,1]
-                game_frame_rgb_tensor_loop = decoded_img_chw_loop.permute(1, 2, 0)  # Shape H, W, C
-                game_frame_rgb_np_loop = (np.clip(game_frame_rgb_tensor_loop.cpu().numpy(), 0, 1) * 255).astype(
-                    np.uint8)
-                game_frame_bgr = cv2.cvtColor(game_frame_rgb_np_loop, cv2.COLOR_RGB2BGR)
-                game_frame_bgr = cv2.resize(game_frame_bgr, (game_width, game_height), interpolation=cv2.INTER_LINEAR)
-
-            # 6. Create Policy Visualization Frame
+            # Create Policy Visualization Frame
             viz_frame_bgr = create_policy_viz_frame(dist_mean, dist_stddev, VIZ_WIDTH, viz_height)
 
             # Ensure viz_frame has correct dimensions (it should if create_policy_viz_frame is correct)
             if viz_frame_bgr.shape[0] != game_height or viz_frame_bgr.shape[1] != VIZ_WIDTH:
                 viz_frame_bgr = cv2.resize(viz_frame_bgr, (VIZ_WIDTH, game_height))
 
-            # 7. Combine Frames
+            # Combine Frames
             if game_frame_bgr.shape[0] == viz_frame_bgr.shape[0]:
                 combined_frame_bgr = np.concatenate((game_frame_bgr, viz_frame_bgr), axis=1)
             else:  # Fallback if heights mismatch, though they shouldn't with current setup
@@ -267,7 +199,7 @@ def play_and_record():
                             cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 0, 255), 2)
                 combined_frame_bgr = np.concatenate((game_frame_bgr, placeholder_viz), axis=1)
 
-            # 8. Write to Video
+            # Write to Video
             video_writer.write(combined_frame_bgr)
 
             total_reward += reward
