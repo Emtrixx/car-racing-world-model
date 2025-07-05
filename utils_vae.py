@@ -10,7 +10,7 @@ from stable_baselines3 import PPO
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from utils import preprocess_observation, VaeEncodeWrapper
+from utils import preprocess_observation
 
 
 # --- Dataset Class ---
@@ -199,33 +199,6 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
     plt.savefig(save_path)
     print(f"Saved reconstruction visualization to {save_path}")
     plt.close(fig)
-
-
-# Helper function to get the VaeEncodeWrapper instance
-def get_vq_wrapper(env_instance):
-    current_env = env_instance
-    while hasattr(current_env, 'env') or hasattr(current_env, 'venv'):  # Check for 'venv' for VecEnv
-        if isinstance(current_env, VaeEncodeWrapper):
-            return current_env
-        if hasattr(current_env, 'venv'):  # If it's a VecEnv, access its environments
-            # For VecEnv, we need to get the attribute from the first environment
-            # This assumes that all sub-environments are wrapped identically.
-            # This part might need adjustment if using VecEnv and wanting a specific sub-env's wrapper.
-            # For this script, make_env_sb3 creates a single env, so 'env' chain is more likely.
-            if hasattr(current_env.venv, 'envs') and current_env.venv.envs:
-                current_env = current_env.venv.envs[0]  # Check first sub-env
-            else:  # Fallback or if it's not a typical VecEnv structure
-                current_env = current_env.env if hasattr(current_env, 'env') else current_env.venv
-
-        elif hasattr(current_env, 'env'):
-            current_env = current_env.env
-        else:
-            break  # No more 'env' or 'venv' attributes
-
-    if isinstance(current_env, VaeEncodeWrapper):  # Check last env in chain
-        return current_env
-    print("Warning: VaeEncodeWrapper not found in environment stack.")
-    return None
 
 
 if __name__ == '__main__':

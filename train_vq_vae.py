@@ -22,10 +22,10 @@ def get_config(name="default"):
         },
         # for testing
         "test": {
-            "num_frames_collect": 1000,
+            "num_frames_collect": 10000,
             "batch_size": 32,
             "learning_rate": 1e-3,
-            "epochs": 5,
+            "epochs": 10,
         }
     }
     return configs.get(name, configs["default"])
