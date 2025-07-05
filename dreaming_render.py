@@ -1,222 +1,256 @@
-# dream.py
-from collections import deque
+import os
+from typing import List
 
-import gymnasium as gym
-import numpy as np
-import torch
-import time
 import imageio
-import matplotlib.pyplot as plt
-import sys  # For sys.exit()
+import torch
 
-from legacy.actor_critic import Actor
-from legacy.conv_vae import ConvVAE
-from world_model import WorldModelGRU
-# Import from local modules
-from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM, transform,
-                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode_stack, FrameStackWrapper, NUM_STACK,
-                   preprocess_and_encode)
-from legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME, RandomPolicy, PPOPolicyWrapper
-
-# Assuming GRU hyperparams and checkpoint name are correctly sourced.
-# If they are defined in train_world_model.py at global scope:
-try:
-    from legacy.train_world_model import (WM_CHECKPOINT_FILENAME_GRU, GRU_HIDDEN_DIM,
-                                          GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM)
-except ImportError:
-    print("ERROR: Could not import GRU params from train_world_model.py.")
-    print("Please ensure it's in PYTHONPATH and defines these constants globally, or define them in utils.py / here.")
-    # Define fallbacks or exit if critical
-    # Example fallbacks (ensure these match your trained model if import fails)
-    # GRU_HIDDEN_DIM = 256
-    # GRU_NUM_LAYERS = 1
-    # GRU_INPUT_EMBED_DIM = 128
-    # WM_CHECKPOINT_FILENAME_GRU = f"{ENV_NAME}_worldmodel_gru_ld{LATENT_DIM}_ac{ACTION_DIM}_gru{GRU_HIDDEN_DIM}x{GRU_NUM_LAYERS}_seqLENGTH.pth" # Placeholder
-    sys.exit(1)
-
-# --- Configuration ---
-DREAM_HORIZON = 100  # How many steps to dream
-DREAM_GIF_FILENAME = f"images/{ENV_NAME}_dream_gru_horizon{DREAM_HORIZON}.gif"  # Make sure 'images' dir exists
+from utils import WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM
+from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
+from world_model import WorldModelGRU, GRU_HIDDEN_DIM
 
 
-# --- Dreaming Function ---
-def dream_sequence_gru(vae_model, world_model_gru, policy, initial_obs, transform_fn, horizon, device):
-    vae_model.eval()
-    world_model_gru.eval()
-    dreamed_frames = []
-    latent_history_deque = deque(maxlen=NUM_STACK)
+def get_starting_state_from_image(image_path: str, world_model: WorldModelGRU, vq_vae: VQVAE, device):
+    """
+    Loads an image, encodes it, and uses it to prime the world model's hidden state.
 
-    total_predicted_reward_in_dream = 0.0
-    predicted_done_flag_raised = False  # To stop if model predicts done
+    Args:
+        image_path (str): Path to the pre-processed sample image.
+        world_model (WorldModelGRU): The trained world model.
+        vq_vae (VQVAE): The trained VQ-VAE.
+        device: The torch device.
+
+    Returns:
+        tuple: A tuple containing the primed hidden state and the first frame tensor.
+    """
+    print(f"Initializing dream from image: {image_path}")
+    # Load and process the image
+    frame_np = imageio.imread(image_path)  # Reads as (H, W) or (H, W, C)
+    frame_tensor = torch.tensor(frame_np, dtype=torch.float32, device=device)
+
+    # Normalize if your VQ-VAE expects it (e.g., to 0-1 range)
+    frame_tensor = frame_tensor / 255.0
+
+    # Ensure correct shape (B, C, H, W)
+    if len(frame_tensor.shape) == 2:  # Grayscale (H, W)
+        frame_tensor = frame_tensor.unsqueeze(0)  # Add channel dim -> (1, H, W)
+    frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dim -> (1, 1, H, W)
+
+    # Get the ground truth tokens for this image
+    with torch.no_grad():
+        first_frame_tensor, _, _, indices = vq_vae(frame_tensor)
+        indices = indices.view(1, -1)  # Flatten to [1, 16]
+
+    # Prime the hidden state by running the model with teacher forcing
+    # This generates a hidden state that is consistent with having seen the image.
+    zero_hidden_state = world_model.get_initial_hidden_state(batch_size=1, device=device)
+    dummy_action = torch.zeros(1, world_model.action_embedding.in_features, device=device)
 
     with torch.no_grad():
-        # 1. Encode the initial first frame of observation
-        initial_frame = initial_obs[-1]
-        z_initial_single = preprocess_and_encode(initial_frame, transform_fn, vae_model, device)
-        for _ in range(NUM_STACK):
-            latent_history_deque.append(z_initial_single)
+        _, _, _, primed_hidden_state = world_model(
+            dummy_action, zero_hidden_state, ground_truth_tokens=indices
+        )
 
-        # 2. Decode the initial frame latent state to get the first image
-        initial_frame_decoded = vae_model.decode(z_initial_single.unsqueeze(0)).squeeze(0)
-        initial_frame_np = initial_frame_decoded.permute(1, 2, 0).cpu().numpy()
-        raw_frame = (np.clip(initial_frame_np, 0, 1) * 255).astype(np.uint8)  # (H, W, C)
-        dreamed_frames.append(raw_frame)
+    return primed_hidden_state, first_frame_tensor
 
-        print(f"Starting GRU dream. Horizon: {horizon}")
-        print(f"Step 0: Initial Frame. z_norm: {z_initial_single.norm().item():.2f}")
 
-        # 3. Encode the entire first stacked frames observation
-        z_initial_stack = preprocess_and_encode_stack(initial_obs, transform_fn, vae_model, device)
-        # frame_with_new_axis = raw_frame[np.newaxis, ...]  # (1, H, W, C)
-        # raw_frame_stack = np.repeat(frame_with_new_axis, NUM_STACK, axis=0)  # (num_stack, H, W, C)
+def get_starting_state_from_sequence(image_paths: List[str], world_model: WorldModelGRU, vq_vae: VQVAE, device):
+    """
+    Loads a sequence of images, encodes them, and processes them sequentially
+    to prime the world model's hidden state with a rich context.
 
-        # 4. Initiate hidden state for GRU model
-        h_current = torch.zeros(world_model_gru.gru_num_layers, 1, world_model_gru.gru_hidden_dim).to(device)
+    Args:
+        image_paths (List[str]): A list of paths to the pre-processed sample images, in order.
+        world_model (WorldModelGRU): The trained world model.
+        vq_vae (VQVAE): The trained VQ-VAE.
+        device: The torch device.
 
-        for t in range(horizon):
-            if predicted_done_flag_raised and t > 0:  # Stop if predicted done in previous step
-                print(f"  Dream step {t}: Predicted 'done' in previous step. Ending dream early.")
-                break
+    Returns:
+        tuple: A tuple containing the final primed hidden state and the reconstructed
+               tensor of the *last* image in the sequence.
+    """
+    print(f"Initializing dream from a sequence of {len(image_paths)} images...")
 
-            action_np = policy.get_action(z_initial_stack.cpu().numpy())
-            action_t = torch.tensor(action_np, dtype=torch.float32, device=device).unsqueeze(0)
-            z_current_batch = z_initial_stack.unsqueeze(0)
+    # 1. Initialize the hidden state for the GRU
+    hidden_state = world_model.get_initial_hidden_state(batch_size=1, device=device)
+    last_frame_reconstruction = None
 
-            # b. Predict next latent state, reward, and done using the GRU world model's step function
-            # WorldModelGRU.step now returns: next_z_pred, next_r_pred, next_d_pred_logits, h_next
-            next_z_pred, r_pred, d_logit_pred, h_next = \
-                world_model_gru.step(z_current_batch, action_t, h_current)
+    with torch.no_grad():
+        # 2. Loop through each image in the sequence
+        for image_path in image_paths:
+            # Load and process the image
+            frame_np = imageio.imread(image_path)
+            frame_tensor = torch.tensor(frame_np, dtype=torch.float32, device=device) / 255.0
 
-            next_z_pred = next_z_pred.squeeze(0)
-            predicted_reward_scalar = r_pred.squeeze().item()  # Get scalar value
-            predicted_done_prob = torch.sigmoid(d_logit_pred.squeeze()).item()
+            # Ensure correct shape (B, C, H, W)
+            if len(frame_tensor.shape) == 2:
+                frame_tensor = frame_tensor.unsqueeze(0)  # Add channel dim
+            frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dim
 
-            total_predicted_reward_in_dream += predicted_reward_scalar
+            # Get the ground truth tokens for the current image
+            reconstruction, _, _, indices = vq_vae(frame_tensor)
+            indices = indices.view(1, -1)  # Flatten to [1, 16]
 
-            # Print predicted reward and other info
-            print(f"  Dream step {t + 1}/{horizon}: Pred_R: {predicted_reward_scalar:.4f}, "
-                  f"Pred_Done_Prob: {predicted_done_prob:.4f}, "
-                  f"Next_z_norm: {next_z_pred.norm().item():.2f}")
+            # Store the latest reconstruction to return it later
+            last_frame_reconstruction = reconstruction
 
-            obs_pred_decoded = vae_model.decode(next_z_pred.unsqueeze(0)).squeeze(0)
-            frame_np = obs_pred_decoded.permute(1, 2, 0).cpu().numpy()
-            dreamed_frames.append((np.clip(frame_np, 0, 1) * 255).astype(np.uint8))
+            # 3. Update the hidden state using the current image's tokens
+            # We provide the current hidden state and the tokens from the new frame.
+            # The model returns the *next* hidden state, which we use in the next loop iteration.
+            dummy_action = torch.zeros(1, world_model.action_embedding.in_features, device=device)
+            _, _, _, hidden_state = world_model(
+                dummy_action, hidden_state, ground_truth_tokens=indices
+            )
 
-            # From single latent space prediction
-            latent_history_deque.append(next_z_pred)
+    print("Priming complete. Final hidden state captured.")
+    # 4. Return the final hidden state and the last frame
+    return hidden_state, last_frame_reconstruction
 
-            z_initial_stack = torch.cat(list(latent_history_deque), dim=0)
-            h_current = h_next
 
-            # Optional: End dream early if world model predicts "done" with high confidence
-            if predicted_done_prob > 0.95:  # Higher threshold for more confident "done"
-                predicted_done_flag_raised = True
+def dream(world_model, vq_vae, num_steps, initial_hidden_state, initial_action, device):
+    """
+    Generates a sequence of imagined frames by running the world model in a loop.
 
-    print(f"GRU Dreaming finished. Total predicted reward in dream: {total_predicted_reward_in_dream:.2f}")
+    Args:
+        world_model (WorldModelGRU): The trained world model.
+        vq_vae (VQVAE): The trained VQ-VAE for decoding frames.
+        num_steps (int): The number of steps to dream for.
+        initial_hidden_state (torch.Tensor): The starting hidden state for the dream.
+        initial_action (torch.Tensor): The first action to kick off the dream.
+        device: The torch device to run the models on.
+
+    Returns:
+        list: A list of generated frames as NumPy arrays (H, W, C).
+    """
+    print(f"Dreaming for {num_steps} steps...")
+    world_model.eval()
+    vq_vae.eval()
+
+    # Store the generated frames here
+    dreamed_frames = []
+
+    hidden_state = initial_hidden_state.to(device)
+    action = initial_action.to(device)
+
+    with torch.no_grad():
+        for step in range(num_steps):
+            if step % 50 == 0:
+                print(f"  Dream step {step}/{num_steps}")
+
+            # Run the world model for one step in inference mode
+            # We don't provide ground_truth_tokens, so it uses its own predictions.
+            pred_logits, _, _, next_hidden_state = world_model(action, hidden_state, ground_truth_tokens=None)
+
+            # Get the predicted next state tokens by sampling from the logits
+            # Reshape logits to [batch_size, num_tokens, codebook_size] for sampling
+            b, h, w, c = pred_logits.shape
+            logits_flat = pred_logits.reshape(b, h * w, c)
+
+            # Sample from the distribution to get the indices of the next tokens
+            predicted_indices = torch.distributions.Categorical(logits=logits_flat).sample()  # Shape: [1, 16]
+
+            # Decode the predicted tokens back into an image
+            # First, get the quantized vectors from the indices using the VQ-VAE's codebook
+            quantized_vectors = vq_vae.vq_layer.embedding(predicted_indices)  # Shape: [1, 16, latent_dim]
+
+            # Reshape to the grid format the decoder expects
+            quantized_grid = quantized_vectors.reshape(b, h, w, -1)  # Shape: [1, 4, 4, latent_dim]
+            # The VQ-VAE decoder expects BCHW,so permute dimensions
+            quantized_grid_permuted = quantized_grid.permute(0, 3, 1, 2)  # Shape: [1, latent_dim, 4, 4]
+
+            # Decode to get the image
+            decoded_image = vq_vae.decoder(quantized_grid_permuted)  # Shape: [1, 3, 96, 96]
+
+            # Post-process the frame for saving
+            # Remove batch dimension, convert to HWC, and scale to 0-255 uint8
+            frame = decoded_image.squeeze(0).permute(1, 2, 0)
+            frame = (frame * 255).clamp(0, 255).to(torch.uint8)
+            dreamed_frames.append(frame.cpu().numpy())
+
+            # 5. Prepare for the next step
+            hidden_state = next_hidden_state
+            # For this example, we keep taking the same "do nothing" action
+            # You could also have a simple policy here that changes the action
+            action.zero_()
+
+    print("Dreaming complete.")
     return dreamed_frames
 
 
+def generate_video(frames, output_path, fps=30):
+    """
+    Takes a list of frames and saves them as a video file.
+
+    Args:
+        frames (list): A list of NumPy array frames (H, W, C).
+        output_path (str): The path to save the video file (e.g., 'dream.mp4').
+        fps (int): Frames per second for the output video.
+    """
+    print(f"Generating video with {len(frames)} frames...")
+    try:
+        with imageio.get_writer(output_path, fps=fps) as writer:
+            for frame in frames:
+                writer.append_data(frame)
+        print(f"Video saved successfully to {output_path}")
+    except ImportError:
+        print("Error: `imageio` and `imageio-ffmpeg` are required.")
+        print("Please install them with: pip install imageio[ffmpeg]")
+    except Exception as e:
+        print(f"An error occurred during video generation: {e}")
+
+
 # --- Main Execution ---
-if __name__ == "__main__":
-    print(f"Starting dream sequence generation on device: {DEVICE}")
+if __name__ == '__main__':
+    # --- Configuration ---
+    DREAM_STEPS = 300
+    SAMPLE_IMAGE_DIR = "./assets/sample_images/"
+    DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    OUTPUT_DIR = "videos"
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
 
-    # Ensure images directory exists
-    import os
-
-    os.makedirs("images", exist_ok=True)
-
-    # Initialize temp env for action space details for PPOPolicyWrapper
-    temp_env = FrameStackWrapper(gym.make(ENV_NAME), num_stack=NUM_STACK)
-    action_space_low = temp_env.action_space.low
-    action_space_high = temp_env.action_space.high
-    temp_env.close()
-
-    # Load VAE
-    vae_model = ConvVAE().to(DEVICE)
-    try:
-        vae_model.load_state_dict(torch.load(VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
-        vae_model.eval()
-        print(f"Loaded VAE: {VAE_CHECKPOINT_FILENAME}")
-    except FileNotFoundError:
-        print(f"ERROR: VAE ckpt '{VAE_CHECKPOINT_FILENAME}' not found.");
-        sys.exit()
-    except Exception as e:
-        print(f"ERROR loading VAE: {e}");
-        sys.exit()
-
-    # Load GRU World Model
-    # Ensure GRU_HIDDEN_DIM, GRU_NUM_LAYERS, GRU_INPUT_EMBED_DIM are available
-    world_model_gru = WorldModelGRU(
-        input_latent_stack_dim=LATENT_DIM * NUM_STACK,
-        output_single_latent_dim=LATENT_DIM,
+    # Load world model
+    print("Loading trained models...")
+    world_model = WorldModelGRU(
+        latent_dim=EMBEDDING_DIM,
+        codebook_size=NUM_EMBEDDINGS,
         action_dim=ACTION_DIM,
-        gru_hidden_dim=GRU_HIDDEN_DIM,
-        gru_num_layers=GRU_NUM_LAYERS,
-        gru_input_embed_dim=GRU_INPUT_EMBED_DIM
+        hidden_dim=GRU_HIDDEN_DIM
     ).to(DEVICE)
-    try:
-        world_model_gru.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
-        world_model_gru.eval()
-        print(f"Loaded GRU World Model: {WM_CHECKPOINT_FILENAME_GRU}")
-    except FileNotFoundError:
-        print(f"ERROR: GRU WM ckpt '{WM_CHECKPOINT_FILENAME_GRU}' not found.");
-        sys.exit()
-    except Exception as e:
-        print(f"ERROR loading GRU WM: {e}");
-        sys.exit()
+    world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
 
-    # Initialize Policy for Dreaming (Load PPO Actor or fallback to Random)
-    policy_for_dreaming = None
-    try:
-        print(f"Attempting to load PPO Actor for dreaming: {PPO_ACTOR_SAVE_FILENAME}")
-        actor_for_dreaming = Actor().to(DEVICE)
-        actor_for_dreaming.load_state_dict(torch.load(PPO_ACTOR_SAVE_FILENAME, map_location=DEVICE))
-        actor_for_dreaming.eval()
-        policy_for_dreaming = PPOPolicyWrapper(actor_for_dreaming, DEVICE, deterministic=True,
-                                               action_space_low=action_space_low,
-                                               action_space_high=action_space_high)
-        print(f"Using PPO Actor for dreaming.")
-    except FileNotFoundError:
-        print(f"PPO Actor model not found at '{PPO_ACTOR_SAVE_FILENAME}'. Using RandomPolicy for dreaming.")
-        env_action_space = gym.make(ENV_NAME).action_space
-        policy_for_dreaming = RandomPolicy(env_action_space)
-    except Exception as e:
-        print(f"Error loading PPO Actor, using RandomPolicy: {e}")
-        env_action_space = gym.make(ENV_NAME).action_space
-        policy_for_dreaming = RandomPolicy(env_action_space)
+    # Load VQ-VAE model
+    vq_vae = VQVAE(embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS).to(DEVICE)
+    vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
 
-    # Get Initial Observation for dreaming
-    dream_env = FrameStackWrapper(gym.make(ENV_NAME, render_mode="rgb_array"), num_stack=NUM_STACK)
-    initial_obs, _ = dream_env.reset()
-    dream_env.close()
+    # --- setup for dreaming from a single image ---
+    # Select a random image and prime the starting state
+    # image_files = [f for f in os.listdir(SAMPLE_IMAGE_DIR) if f.endswith('.png') and not f.startswith('frame_')]
+    # if not image_files:
+    #     raise FileNotFoundError(f"No sample images found in {SAMPLE_IMAGE_DIR}. Please add some.")
+    #
+    # # random_image_file = random.choice(image_files)
+    # random_image_file = "frame_0022.png"
+    # start_image_path = os.path.join(SAMPLE_IMAGE_DIR, random_image_file)
+    #
+    # primed_h, first_frame_tensor = get_starting_state_from_image(start_image_path, world_model, vq_vae, DEVICE)
 
-    start_dream_time = time.time()
-    dreamed_frames = dream_sequence_gru(
-        vae_model, world_model_gru, policy_for_dreaming, initial_obs, transform, DREAM_HORIZON, DEVICE
+    # --- setup for dreaming from a sequence of images ---
+    image_files = sorted([os.path.join("./data/init_frames", f) for f in os.listdir("./data/init_frames")])
+    priming_sequence = image_files[:10]
+    primed_h, first_frame_tensor = get_starting_state_from_sequence(priming_sequence, world_model, vq_vae, DEVICE)
+
+    initial_a = torch.zeros(1, ACTION_DIM, device=DEVICE)
+
+    # Generate the dream sequence
+    dreamed_frames_list = dream(
+        world_model=world_model,
+        vq_vae=vq_vae,
+        num_steps=DREAM_STEPS,
+        initial_hidden_state=primed_h,
+        initial_action=initial_a,
+        device=DEVICE
     )
-    print(f"GRU Dream generation took {time.time() - start_dream_time:.2f} seconds.")
 
-    if dreamed_frames:
-        try:
-            print(f"Saving GRU dream GIF ({len(dreamed_frames)} frames) to {DREAM_GIF_FILENAME}...")
-            imageio.mimsave(DREAM_GIF_FILENAME, dreamed_frames, fps=15)
-            print("GIF saved.")
-        except Exception as e:
-            print(f"Error saving GIF: {e}")
-
-        try:
-            num_display = min(len(dreamed_frames), 10)
-            fig, axes = plt.subplots(1, num_display, figsize=(num_display * 1.5, 1.5))
-            if num_display == 1: axes = [axes]  # Make it iterable if only one subplot
-            fig.suptitle(f'Dream Sequence Preview (First {num_display} Frames)', fontsize=12)
-            for i in range(num_display):
-                axes[i].imshow(dreamed_frames[i]);
-                axes[i].set_title(f'T={i}');
-                axes[i].axis('off')
-            plt.tight_layout(rect=[0, 0.03, 1, 0.93])
-            preview_path = "images/dream_sequence_preview.png"
-            plt.savefig(preview_path);
-            print(f"Saved preview plot to {preview_path}");
-            plt.close(fig)
-        except Exception as e:
-            print(f"Error saving preview plot: {e}")
+    # Save the frames as a video
+    if dreamed_frames_list:
+        video_path = os.path.join(OUTPUT_DIR, "world_model_dream.mp4")
+        generate_video(dreamed_frames_list, video_path, fps=20)
