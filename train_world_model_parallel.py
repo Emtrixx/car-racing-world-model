@@ -5,14 +5,15 @@ import time
 
 import torch
 import torch.nn as nn
-from huggingface_sb3 import load_from_hub
 from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, Dataset
 
+from play_game_sb3 import SB3_MODEL_PATH
 from utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     ACTION_DIM,  # Default: 3
-    DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, WorldModelDataCollector, WorldModelTrainer
+    DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, WorldModelDataCollector, WorldModelTrainer,
+    make_env_sb3, NUM_STACK
 )
 from vq_conv_vae import NUM_EMBEDDINGS, EMBEDDING_DIM, VQVAE
 from world_model import WorldModelGRU, GRU_HIDDEN_DIM
@@ -79,23 +80,34 @@ def collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_name
             f"[Worker {worker_id}, PID {os.getpid()}] Starting, assigned {num_steps_to_collect_by_worker} episodes. Device: {device_str_for_worker}")
 
         # --- Initialize Environment ---
-        env = gym.make("CarRacing-v3", render_mode="rgb_array",
-                       max_episode_steps=max_episode_steps_collect_int)
+        env = env = make_env_sb3(
+            env_id=ENV_NAME,
+            frame_stack_num=NUM_STACK,
+            gamma=0.99,  # Standard gamma, used by NormalizeReward
+            render_mode="rgb_array",
+            max_episode_steps=max_episode_steps_collect_int,  # Use the max steps from worker args
+        )
 
         # print observation and action spaces
         print(f"[Worker {worker_id}] Observation space: {env.observation_space}")
         print(f"[Worker {worker_id}] Action space: {env.action_space}")
 
         # --- Load PPO Model ---
-        model_id = "Pyro-X2/CarRacingSB3"
-        model_filename = "ppo-CarRacing-v3.zip"
-        try:
-            checkpoint = load_from_hub(model_id, model_filename)
-        except Exception as e:
-            print(f"Failed to load model from Hugging Face Hub: {e}")
+        print(f"Loading trained SB3 PPO agent from: {SB3_MODEL_PATH}")
+        if not SB3_MODEL_PATH.exists():
+            print(f"ERROR: SB3 PPO Model not found at {SB3_MODEL_PATH}")
+            if hasattr(env, 'close'): env.close()
             return
-
-        ppo_agent = PPO.load(checkpoint, env=env)
+        try:
+            ppo_agent = PPO.load(SB3_MODEL_PATH, device=DEVICE, env=env,
+                                 deterministic=False)  # deterministic=False for exploration
+            print(f"Successfully loaded SB3 PPO agent. Agent device: {ppo_agent.device}")
+        except Exception as e:
+            print(f"ERROR loading SB3 PPO agent: {e}")
+            if hasattr(env, 'close'): env.close()
+            import traceback
+            traceback.print_exc()
+            return
 
         # --- Load VQ-VAE Model ---
         vq_vae = VQVAE().to(DEVICE)
