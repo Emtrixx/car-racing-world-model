@@ -327,7 +327,7 @@ class WorldModelDataCollector:
         self.vq_vae_model = vq_vae_model
         self.device = device
         # Use a simple deque as a replay buffer
-        self.replay_buffer = deque(maxlen=50_000)
+        self.replay_buffer = deque(maxlen=250_000)
 
     def get_vq_indices(self, obs_raw_numpy: np.ndarray) -> torch.Tensor:
         """
