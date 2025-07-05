@@ -1,6 +1,7 @@
 # utils.py
 import os
 from collections import deque
+from typing import Optional, Any
 
 import cv2
 import gymnasium as gym
@@ -184,6 +185,49 @@ class FrameSkip(gym.Wrapper):
         return self.env.reset(**kwargs)
 
 
+class SkipStartFramesWrapper(gym.Wrapper):
+    """
+    A wrapper that automatically skips a specified number of frames
+    at the beginning of each episode by performing a no-op action.
+    """
+
+    def __init__(self, env: gym.Env, skip: int = 50):
+        """
+        Initializes the wrapper.
+
+        Args:
+            env: The environment to wrap.
+            skip (int): The number of frames to skip on reset.
+        """
+        super().__init__(env)
+        if skip < 1:
+            raise ValueError("The number of frames to skip must be at least 1.")
+        self.skip = skip
+        # Define a no-op action
+        self.noop_action = np.array([0.0, 0.0, 0.0], dtype=np.float32)
+
+    def reset(self, *, seed: Optional[int] = None, options: Optional[dict[str, Any]] = None) -> tuple[
+        Any, dict[str, Any]]:
+        """
+        Resets the environment and then skips the specified number of frames.
+        """
+        # First, reset the underlying environment as usual
+        obs, info = self.env.reset(seed=seed, options=options)
+
+        # Now, loop for the specified number of steps, performing a no-op action
+        for _ in range(self.skip):
+            obs, reward, terminated, truncated, info = self.env.step(self.noop_action)
+
+            # Important edge case: If the episode ends during the skip
+            # (e.g., in very short/fast environments), we must reset again
+            # to ensure the agent starts from a valid, non-terminal state.
+            if terminated or truncated:
+                obs, info = self.env.reset(seed=seed, options=options)
+
+        # Return the observation and info from the final skipped frame
+        return obs, info
+
+
 def make_env_sb3(
         env_id: str,
         frame_stack_num: int,
@@ -220,11 +264,14 @@ def make_env_sb3(
     #    - It defines self.action_space = Box([-1, 1]^3, ...) which SB3 will see.
     env = ActionTransformWrapper(env)
 
+    # --- SkipStartFramesWrapper: Skips the first N frames at the start of each episode.
+    env = SkipStartFramesWrapper(env, skip=50)  # Skip the first 50 frames
+
     # --- Observation Wrappers ---
     # FrameSkip: Skips frames to reduce data size and speed up training and inference.
     env = FrameSkip(env, skip=4)  # Skip every 4th frame
 
-    # VaeEncodeWrapper: Preprocess and encode raw frame into quantized latent vectors using VQ-VAE and returns a single flattened latent vector
+    # VaeEncodeWrapper: Preprocess raw frame (crop, grayscale, resize)
     env = PreprocessWrapper(env)
 
     # FrameStackWrapper: Stacks the last N observations (quantized latent vectors) to create a temporal context.
@@ -293,7 +340,9 @@ class WorldModelDataCollector:
             torch.Tensor: A tensor of token indices with shape [1, 16].
         """
         # Preprocess the raw observation
-        processed_frame = preprocess_observation(obs_raw_numpy)
+        # processed_frame = preprocess_observation(obs_raw_numpy)
+        # env now returns preprocessed frames directly
+        processed_frame = obs_raw_numpy
 
         # Convert to tensor, add batch dim, and send to device
         processed_tensor = torch.tensor(processed_frame, dtype=torch.float32, device=self.device)
@@ -325,7 +374,7 @@ class WorldModelDataCollector:
             next_obs, reward, done, truncated, info = self.env.step(action)
 
             # Get the ground truth token indices for the next observation
-            next_state_tokens = self.get_vq_indices(next_obs)
+            next_state_tokens = self.get_vq_indices(next_obs[-1])  # access last frame in the stack
 
             # Store the relevant data tuple for world model training
             # We store the action, reward, done flag, and the tokenized *next* state.
