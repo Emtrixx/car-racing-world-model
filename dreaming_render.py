@@ -2,6 +2,7 @@ import os
 from collections import deque
 from typing import List
 
+import cv2
 import imageio
 import numpy as np
 import torch
@@ -135,6 +136,8 @@ def dream(world_model,
     Returns:
         list: A list of generated frames as NumPy arrays (H, W, C).
     """
+    DISPLAY_SIZE = 512
+
     print(f"Dreaming for {num_steps} steps...")
     world_model.eval()
     vq_vae.eval()
@@ -158,7 +161,8 @@ def dream(world_model,
 
             # Run the world model for one step in inference mode
             # We don't provide ground_truth_tokens, so it uses its own predictions.
-            pred_logits, _, _, next_hidden_state = world_model(action_tensor, hidden_state, ground_truth_tokens=None)
+            pred_logits, pred_reward, _, next_hidden_state = world_model(action_tensor, hidden_state,
+                                                                         ground_truth_tokens=None)
 
             # Get the predicted next state tokens by sampling from the logits
             # Reshape logits to [batch_size, num_tokens, codebook_size] for sampling
@@ -182,10 +186,35 @@ def dream(world_model,
             frame_buffer.append(decoded_image.squeeze(0).permute(1, 2, 0).cpu().numpy())
 
             # Post-process the frame for saving
-            # Remove batch dimension, convert to HWC, and scale to 0-255 uint8
             frame = decoded_image.squeeze(0).permute(1, 2, 0)
-            frame = (frame * 255).clamp(0, 255).to(torch.uint8)
-            dreamed_frames.append(frame.cpu().numpy())
+            frame_np = (frame * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
+
+            # Upscale the small frame to the display size
+            frame_np_large = cv2.resize(
+                frame_np,
+                (DISPLAY_SIZE, DISPLAY_SIZE),
+                interpolation=cv2.INTER_NEAREST
+            )
+
+            # Get the scalar reward value
+            reward_value = pred_reward.item()
+            reward_text = f"Reward: {reward_value:.2f}"
+
+            # Use cv2.putText to draw the text on the frame
+            # cv2 expects BGR, but for white text on an RGB image it's fine.
+            cv2.putText(
+                img=frame_np_large,
+                text=reward_text,
+                org=(10, 30),
+                fontFace=cv2.FONT_HERSHEY_SIMPLEX,
+                fontScale=1.0,
+                color=(255, 255, 255),
+                thickness=2,
+                lineType=cv2.LINE_AA
+            )
+
+            # Append the modified frame with text to the list for video generation
+            dreamed_frames.append(frame_np_large)
 
             # Prepare for the next step
             hidden_state = next_hidden_state
