@@ -76,7 +76,7 @@ if __name__ == "__main__":
         collect_and_save_frames(config["num_frames_collect"])
 
     # Load frames from disk
-    frame_data = load_frames_from_disk()
+    frame_data = load_frames_from_disk(max_frames_to_load=config["num_frames_collect"])
 
     # Create Dataset and DataLoader
     dataset = FrameDataset(frame_data)
