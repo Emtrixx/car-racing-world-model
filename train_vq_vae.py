@@ -83,7 +83,7 @@ if __name__ == "__main__":
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True)
 
     # Initialize Model and Optimizer
-    model = VQVAE(in_channels=1).to(DEVICE)  # Uses constants from utils implicitly via models.py
+    model = VQVAE().to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
 
     # Training Loop

@@ -26,7 +26,7 @@ DEVICE = torch.device(DEVICE_STR)  # Use GPU if available, else CPU
 
 # --- File Paths ---
 VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_cvae_ld{LATENT_DIM}_epoch10.pth"
-VQ_VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_vqvae_ld{LATENT_DIM}.pth"
+VQ_VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_vqvae_ld{64}.pth"
 WM_MODEL_SUFFIX = f"ld{LATENT_DIM}_ac{ACTION_DIM}"
 WM_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
 WM_CHECKPOINT_FILENAME_GRU = f"checkpoints/{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
