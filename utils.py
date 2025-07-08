@@ -397,11 +397,13 @@ class WorldModelDataCollector:
 class WorldModelTrainer:
     """Handles the training loop for the WorldModelGRU."""
 
-    def __init__(self, world_model, vq_vae_model, config):
+    def __init__(self, world_model, vq_vae_model, config, train_dataloader, val_dataloader=None):
         self.world_model = world_model
         self.vq_vae_model = vq_vae_model  # Needed for weight copying
         self.config = config
         self.device = config['device']
+        self.train_dataloader = train_dataloader
+        self.val_dataloader = val_dataloader
 
         # Define optimizers and loss functions
         self.optimizer = Adam(self.world_model.parameters(), lr=config['learning_rate'])
@@ -410,34 +412,110 @@ class WorldModelTrainer:
         self.done_loss_fn = nn.BCEWithLogitsLoss()
 
         # For logging and plotting
-        self.loss_history = {'total': [], 'token': [], 'reward': [], 'done': []}
-        self.steps_history = []
+        self.loss_history = {
+            'train_total': [], 'train_token': [], 'train_reward': [], 'train_done': [],
+            'val_total': [], 'val_token': [], 'val_reward': [], 'val_done': []
+        }
+        self.steps_history = []  # For x-axis of training plots
+        self.val_steps_history = []  # For x-axis of validation plots
 
     def plot_losses(self):
         """Plots the collected loss history and saves it to a file."""
-        print("Plotting training losses...")
+        print("Plotting training and validation losses...")
         plt.figure(figsize=(12, 8))
 
-        # Plot each loss component
-        for loss_name, loss_values in self.loss_history.items():
-            plt.plot(self.steps_history, loss_values, label=loss_name.capitalize() + ' Loss')
+        if self.loss_history['train_total']:
+            plt.plot(self.steps_history, self.loss_history['train_total'], label='Train Total Loss')
+            # plt.plot(self.steps_history, self.loss_history['train_token'], label='Train Token Loss', linestyle='--')
+            # plt.plot(self.steps_history, self.loss_history['train_reward'], label='Train Reward Loss', linestyle='--')
+            # plt.plot(self.steps_history, self.loss_history['train_done'], label='Train Done Loss', linestyle='--')
 
-        plt.title(f"World Model Training Loss (SeqLen {self.config['sequence_length']})")
+        if self.loss_history['val_total']:
+            plt.plot(self.val_steps_history, self.loss_history['val_total'], label='Validation Total Loss',
+                     linestyle=':')
+            # plt.plot(self.val_steps_history, self.loss_history['val_token'], label='Val Token Loss', linestyle='-.')
+            # plt.plot(self.val_steps_history, self.loss_history['val_reward'], label='Val Reward Loss', linestyle='-.')
+            # plt.plot(self.val_steps_history, self.loss_history['val_done'], label='Val Done Loss', linestyle='-.')
+
+        plt.title(f"World Model Training & Validation Loss (SeqLen {self.config['sequence_length']})")
         plt.xlabel("Training Steps")
         plt.ylabel("Loss")
-        plt.legend()
+        if self.loss_history['train_total'] or self.loss_history['val_total']:  # only add legend if there's data
+            plt.legend()
         plt.grid(True)
 
         # Ensure the save directory exists
         save_dir = self.config.get("plot_save_dir", "images")
         os.makedirs(save_dir, exist_ok=True)
 
-        save_path = os.path.join(save_dir, "world_model_loss_plot.png")
+        save_path = os.path.join(save_dir, "world_model_loss_plot_with_val.png")  # New filename
         plt.savefig(save_path)
         print(f"Saved loss plot to {save_path}")
         plt.close()
 
-    def train(self, dataloader, num_epochs):
+    def _evaluate(self):
+        self.world_model.eval()
+        total_val_token_loss, total_val_reward_loss, total_val_done_loss = 0, 0, 0
+        num_val_batches = 0
+
+        with torch.no_grad():
+            for batch in self.val_dataloader:
+                for key in batch:
+                    batch[key] = batch[key].to(self.device)
+
+                batch_size = batch['actions'].size(0)
+                # Correctly get initial hidden state, handling DataParallel
+                if isinstance(self.world_model, nn.DataParallel):
+                    hidden_state = self.world_model.module.get_initial_hidden_state(batch_size, self.device)
+                else:
+                    hidden_state = self.world_model.get_initial_hidden_state(batch_size, self.device)
+
+                seq_token_loss, seq_reward_loss, seq_done_loss = 0, 0, 0
+                sequence_length = batch['actions'].size(1)
+
+                for t in range(sequence_length):
+                    action_t = batch['actions'][:, t]
+                    ground_truth_tokens_t = batch['next_tokens'][:, t]
+                    ground_truth_reward_t = batch['rewards'][:, t]
+                    ground_truth_done_t = batch['dones'][:, t]
+
+                    pred_logits, pred_reward, pred_done_logits, next_hidden_state = self.world_model(
+                        action_t, hidden_state, ground_truth_tokens=ground_truth_tokens_t
+                    )
+
+                    b, h, w, c = pred_logits.shape
+                    token_loss = self.token_loss_fn(
+                        pred_logits.reshape(b * h * w, c),
+                        ground_truth_tokens_t.reshape(b * h * w))
+                    reward_loss = self.reward_loss_fn(pred_reward, ground_truth_reward_t)
+                    done_loss = self.done_loss_fn(pred_done_logits, ground_truth_done_t)
+
+                    seq_token_loss += token_loss
+                    seq_reward_loss += reward_loss
+                    seq_done_loss += done_loss
+                    hidden_state = next_hidden_state
+
+                total_val_token_loss += (seq_token_loss / sequence_length)
+                total_val_reward_loss += (seq_reward_loss / sequence_length)
+                total_val_done_loss += (seq_done_loss / sequence_length)
+                num_val_batches += 1
+
+        avg_val_token_loss = total_val_token_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
+            self.device)
+        avg_val_reward_loss = total_val_reward_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
+            self.device)
+        avg_val_done_loss = total_val_done_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
+            self.device)
+        avg_val_total_loss = avg_val_token_loss + avg_val_reward_loss + avg_val_done_loss
+
+        return {
+            'total': avg_val_total_loss.item(),
+            'token': avg_val_token_loss.item(),
+            'reward': avg_val_reward_loss.item(),
+            'done': avg_val_done_loss.item(),
+        }
+
+    def train(self, num_epochs):  # Removed dataloader argument
         """Main training loop that iterates over a DataLoader."""
         print("Starting world model training...")
         if isinstance(self.world_model, nn.DataParallel):
@@ -454,12 +532,13 @@ class WorldModelTrainer:
 
         # Initialize step counters
         global_step = 0
-        total_train_steps = len(dataloader) * num_epochs
+        total_train_steps = len(self.train_dataloader) * num_epochs  # Use self.train_dataloader
         log_freq = self.config.get('log_freq', 100)
+        val_freq = self.config.get('val_freq', log_freq * 5)  # val_freq from config
         checkpoint_freq = self.config.get('checkpoint_freq', 1000)
 
         for epoch in range(1, num_epochs + 1):
-            for batch_idx, batch in enumerate(dataloader):
+            for batch_idx, batch in enumerate(self.train_dataloader):  # Use self.train_dataloader
                 global_step += 1
 
                 for key in batch:
@@ -509,17 +588,31 @@ class WorldModelTrainer:
                 # Logging
                 if global_step % log_freq == 0:
                     print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
-                          f"Total Loss: {total_loss.item():.4f} | "
-                          f"Token Loss: {avg_token_loss.item():.4f} | "
-                          f"Reward Loss: {avg_reward_loss.item():.4f} | "
-                          f"Done Loss: {avg_done_loss.item():.4f}")
+                          f"Train Total Loss: {total_loss.item():.4f} | "  # Clarified Train
+                          f"Train Token Loss: {avg_token_loss.item():.4f} | "
+                          f"Train Reward Loss: {avg_reward_loss.item():.4f} | "
+                          f"Train Done Loss: {avg_done_loss.item():.4f}")
 
                     # Store loss values for plotting
-                    self.loss_history['total'].append(total_loss.item())
-                    self.loss_history['token'].append(avg_token_loss.item())
-                    self.loss_history['reward'].append(avg_reward_loss.item())
-                    self.loss_history['done'].append(avg_done_loss.item())
-                    self.steps_history.append(global_step)
+                    self.loss_history['train_total'].append(total_loss.item())
+                    self.loss_history['train_token'].append(avg_token_loss.item())
+                    self.loss_history['train_reward'].append(avg_reward_loss.item())
+                    self.loss_history['train_done'].append(avg_done_loss.item())
+                    self.steps_history.append(global_step)  # Record step for training loss
+
+                # Validation step
+                if self.val_dataloader and global_step > 0 and global_step % val_freq == 0:
+                    val_losses = self._evaluate()
+                    self.loss_history['val_total'].append(val_losses['total'])
+                    self.loss_history['val_token'].append(val_losses['token'])
+                    self.loss_history['val_reward'].append(val_losses['reward'])
+                    self.loss_history['val_done'].append(val_losses['done'])
+                    self.val_steps_history.append(global_step)  # Record step for validation loss
+
+                    print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
+                          f"Val Total Loss: {val_losses['total']:.4f} | Val Token: {val_losses['token']:.4f} | "
+                          f"Val Reward: {val_losses['reward']:.4f} | Val Done: {val_losses['done']:.4f}")
+                    self.world_model.train()  # Set back to train mode after evaluation
 
                 # Save model checkpoint
                 if global_step > 0 and global_step % checkpoint_freq == 0:

@@ -1,12 +1,14 @@
 import argparse
 import multiprocessing as mp
 import os
+import random
 import time
 
 import torch
 import torch.nn as nn
+import numpy as np
 from stable_baselines3 import PPO
-from torch.utils.data import DataLoader, Dataset
+from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
 from play_game_sb3 import SB3_MODEL_PATH
 from utils import (
@@ -16,7 +18,7 @@ from utils import (
     make_env_sb3, NUM_STACK
 )
 from vq_conv_vae import NUM_EMBEDDINGS, EMBEDDING_DIM, VQVAE
-from world_model import WorldModelGRU, GRU_HIDDEN_DIM
+from world_model import WorldModelGRU
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -50,6 +52,12 @@ def get_config(name="default"):
             'device': DEVICE,
             'num_collection_workers': NUM_COLLECTION_WORKERS,
             'num_loader_workers': NUM_LOADER_WORKERS,
+            "validation_split": 0.1,
+            "random_seed": random.randint(0, 2 ** 31 - 1),
+            "val_freq": 200,
+            "gru_hidden_dim": 512,  # GRU Hidden Dimension per layer
+            "num_gru_layers": 3,  # Number of GRU layers
+            "dropout_rate": 0.1,  # Dropout rate
         }
     }
     # test configuration for quick runs
@@ -58,10 +66,13 @@ def get_config(name="default"):
         "num_steps": 1000,
         "epochs": 3,
         "batch_size": 4,
-        "sequence_length": 20,
+        "sequence_length": 4,
         "num_collection_workers": 2,
         "num_loader_workers": 2,
         "max_episode_steps_collect": 100,
+        "gru_hidden_dim": 32,
+        "num_gru_layers": 2,
+        "dropout_rate": 0.1,
     })
     return configs[name]
 
@@ -356,21 +367,56 @@ if __name__ == "__main__":
         print("ERROR: No sequence data collected. Exiting.")
         exit()
 
-    # Prepare DataLoader
-    sequence_dataset = SequenceDataset(sequence_data_buffer, config["sequence_length"])
-    wm_dataloader = DataLoader(
-        sequence_dataset,
+    # Prepare DataLoader with train/validation split
+    print("Splitting data into training and validation sets...")
+    full_dataset = SequenceDataset(sequence_data_buffer, config["sequence_length"])
+
+    validation_split_ratio = config.get("validation_split", 0.1)
+    shuffle_dataset = True
+    random_seed_split = config.get("random_seed", 42)
+    print(f"Random seed: {random_seed_split}")
+
+    dataset_size = len(full_dataset)
+    indices = list(range(dataset_size))
+    split_idx = int(np.floor(validation_split_ratio * dataset_size))
+
+    if shuffle_dataset:
+        np.random.seed(random_seed_split)
+        np.random.shuffle(indices)
+
+    train_indices, val_indices = indices[split_idx:], indices[:split_idx]
+
+    print(f"Total sequences: {dataset_size}")
+    print(f"Training sequences: {len(train_indices)}")
+    print(f"Validation sequences: {len(val_indices)}")
+
+    train_sampler = SubsetRandomSampler(train_indices)
+    val_sampler = SubsetRandomSampler(val_indices)
+
+    train_dataloader = DataLoader(
+        full_dataset,
         batch_size=config["batch_size"],
-        shuffle=True,
-        num_workers=config["num_loader_workers"]
+        sampler=train_sampler,
+        num_workers=config["num_loader_workers"],
+        pin_memory=True if config['device'] == 'cuda' else False  # Added pin_memory
     )
+    val_dataloader = DataLoader(
+        full_dataset,
+        batch_size=config["batch_size"],
+        sampler=val_sampler,
+        num_workers=config["num_loader_workers"],
+        pin_memory=True if config['device'] == 'cuda' else False  # Added pin_memory
+    )
+    # --- End of new DataLoader code ---
 
     # Initialize GRU World Model
     world_model_gru = WorldModelGRU(
         latent_dim=EMBEDDING_DIM,
         codebook_size=NUM_EMBEDDINGS,
         action_dim=ACTION_DIM,
-        hidden_dim=GRU_HIDDEN_DIM,
+        hidden_dim=config['gru_hidden_dim'],
+        num_gru_layers=config['num_gru_layers'],
+        dropout_rate=config['dropout_rate']  # Pass dropout_rate
     )
     world_model_gru.to(config['device'])
 
@@ -387,13 +433,19 @@ if __name__ == "__main__":
 
     # Create the trainer instance
     # The trainer encapsulates the model, optimizer, and training logic.
-    trainer = WorldModelTrainer(world_model_gru, vq_vae_model, config)
+    trainer = WorldModelTrainer(
+        world_model_gru,
+        vq_vae_model,
+        config,
+        train_dataloader,  # Pass train_dataloader
+        val_dataloader  # Pass val_dataloader
+    )
 
     # Run the training loop
     print("Starting GRU World Model training via WorldModelTrainer...")
     start_train_time = time.time()
     # trainer saves checkpoints automatically during training
-    trainer.train(wm_dataloader, num_epochs=config["epochs"])
+    trainer.train(num_epochs=config["epochs"])  # Dataloaders are now passed in constructor
     print(f"GRU World Model training took {time.time() - start_train_time:.2f} seconds.")
 
     # Save the final GRU World Model
