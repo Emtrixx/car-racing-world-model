@@ -10,7 +10,7 @@ IMG_SIZE = 64
 # The embedding_dim must match the output channels of the Encoder
 VQVAE_EMBEDDING_DIM = 256
 # The number of discrete codes in the codebook (K)
-VQVAE_NUM_EMBEDDINGS = 4096
+VQVAE_NUM_EMBEDDINGS = 2048
 # The commitment cost is a weighting factor for the commitment loss term
 COMMITMENT_COST = 0.25
 
@@ -21,16 +21,23 @@ class VectorQuantizer(nn.Module):
     Takes a continuous tensor from the encoder and maps it to a discrete one.
     """
 
-    def __init__(self, num_embeddings: int, embedding_dim: int, commitment_cost: float):
+    def __init__(self, num_embeddings: int, embedding_dim: int, commitment_cost: float, ema_decay: float = 0.99,
+                 ema_epsilon: float = 1e-5):
         super(VectorQuantizer, self).__init__()
         self.embedding_dim = embedding_dim
         self.num_embeddings = num_embeddings
         self.commitment_cost = commitment_cost
+        self.ema_decay = ema_decay
+        self.ema_epsilon = ema_epsilon
 
         # The codebook is an embedding layer
         self.embedding = nn.Embedding(self.num_embeddings, self.embedding_dim)
         # Initialize the weights of the codebook
         self.embedding.weight.data.uniform_(-1 / self.num_embeddings, 1 / self.num_embeddings)
+
+        # EMA buffers
+        self.register_buffer('ema_cluster_size', torch.zeros(num_embeddings))
+        self.register_buffer('ema_dw', self.embedding.weight.data.clone())
 
     def forward(self, latents):
         # latents shape: [Batch, Channels, Height, Width]
@@ -56,13 +63,32 @@ class VectorQuantizer(nn.Module):
         quantized_latents = torch.matmul(encodings, self.embedding.weight)  # -> [B*H*W, C]
         quantized_latents = quantized_latents.view(latents_shape)  # -> [B, H, W, C]
 
-        # --- Calculate the VQ-VAE Loss ---
-        # The VQ-VAE loss has two parts: the codebook loss and the commitment loss.
-        # 1. Codebook Loss: Encourages codebook vectors to match encoder outputs.
-        codebook_loss = F.mse_loss(quantized_latents, latents.detach())
-        # 2. Commitment Loss: Encourages the encoder to commit to a codebook vector.
+        # --- Calculate the VQ-VAE Loss (Commitment Loss only) ---
         commitment_loss = F.mse_loss(quantized_latents.detach(), latents)
-        vq_loss = codebook_loss + self.commitment_cost * commitment_loss
+        vq_loss = self.commitment_cost * commitment_loss
+
+        # --- EMA Codebook Update ---
+        if self.training:
+            with torch.no_grad():
+                # Update EMA cluster size
+                # N_k = sum_i E_k(i) where E_k(i) is 1 if x_i is assigned to code k, 0 otherwise
+                cluster_counts = encodings.sum(0)  # Sum over B*H*W dimension, result shape [num_embeddings]
+                self.ema_cluster_size = self.ema_decay * self.ema_cluster_size + (1 - self.ema_decay) * cluster_counts
+
+                # Update EMA sum of vectors (dw)
+                # m_k = sum_i E_k(i) * x_i
+                dw = flat_latents.t() @ encodings  # [embedding_dim, B*H*W] @ [B*H*W, num_embeddings] -> [embedding_dim, num_embeddings]
+                self.ema_dw = self.ema_decay * self.ema_dw + (
+                        1 - self.ema_decay) * dw.t()  # dw needs to be transposed to [num_embeddings, embedding_dim]
+
+                # Update codebook embeddings
+                # e_k = m_k / N_k
+                n = self.ema_cluster_size.sum()
+                normalized_ema_cluster_size = (
+                        (self.ema_cluster_size + self.ema_epsilon)
+                        / (n + self.num_embeddings * self.ema_epsilon) * n
+                )  # Laplace smoothing
+                self.embedding.weight.data.copy_(self.ema_dw / normalized_ema_cluster_size.unsqueeze(1))
 
         # --- Straight-Through Estimator ---
         # This allows gradients to flow back to the encoder during backpropagation
@@ -120,11 +146,11 @@ class VQVAE(nn.Module):
     """
 
     def __init__(self, in_channels=IMG_CHANNELS, embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS,
-                 commitment_cost=COMMITMENT_COST):
+                 commitment_cost=COMMITMENT_COST, ema_decay=0.99, ema_epsilon=1e-5):
         super(VQVAE, self).__init__()
         self.encoder = Encoder(in_channels, embedding_dim)
         # The VQ layer sits between the encoder and the decoder
-        self.vq_layer = VectorQuantizer(num_embeddings, embedding_dim, commitment_cost)
+        self.vq_layer = VectorQuantizer(num_embeddings, embedding_dim, commitment_cost, ema_decay, ema_epsilon)
         self.decoder = Decoder(embedding_dim, in_channels)
 
     def forward(self, x):

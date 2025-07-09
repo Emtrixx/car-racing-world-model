@@ -19,6 +19,8 @@ def get_config(name="default"):
             "batch_size": 128,  # Batch size for training
             "learning_rate": 1e-3,  # Learning rate for optimizer
             "epochs": 50,  # Number of training epochs
+            "ema_decay": 0.99,  # EMA decay parameter for VQ-VAE
+            "ema_epsilon": 1e-5  # EMA epsilon for VQ-VAE
         },
         # for testing
         "test": {
@@ -26,6 +28,8 @@ def get_config(name="default"):
             "batch_size": 32,
             "learning_rate": 1e-3,
             "epochs": 5,
+            "ema_decay": 0.99,
+            "ema_epsilon": 1e-5
         }
     }
     return configs.get(name, configs["default"])
@@ -83,7 +87,10 @@ if __name__ == "__main__":
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True)
 
     # Initialize Model and Optimizer
-    model = VQVAE().to(DEVICE)
+    model = VQVAE(
+        ema_decay=config["ema_decay"],
+        ema_epsilon=config["ema_epsilon"]
+    ).to(DEVICE)
     optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
 
     # Training Loop
