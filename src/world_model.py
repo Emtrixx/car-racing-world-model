@@ -1,12 +1,45 @@
 import torch
 from torch import nn as nn
+import math
 
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS
 
 GRU_HIDDEN_DIM = 512  # Default hidden dimension for GRU layers
 GRID_SIZE = 4  # Default grid size for the world model
 GRU_NUM_LAYERS = 3  # Default number of GRU layers
-CODEBOOK_SIZE = 2048  # Default size of the VQ-VAE codebook
+
+
+# --- Positional Encoding ---
+class PositionalEncoding(nn.Module):
+    def __init__(self, d_model: int, max_len: int = 5000):
+        super().__init__()
+        self.d_model = d_model
+        position = torch.arange(max_len).unsqueeze(1)
+        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
+        pe = torch.zeros(1, max_len, d_model)
+        pe[0, :, 0::2] = torch.sin(position * div_term)
+        pe[0, :, 1::2] = torch.cos(position * div_term)
+        self.register_buffer('pe', pe)
+
+    def forward(self, x: torch.Tensor, position_index: int) -> torch.Tensor:
+        """
+        Adds positional encoding to the input tensor.
+
+        Args:
+            x (torch.Tensor): Input tensor of shape [batch_size, 1, d_model]
+            position_index (int): The index of the position to add encoding for.
+
+        Returns:
+            torch.Tensor: Tensor with added positional encoding, shape [batch_size, 1, d_model]
+        """
+        # self.pe is [1, max_len, d_model]
+        # We need to select the encoding for the specific position_index
+        # and add it to x. x is [batch_size, 1, d_model]
+        # self.pe[:, position_index:position_index+1, :] gives [1, 1, d_model]
+        if position_index >= self.pe.size(1):
+            raise IndexError(f"Position index {position_index} is out of range for "
+                             f"max_len {self.pe.size(1)} in PositionalEncoding.")
+        return x + self.pe[:, position_index:position_index + 1, :]
 
 
 # --- GRU-based World Model (Autoregressive Version) ---
@@ -60,6 +93,15 @@ class WorldModelGRU(nn.Module):
         self.action_embedding = nn.Linear(action_dim, hidden_dim)
         # Token projection projects VQ-VAE token embedding to GRU's hidden dimension
         self.token_proj = nn.Linear(latent_dim, hidden_dim)
+
+        # --- Learnable Start Token ---
+        # This token is projected to hidden_dim, like other token embeddings.
+        # It will be of shape [1, 1, hidden_dim] to allow easy batch expansion.
+        self.start_token_embed = nn.Parameter(torch.randn(1, 1, hidden_dim))
+
+        # --- Positional Encoding ---
+        # +1 for the start token in the sequence
+        self.pos_encoder = PositionalEncoding(hidden_dim, self.num_tokens + 1)
 
         # --- Recurrent Core ---
         self.grus = nn.ModuleList()
@@ -128,11 +170,19 @@ class WorldModelGRU(nn.Module):
         all_logits = []
         generation_hidden_state_stack = transition_hidden_state_stack  # Start with hidden state from transition
 
-        # Initial input for the first token generation (e.g., projected zero embedding or learned start token)
-        # Applying dropout to the initial projected token (if any)
-        prev_token_embed_projected = self.dropout(torch.zeros(batch_size, self.hidden_dim, device=device))
+        # --- Autoregressive Generation with Start Token and Positional Encoding ---
+        current_pos_idx = 0
 
-        for token_idx in range(self.num_tokens):
+        # Prepare the start token: expand to batch size, add positional encoding, apply dropout
+        # self.start_token_embed is [1, 1, hidden_dim]
+        # expanded_start_token is [batch_size, 1, hidden_dim]
+        expanded_start_token = self.start_token_embed.expand(batch_size, -1, -1)
+        start_token_with_pe = self.pos_encoder(expanded_start_token, current_pos_idx)
+        # Input to GRU should be [batch_size, hidden_dim]
+        prev_token_embed_projected = self.dropout(start_token_with_pe.squeeze(1))
+        current_pos_idx += 1
+
+        for token_idx in range(self.num_tokens):  # Loop to generate self.num_tokens
             current_gru_input_for_stack = prev_token_embed_projected  # Input to the first GRU layer
             next_hidden_layers_g = []
 
@@ -160,9 +210,16 @@ class WorldModelGRU(nn.Module):
                 next_token_indices = torch.distributions.Categorical(logits=current_logits).sample()
 
             next_token_embed_raw = self.token_embedding(next_token_indices)
+            # next_token_embed_projected_raw is [batch_size, hidden_dim]
             next_token_embed_projected_raw = self.token_proj(next_token_embed_raw)
-            # Apply dropout to the projected embedding of the chosen/true token for the next step
-            prev_token_embed_projected = self.dropout(next_token_embed_projected_raw)
+
+            # Add positional encoding to the current token's embedding for the next step's input
+            # Unsqueeze to [batch_size, 1, hidden_dim] for pos_encoder
+            next_token_embed_projected_unsqueezed = next_token_embed_projected_raw.unsqueeze(1)
+            next_token_embed_with_pe = self.pos_encoder(next_token_embed_projected_unsqueezed, current_pos_idx)
+            # Squeeze back to [batch_size, hidden_dim] and apply dropout
+            prev_token_embed_projected = self.dropout(next_token_embed_with_pe.squeeze(1))
+            current_pos_idx += 1
 
         predicted_latent_logits_flat = torch.stack(all_logits, dim=1)
         predicted_latent_logits = predicted_latent_logits_flat.view(
