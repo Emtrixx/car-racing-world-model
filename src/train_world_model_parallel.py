@@ -10,6 +10,7 @@ import numpy as np
 from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
+from src.legacy.train_world_model import GRU_NUM_LAYERS
 from src.play_game_sb3 import SB3_MODEL_PATH
 from src.utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
@@ -19,6 +20,7 @@ from src.utils import (
 )
 from src.vq_conv_vae import NUM_EMBEDDINGS, EMBEDDING_DIM, VQVAE
 from src.world_model import WorldModelGRU
+from src.world_model import GRU_HIDDEN_DIM
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -55,8 +57,8 @@ def get_config(name="default"):
             "validation_split": 0.1,
             "random_seed": random.randint(0, 2 ** 31 - 1),
             "val_freq": 200,
-            "gru_hidden_dim": 512,  # GRU Hidden Dimension per layer
-            "num_gru_layers": 3,  # Number of GRU layers
+            "gru_hidden_dim": GRU_HIDDEN_DIM,  # GRU Hidden Dimension per layer
+            "num_gru_layers": GRU_NUM_LAYERS,  # Number of GRU layers
             "dropout_rate": 0.1,  # Dropout rate
         }
     }
@@ -70,8 +72,8 @@ def get_config(name="default"):
         "num_collection_workers": 2,
         "num_loader_workers": 2,
         "max_episode_steps_collect": 100,
-        "gru_hidden_dim": 32,
-        "num_gru_layers": 2,
+        # "gru_hidden_dim": 32,
+        # "num_gru_layers": 2,
         "dropout_rate": 0.1,
     })
     return configs[name]
@@ -412,10 +414,7 @@ if __name__ == "__main__":
     # Initialize GRU World Model
     world_model_gru = WorldModelGRU(
         latent_dim=EMBEDDING_DIM,
-        codebook_size=NUM_EMBEDDINGS,
         action_dim=ACTION_DIM,
-        hidden_dim=config['gru_hidden_dim'],
-        num_gru_layers=config['num_gru_layers'],
         dropout_rate=config['dropout_rate']  # Pass dropout_rate
     )
     world_model_gru.to(config['device'])

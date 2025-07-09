@@ -67,7 +67,6 @@ def play_dream():
     # World Model
     world_model = WorldModelGRU(
         latent_dim=EMBEDDING_DIM,
-        codebook_size=NUM_EMBEDDINGS,
         action_dim=ACTION_DIM,
     ).to(DEVICE)
     world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))

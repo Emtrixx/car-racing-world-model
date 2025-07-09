@@ -224,9 +224,6 @@ if __name__ == "__main__":
     world_model_gru = WorldModelGRU(
         latent_dim=LATENT_DIM,  # Input is the concatenated stack
         action_dim=ACTION_DIM,
-        gru_hidden_dim=GRU_HIDDEN_DIM,
-        gru_num_layers=GRU_NUM_LAYERS,
-        gru_input_embed_dim=GRU_INPUT_EMBED_DIM
     ).to(DEVICE)
     wm_optimizer = optim.Adam(world_model_gru.parameters(), lr=WM_LEARNING_RATE)
     # Define separate loss criteria
