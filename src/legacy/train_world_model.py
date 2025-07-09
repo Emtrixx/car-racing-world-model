@@ -12,8 +12,9 @@ from src.legacy.conv_vae import ConvVAE
 from src.world_model import WorldModelGRU
 from src.utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK, IMAGES_DIR
 # Import from local modules
-from src.utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM,
+from src.utils import (DEVICE, ENV_NAME, ACTION_DIM,
                        )
+from src.legacy.utils_legacy import LATENT_DIM
 from src.legacy.utils_legacy import transform, preprocess_and_encode, preprocess_and_encode_stack, \
     VAE_CHECKPOINT_FILENAME
 from src.legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper

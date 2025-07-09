@@ -1,8 +1,11 @@
 import torch
 from torch import nn as nn
 
-GRU_HIDDEN_DIM = 256  # Default hidden dimension for GRU layers
+from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS
+
+GRU_HIDDEN_DIM = 512  # Default hidden dimension for GRU layers
 GRID_SIZE = 4  # Default grid size for the world model
+GRU_NUM_LAYERS = 3  # Default number of GRU layers
 CODEBOOK_SIZE = 2048  # Default size of the VQ-VAE codebook
 
 
@@ -22,10 +25,10 @@ class WorldModelGRU(nn.Module):
             self,
             latent_dim: int,
             action_dim: int,
-            hidden_dim: int = 256,
-            codebook_size: int = 2048,
-            grid_size: int = 4,
-            num_gru_layers: int = 2,
+            codebook_size: int = VQVAE_NUM_EMBEDDINGS,
+            hidden_dim: int = GRU_HIDDEN_DIM,
+            grid_size: int = GRID_SIZE,
+            num_gru_layers: int = GRU_NUM_LAYERS,
             dropout_rate: float = 0.1
     ):
         """

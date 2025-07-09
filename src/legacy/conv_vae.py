@@ -2,7 +2,8 @@ import torch
 from torch import nn as nn
 from torch.nn import functional as F
 
-from src.utils import CHANNELS, LATENT_DIM, IMG_SIZE
+from src.utils import CHANNELS, IMG_SIZE
+from src.legacy.utils_legacy import LATENT_DIM
 
 
 # --- VAE Model Definition ---

@@ -11,7 +11,7 @@ from stable_baselines3 import PPO
 from src.play_game_sb3 import SB3_MODEL_PATH
 from src.utils import VIDEO_DIR, ASSETS_DIR, DATA_DIR, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, \
     ACTION_DIM
-from src.vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
+from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
 from src.world_model import WorldModelGRU
 
 
@@ -259,14 +259,14 @@ if __name__ == '__main__':
     # Load world model
     print("Loading trained models...")
     world_model = WorldModelGRU(
-        latent_dim=EMBEDDING_DIM,
-        codebook_size=NUM_EMBEDDINGS,
+        latent_dim=VQVAE_EMBEDDING_DIM,
+        codebook_size=VQVAE_NUM_EMBEDDINGS,
         action_dim=ACTION_DIM,
     ).to(DEVICE)
     world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
 
     # Load VQ-VAE model
-    vq_vae = VQVAE(embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS).to(DEVICE)
+    vq_vae = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS).to(DEVICE)
     vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
 
     # --- Load Trained SB3 PPO Agent ---

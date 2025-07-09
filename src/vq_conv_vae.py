@@ -8,9 +8,9 @@ IMG_CHANNELS = 1  # For grayscale images
 IMG_SIZE = 64
 # VQ-VAE Hyperparameters
 # The embedding_dim must match the output channels of the Encoder
-EMBEDDING_DIM = 256
+VQVAE_EMBEDDING_DIM = 256
 # The number of discrete codes in the codebook (K)
-NUM_EMBEDDINGS = 4096
+VQVAE_NUM_EMBEDDINGS = 4096
 # The commitment cost is a weighting factor for the commitment loss term
 COMMITMENT_COST = 0.25
 
@@ -119,7 +119,7 @@ class VQVAE(nn.Module):
     The full VQ-VAE model that combines the Encoder, VectorQuantizer, and Decoder.
     """
 
-    def __init__(self, in_channels=IMG_CHANNELS, embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS,
+    def __init__(self, in_channels=IMG_CHANNELS, embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS,
                  commitment_cost=COMMITMENT_COST):
         super(VQVAE, self).__init__()
         self.encoder = Encoder(in_channels, embedding_dim)

@@ -7,9 +7,9 @@ import cv2
 from src.utils import (
     WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM
 )
-from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
-from world_model import WorldModelGRU
-from dreaming_render import get_starting_state_from_sequence
+from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
+from src.world_model import WorldModelGRU
+from src.dreaming_render import get_starting_state_from_sequence
 
 
 # --- Function to draw key presses ---
@@ -66,14 +66,14 @@ def play_dream():
     print("Loading models...")
     # World Model
     world_model = WorldModelGRU(
-        latent_dim=EMBEDDING_DIM,
+        latent_dim=VQVAE_EMBEDDING_DIM,
         action_dim=ACTION_DIM,
     ).to(DEVICE)
     world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
     world_model.eval()
 
     # VQ-VAE Model
-    vq_vae = VQVAE(embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS).to(DEVICE)
+    vq_vae = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS).to(DEVICE)
     vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
     vq_vae.eval()
 

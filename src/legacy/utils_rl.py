@@ -6,7 +6,8 @@ import torch.optim as optim  # For type hinting
 import torch.nn.functional as F
 import numpy as np
 
-from src.utils import ENV_NAME, LATENT_DIM
+from src.utils import ENV_NAME
+from legacy.utils_legacy import LATENT_DIM
 
 
 @dataclass

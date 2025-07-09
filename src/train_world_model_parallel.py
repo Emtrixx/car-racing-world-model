@@ -10,7 +10,6 @@ import numpy as np
 from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
-from src.legacy.train_world_model import GRU_NUM_LAYERS
 from src.play_game_sb3 import SB3_MODEL_PATH
 from src.utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
@@ -18,9 +17,8 @@ from src.utils import (
     DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, WorldModelDataCollector, WorldModelTrainer,
     make_env_sb3, NUM_STACK
 )
-from src.vq_conv_vae import NUM_EMBEDDINGS, EMBEDDING_DIM, VQVAE
-from src.world_model import WorldModelGRU
-from src.world_model import GRU_HIDDEN_DIM
+from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
+from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -413,14 +411,14 @@ if __name__ == "__main__":
 
     # Initialize GRU World Model
     world_model_gru = WorldModelGRU(
-        latent_dim=EMBEDDING_DIM,
+        latent_dim=VQVAE_EMBEDDING_DIM,
         action_dim=ACTION_DIM,
         dropout_rate=config['dropout_rate']  # Pass dropout_rate
     )
     world_model_gru.to(config['device'])
 
     # Initialize VQ-VAE Model
-    vq_vae_model = VQVAE(embedding_dim=EMBEDDING_DIM, num_embeddings=NUM_EMBEDDINGS)
+    vq_vae_model = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS)
     vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME))
     vq_vae_model.to(config['device'])
     vq_vae_model.eval()

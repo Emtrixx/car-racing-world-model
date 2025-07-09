@@ -4,7 +4,7 @@ import torch
 from gymnasium import spaces
 from torchvision import transforms
 
-from src.utils import ENV_NAME, NUM_STACK, LATENT_DIM, DEVICE, ActionClipWrapper, FrameStackWrapper, IMG_SIZE, \
+from src.utils import ENV_NAME, NUM_STACK, DEVICE, ActionClipWrapper, FrameStackWrapper, IMG_SIZE, \
     CHECKPOINTS_DIR
 
 WM_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
@@ -47,6 +47,9 @@ class LatentStateWrapper(gym.ObservationWrapper):
 
         # Environment observations should be NumPy arrays on CPU
         return concatenated_latents_tensor.cpu().numpy()
+
+
+LATENT_DIM = 32  # Size of the latent space vector z
 
 
 def make_env(vae_model_instance,  # The loaded and initialized VAE model
@@ -124,3 +127,4 @@ def preprocess_and_encode_stack(
 
 
 VAE_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_vae_ld{LATENT_DIM}.pth"
+MLP_HIDDEN_DIM = 256  # Hidden dimension for the World Model MLP

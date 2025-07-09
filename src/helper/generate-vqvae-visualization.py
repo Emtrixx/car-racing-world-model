@@ -8,7 +8,7 @@ from sklearn.manifold import TSNE
 from torchvision.utils import make_grid
 
 from src.utils import VQ_VAE_CHECKPOINT_FILENAME, DEVICE, ASSETS_DIR
-from src.vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
+from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
 
 # --- Configuration ---
 
@@ -64,7 +64,7 @@ if __name__ == '__main__':
     print("Projection complete.")
 
     # --- Decode Each Vector and Save Image ---
-    print(f"Decoding {NUM_EMBEDDINGS} codebook vectors to image patches...")
+    print(f"Decoding {VQVAE_NUM_EMBEDDINGS} codebook vectors to image patches...")
     codebook_data = []
 
     # The feature map size of the encoder is 4x4 (64 -> 32 -> 16 -> 8 -> 4)
@@ -73,7 +73,7 @@ if __name__ == '__main__':
 
     for i in range(len(codebook_weights)):
         # Get the vector and move it to the correct device
-        vector = torch.tensor(codebook_weights[i], device=DEVICE).view(1, EMBEDDING_DIM, 1, 1)
+        vector = torch.tensor(codebook_weights[i], device=DEVICE).view(1, VQVAE_EMBEDDING_DIM, 1, 1)
 
         # Expand the vector to match the expected feature map size (e.g., 4x4)
         # The decoder was trained on feature maps of a certain spatial size.
@@ -103,7 +103,7 @@ if __name__ == '__main__':
             "imagePath": image_relative_path
         })
 
-        print(f"  - Decoded and saved patch {i + 1}/{NUM_EMBEDDINGS}", end='\r')
+        print(f"  - Decoded and saved patch {i + 1}/{VQVAE_NUM_EMBEDDINGS}", end='\r')
 
     print("\nDecoding complete.")
 

@@ -2,7 +2,8 @@ import torch
 from torch import nn as nn
 from torch.distributions import Normal
 
-from src.utils import LATENT_DIM, ACTION_DIM, NUM_STACK
+from src.utils import ACTION_DIM, NUM_STACK
+from src.legacy.utils_legacy import LATENT_DIM
 
 
 # --- Actor Network ---
