@@ -20,6 +20,7 @@ datasets/
 *.ckpt
 *.pth
 *.pt
+*.zip
 *.joblib
 *.pkl
 *.npz
@@ -39,7 +40,9 @@ Thumbs.db
 .vscode/
 
 # Checkpoints
-checkpoints/sb3_test_carracing-v3*
+checkpoints/sb3_checkpoints/sb3_test_carracing-v3
+checkpoints/sb3_checkpoints/sb3_test_carracing-v3_best
+checkpoints/sb3_checkpoints/sb3_test_carracing-v3_final.zip
 openevolve/
 checkpoints/imported/
 assets/

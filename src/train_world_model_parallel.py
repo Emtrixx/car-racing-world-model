@@ -10,15 +10,15 @@ import numpy as np
 from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
-from play_game_sb3 import SB3_MODEL_PATH
+from src.play_game_sb3 import SB3_MODEL_PATH
 from src.utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     ACTION_DIM,  # Default: 3
     DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, WorldModelDataCollector, WorldModelTrainer,
     make_env_sb3, NUM_STACK
 )
-from vq_conv_vae import NUM_EMBEDDINGS, EMBEDDING_DIM, VQVAE
-from world_model import WorldModelGRU
+from src.vq_conv_vae import NUM_EMBEDDINGS, EMBEDDING_DIM, VQVAE
+from src.world_model import WorldModelGRU
 
 # --- Configuration ---
 # Training Hyperparameters

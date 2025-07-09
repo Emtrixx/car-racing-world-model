@@ -6,10 +6,10 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-from play_game_sb3 import SB3_MODEL_PATH
+from src.play_game_sb3 import SB3_MODEL_PATH
 from src.utils import VIDEO_DIR
-from utils import (ENV_NAME, NUM_STACK, make_env_sb3,
-                   DEVICE)
+from src.utils import (ENV_NAME, NUM_STACK, make_env_sb3,
+                       DEVICE)
 
 # --- Video Configuration ---
 NUM_EPISODES_TO_RECORD = 2  # How many episodes to record

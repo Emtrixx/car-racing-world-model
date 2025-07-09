@@ -8,11 +8,11 @@ import numpy as np
 import torch
 from stable_baselines3 import PPO
 
-from play_game_sb3 import SB3_MODEL_PATH
-from src.utils import VIDEO_DIR, ASSETS_DIR, DATA_DIR
-from utils import WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM
-from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
-from world_model import WorldModelGRU
+from src.play_game_sb3 import SB3_MODEL_PATH
+from src.utils import VIDEO_DIR, ASSETS_DIR, DATA_DIR, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, \
+    ACTION_DIM
+from src.vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
+from src.world_model import WorldModelGRU
 
 
 def get_starting_state_from_image(image_path: str, world_model: WorldModelGRU, vq_vae: VQVAE, device):

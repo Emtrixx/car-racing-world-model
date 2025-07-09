@@ -11,6 +11,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from src.utils import preprocess_observation, IMAGES_DIR
+from utils import DATA_DIR
 
 
 # --- Dataset Class ---
@@ -93,7 +94,7 @@ def collect_and_save_frames(num_frames, save_dir="data/frames", batch_size=1000,
 
 
 # --- Load All Frame Batches from Disk ---
-def load_frames_from_disk(load_dir="data/frames", max_frames_to_load=None):
+def load_frames_from_disk(load_dir=DATA_DIR / "frames", max_frames_to_load=None):
     """
     Loads frame batches from a directory with a progress bar and an optional frame limit.
 

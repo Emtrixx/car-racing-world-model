@@ -8,8 +8,8 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from src.utils import DEVICE, ENV_NAME, VQ_VAE_CHECKPOINT_FILENAME
-from utils_vae import FrameDataset, visualize_reconstruction, collect_and_save_frames, load_frames_from_disk
-from vq_conv_vae import VQVAE
+from src.utils_vae import FrameDataset, visualize_reconstruction, collect_and_save_frames, load_frames_from_disk
+from src.vq_conv_vae import VQVAE
 
 
 def get_config(name="default"):
@@ -25,7 +25,7 @@ def get_config(name="default"):
             "num_frames_collect": 10000,
             "batch_size": 32,
             "learning_rate": 1e-3,
-            "epochs": 10,
+            "epochs": 5,
         }
     }
     return configs.get(name, configs["default"])
