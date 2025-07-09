@@ -8,12 +8,12 @@ import torch
 import torch.optim as optim
 
 from actor_critic import Actor, Critic
-from legacy.conv_vae import ConvVAE
+from src.legacy.conv_vae import ConvVAE
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, VAE_CHECKPOINT_FILENAME, NUM_STACK,
-                   LATENT_DIM)
-from legacy.utils_legacy import make_env, transform
-from legacy.utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
+from src.utils import (DEVICE, ENV_NAME, VAE_CHECKPOINT_FILENAME, NUM_STACK,
+                       LATENT_DIM, IMAGES_DIR)
+from src.legacy.utils_legacy import make_env, transform
+from src.legacy.utils_rl import perform_ppo_update, PPO_ACTOR_SAVE_FILENAME, \
     PPO_CRITIC_SAVE_FILENAME, PPOHyperparameters, RolloutBuffer
 
 print(f"Using device: {DEVICE}")
@@ -238,7 +238,7 @@ def train_ppo(config):  # Added config argument
     plt.xlabel("Episode")
     plt.ylabel("Total Reward")
     plt.title("PPO Training Rewards")
-    plt.savefig("images/ppo_training_rewards.png")
+    plt.savefig(IMAGES_DIR / "ppo_training_rewards.png")
     print("Saved rewards plot to ppo_training_rewards.png")
 
 

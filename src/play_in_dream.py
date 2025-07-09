@@ -4,11 +4,11 @@ import torch
 import numpy as np
 import cv2
 
-from utils import (
+from src.utils import (
     WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM
 )
 from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
-from world_model import WorldModelGRU, GRU_HIDDEN_DIM
+from world_model import WorldModelGRU
 from dreaming_render import get_starting_state_from_sequence
 
 
@@ -69,7 +69,6 @@ def play_dream():
         latent_dim=EMBEDDING_DIM,
         codebook_size=NUM_EMBEDDINGS,
         action_dim=ACTION_DIM,
-        hidden_dim=GRU_HIDDEN_DIM
     ).to(DEVICE)
     world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
     world_model.eval()
@@ -80,7 +79,7 @@ def play_dream():
     vq_vae.eval()
 
     # --- Prime the Initial State ---
-    image_files = sorted([os.path.join("./data/init_frames", f) for f in os.listdir("./data/init_frames")])
+    image_files = sorted([os.path.join("../data/init_frames", f) for f in os.listdir("../data/init_frames")])
     priming_sequence = image_files[:10]
     hidden_state, _, initial_frame_tensor = get_starting_state_from_sequence(priming_sequence, world_model, vq_vae,
                                                                              DEVICE)

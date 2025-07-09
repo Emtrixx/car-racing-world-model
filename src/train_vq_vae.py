@@ -7,7 +7,7 @@ from torch import optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from utils import DEVICE, ENV_NAME, VQ_VAE_CHECKPOINT_FILENAME
+from src.utils import DEVICE, ENV_NAME, VQ_VAE_CHECKPOINT_FILENAME
 from utils_vae import FrameDataset, visualize_reconstruction, collect_and_save_frames, load_frames_from_disk
 from vq_conv_vae import VQVAE
 

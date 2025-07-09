@@ -6,15 +6,15 @@ from pathlib import Path
 from PIL import Image
 import numpy as np
 
-from utils import preprocess_observation, DEVICE, VQ_VAE_CHECKPOINT_FILENAME
-from vq_conv_vae import VQVAE
+from src.utils import preprocess_observation, DEVICE, VQ_VAE_CHECKPOINT_FILENAME, DATA_DIR
+from src.vq_conv_vae import VQVAE
 
 # --- Configuration ---
 # You can change these parameters
 MODEL_ID = "Pyro-X2/CarRacingSB3"
 MODEL_FILENAME = "ppo-CarRacing-v3.zip"
 NUM_IMAGES_TO_SAVE = 50  # Total number of sample images to generate
-OUTPUT_DIR = Path("../data/init_frames/")
+OUTPUT_DIR = Path(DATA_DIR / "init_frames/")
 
 
 def save_preprocessed_observation(preprocessed_obs, filename):

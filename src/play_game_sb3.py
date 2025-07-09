@@ -7,9 +7,9 @@ import numpy as np
 from stable_baselines3 import PPO
 
 # Import from local modules
-from utils import (
+from src.utils import (
     DEVICE, ENV_NAME, NUM_STACK,
-    make_env_sb3  # Use the SB3 compatible environment creation function
+    make_env_sb3, SB3_CHECKPOINTS_DIR  # Use the SB3 compatible environment creation function
 )
 
 # --- Configuration ---
@@ -22,7 +22,7 @@ DETERMINISTIC_PLAY = True  # Use deterministic actions for playback
 SB3_MODEL_FILENAME = f"cnn_sb3_default_carracing-v3_final.zip"
 # SB3_MODEL_FILENAME = f"cnn_sb3_default_carracing-v3_best/best_model.zip"  # best
 # SB3_MODEL_FILENAME = f"cnn_sb3_default_carracing-v3/ppo_model_5000000_steps.zip" # specific step
-SB3_MODEL_PATH = pathlib.Path("checkpoints") / SB3_MODEL_FILENAME
+SB3_MODEL_PATH = pathlib.Path(SB3_CHECKPOINTS_DIR / SB3_MODEL_FILENAME)
 
 
 def play_sb3():
@@ -71,11 +71,10 @@ def play_sb3():
         obs_latent_state, info = env.reset()
 
         done = False
-        truncated = False
         total_reward = 0
         step_count = 0
 
-        while not done and not truncated:
+        while not done:
             # 1. Get Action from SB3 PPO Agent
             #    The observation (obs_latent_state) is already the processed latent state.
             #    The PPO agent expects this directly.

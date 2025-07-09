@@ -6,13 +6,13 @@ import torch.optim as optim  # For type hinting
 import torch.nn.functional as F
 import numpy as np
 
-from utils import ENV_NAME, LATENT_DIM
+from src.utils import ENV_NAME, LATENT_DIM
 
 
 @dataclass
 class PPOHyperparameters:
     gamma: float = 0.99
-    lambda_gae: float = 0.95 # Renamed from LAMBDA to avoid keyword clash
+    lambda_gae: float = 0.95  # Renamed from LAMBDA to avoid keyword clash
     epsilon_clip: float = 0.2
     actor_lr: float = 3e-4
     critic_lr: float = 1e-3
@@ -127,7 +127,7 @@ class RandomPolicy:
     def __init__(self, action_space):
         self.action_space = action_space
 
-    def get_action(self, state): # state can be observation or latent state, ignored here
+    def get_action(self, state):  # state can be observation or latent state, ignored here
         return self.action_space.sample()
 
 
@@ -135,7 +135,7 @@ class PPOPolicyWrapper:
     def __init__(self, actor_model, device, deterministic=False, action_space_low=None, action_space_high=None):
         self.actor_model = actor_model
         self.device = device
-        self.deterministic = deterministic # False for exploration, True for exploitation/eval
+        self.deterministic = deterministic  # False for exploration, True for exploitation/eval
 
         if action_space_low is None:
             # Defaults for CarRacing-v3
@@ -146,34 +146,34 @@ class PPOPolicyWrapper:
         self.action_space_low_tensor = torch.tensor(action_space_low, device=self.device, dtype=torch.float32)
         self.action_space_high_tensor = torch.tensor(action_space_high, device=self.device, dtype=torch.float32)
 
-
-    def get_action(self, z_t_numpy): # Expects a numpy array for z_t
-        self.actor_model.eval() # Ensure actor is in eval mode
-        z_t = torch.tensor(z_t_numpy, dtype=torch.float32).to(self.device).unsqueeze(0) # Add batch dim
+    def get_action(self, z_t_numpy):  # Expects a numpy array for z_t
+        self.actor_model.eval()  # Ensure actor is in eval mode
+        z_t = torch.tensor(z_t_numpy, dtype=torch.float32).to(self.device).unsqueeze(0)  # Add batch dim
 
         with torch.no_grad():
-            dist = self.actor_model(z_t) # actor_model should be the loaded Actor network
+            dist = self.actor_model(z_t)  # actor_model should be the loaded Actor network
             if self.deterministic:
                 action_raw = dist.mean
             else:
-                action_raw = dist.sample() # Sample for exploration
+                action_raw = dist.sample()  # Sample for exploration
 
             # Process action (same logic as in train_ppo.py and play_game.py)
             # Steering is output by actor's fc_mean in tanh range already for its first component
             # Gas/Brake means are unbounded from fc_mean, then dist samples.
             # We apply tanh to the sample, then scale.
 
-            action_processed = torch.tanh(action_raw) # Squash sample to [-1, 1]
+            action_processed = torch.tanh(action_raw)  # Squash sample to [-1, 1]
 
             action_scaled = torch.zeros_like(action_processed)
-            action_scaled[:, 0] = action_processed[:, 0] # Steering: directly use tanh output
-            action_scaled[:, 1:] = (action_processed[:, 1:] + 1.0) / 2.0 # Gas, Brake: scale from [-1,1] to [0,1]
+            action_scaled[:, 0] = action_processed[:, 0]  # Steering: directly use tanh output
+            action_scaled[:, 1:] = (action_processed[:, 1:] + 1.0) / 2.0  # Gas, Brake: scale from [-1,1] to [0,1]
 
             action_clipped = torch.clamp(action_scaled,
                                          self.action_space_low_tensor,
                                          self.action_space_high_tensor)
 
         return action_clipped.squeeze(0).cpu().numpy()
+
 
 # --- PPO Storage ---
 # Simple class or dictionary to hold rollout data
@@ -186,7 +186,7 @@ class RolloutBuffer:
         self.dones = []
         self.values = []
         # These will be populated by compute_returns_and_advantages
-        self.returns = None     # torch.Tensor
+        self.returns = None  # torch.Tensor
         self.advantages = None  # torch.Tensor
 
     def add(self, state, action, log_prob, reward, done, value):
@@ -235,11 +235,11 @@ class RolloutBuffer:
 
     def get_batch(self, batch_size):
         """ Returns shuffled minibatches from the stored data. """
-        n_samples = len(self.states) # Use length of states/actions list
+        n_samples = len(self.states)  # Use length of states/actions list
         if n_samples == 0:
-             # Handle case where buffer might be empty after clear or before first fill
-             print("Warning: get_batch called on empty buffer.")
-             return # Yield nothing
+            # Handle case where buffer might be empty after clear or before first fill
+            print("Warning: get_batch called on empty buffer.")
+            return  # Yield nothing
 
         indices = np.random.permutation(n_samples)
 
@@ -252,7 +252,7 @@ class RolloutBuffer:
         # Use the pre-computed tensors directly (they should be on CPU)
         # Add a check to ensure compute_returns_and_advantages was called
         if not hasattr(self, 'returns') or not hasattr(self, 'advantages'):
-             raise RuntimeError("compute_returns_and_advantages must be called before get_batch")
+            raise RuntimeError("compute_returns_and_advantages must be called before get_batch")
         # These are already tensors, no need to stack
         all_returns = self.returns
         all_advantages = self.advantages
@@ -266,16 +266,15 @@ class RolloutBuffer:
                 all_advantages.shape[0] == n_samples):
             raise RuntimeError(f"Shape mismatch in buffer data! Expected {n_samples} samples.")
 
-
         for i in range(0, n_samples, batch_size):
-            batch_indices = indices[i : i + batch_size]
+            batch_indices = indices[i: i + batch_size]
             yield (
-                all_states[batch_indices],    # Shape: (batch_size, latent_dim)
-                all_actions[batch_indices],   # Shape: (batch_size, action_dim)
-                all_log_probs[batch_indices], # Shape: (batch_size,)
-                all_returns[batch_indices],   # Shape: (batch_size,)
-                all_advantages[batch_indices],# Shape: (batch_size,)
+                all_states[batch_indices],  # Shape: (batch_size, latent_dim)
+                all_actions[batch_indices],  # Shape: (batch_size, action_dim)
+                all_log_probs[batch_indices],  # Shape: (batch_size,)
+                all_returns[batch_indices],  # Shape: (batch_size,)
+                all_advantages[batch_indices],  # Shape: (batch_size,)
             )
 
     def clear(self):
-        self.__init__() # Reset all lists
+        self.__init__()  # Reset all lists

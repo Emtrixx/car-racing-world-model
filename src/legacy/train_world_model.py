@@ -7,16 +7,16 @@ from torch.utils.data import DataLoader, Dataset
 import time
 import matplotlib.pyplot as plt
 
-from legacy.actor_critic import Actor
-from legacy.conv_vae import ConvVAE
-from world_model import WorldModelGRU
-from utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK
+from src.legacy.actor_critic import Actor
+from src.legacy.conv_vae import ConvVAE
+from src.world_model import WorldModelGRU
+from src.utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK, IMAGES_DIR
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM,
-                   VAE_CHECKPOINT_FILENAME,  # WM_CHECKPOINT_FILENAME (will change suffix)
-                   )
-from legacy.utils_legacy import transform, preprocess_and_encode, preprocess_and_encode_stack
-from legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
+from src.utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM,
+                       VAE_CHECKPOINT_FILENAME,
+                       )
+from src.legacy.utils_legacy import transform, preprocess_and_encode, preprocess_and_encode_stack
+from src.legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 
 # --- Configuration ---
 WM_LEARNING_RATE = 1e-4
@@ -252,7 +252,7 @@ if __name__ == "__main__":
     plt.ylabel("MSE Loss")
     plt.title(f"GRU World Model Training Loss (SeqLen {SEQUENCE_LENGTH})");
     plt.grid(True)
-    loss_plot_path = f"images/world_model_gru_loss_seq{SEQUENCE_LENGTH}.png"
+    loss_plot_path = IMAGES_DIR / f"world_model_gru_loss_seq{SEQUENCE_LENGTH}.png"
     plt.savefig(loss_plot_path);
     print(f"Saved loss plot to {loss_plot_path}");
     plt.close()

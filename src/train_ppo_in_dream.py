@@ -15,8 +15,8 @@ from legacy.actor_critic import Actor, Critic
 from legacy.conv_vae import ConvVAE
 from world_model import WorldModelGRU
 # Import from local modules
-from utils import (DEVICE, ENV_NAME, transform,
-                   VAE_CHECKPOINT_FILENAME, preprocess_and_encode)
+from src.utils import (DEVICE, ENV_NAME, transform,
+                       VAE_CHECKPOINT_FILENAME, preprocess_and_encode, IMAGES_DIR)
 from legacy.utils_rl import RandomPolicy, PPOHyperparameters, PPO_DREAM_ACTOR_SAVE_FILENAME, \
     PPO_DREAM_CRITIC_SAVE_FILENAME, RolloutBuffer
 
@@ -296,7 +296,7 @@ def train_ppo_in_dream():
     plt.xlabel("Dream Episode Index (approx)")
     plt.ylabel("Total Predicted Reward in Dream")
     plt.title("PPO Training Rewards in Dream Environment")
-    plt.savefig("images/ppo_dream_training_rewards.png")
+    plt.savefig(IMAGES_DIR / "ppo_dream_training_rewards.png")
     print("Saved dream rewards plot.")
 
 

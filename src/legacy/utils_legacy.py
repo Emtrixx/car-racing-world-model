@@ -4,7 +4,9 @@ import torch
 from gymnasium import spaces
 from torchvision import transforms
 
-from utils import ENV_NAME, NUM_STACK, LATENT_DIM, DEVICE, ActionClipWrapper, FrameStackWrapper, IMG_SIZE
+from src.utils import ENV_NAME, NUM_STACK, LATENT_DIM, DEVICE, ActionClipWrapper, FrameStackWrapper, IMG_SIZE
+
+WM_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
 
 
 class LatentStateWrapper(gym.ObservationWrapper):

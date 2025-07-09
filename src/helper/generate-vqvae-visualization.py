@@ -7,14 +7,14 @@ from PIL import Image
 from sklearn.manifold import TSNE
 from torchvision.utils import make_grid
 
-from utils import VQ_VAE_CHECKPOINT_FILENAME, DEVICE
-from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
+from src.utils import VQ_VAE_CHECKPOINT_FILENAME, DEVICE, ASSETS_DIR
+from src.vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
 
 # --- Configuration ---
 
 # Define the output directory relative to where you run this script.
 # This should point to the `public` folder of your Vite project.
-OUTPUT_DIR = Path("../assets")
+OUTPUT_DIR = ASSETS_DIR
 PATCHES_DIR = OUTPUT_DIR / "decoded_patches"
 
 

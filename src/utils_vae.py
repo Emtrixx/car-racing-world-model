@@ -10,7 +10,7 @@ from stable_baselines3 import PPO
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from utils import preprocess_observation
+from src.utils import preprocess_observation, IMAGES_DIR
 
 
 # --- Dataset Class ---
@@ -194,8 +194,7 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])
     # Create images directory if it doesn't exist
-    pathlib.Path("images").mkdir(exist_ok=True)
-    save_path = f"images/vqvae_reconstruction_epoch_{epoch}.png"
+    save_path = IMAGES_DIR / f"vqvae_reconstruction_epoch_{epoch}.png"
     plt.savefig(save_path)
     print(f"Saved reconstruction visualization to {save_path}")
     plt.close(fig)

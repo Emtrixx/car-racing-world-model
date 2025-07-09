@@ -11,7 +11,7 @@ from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
 from play_game_sb3 import SB3_MODEL_PATH
-from utils import (
+from src.utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     ACTION_DIM,  # Default: 3
     DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, WorldModelDataCollector, WorldModelTrainer,
@@ -159,7 +159,7 @@ def collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_name
             except OSError as e:
                 print(f"[Worker {worker_id}] Error creating directory {temp_data_dir}: {e}")
                 # Fallback to current directory if subdir creation fails
-                temp_data_dir = "."
+                temp_data_dir = ".."
 
         # Generate unique filename
         timestamp = int(time.time() * 1000)

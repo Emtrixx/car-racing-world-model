@@ -1,9 +1,9 @@
 videos/
-legacy/
+src/legacy/
 images/
 assets/
 data/
-checkpoints/sb3_default_carracing-v3/
-checkpoints/sb3_test_carracing-v3/
-checkpoints/sb3_test_carracing-v3_best/
-checkpoints/sb3_test_carracing-v3_final.zip
+checkpoints/sb3_checkpoints/sb3_default_carracing-v3/
+checkpoints/sb3_checkpoints/sb3_test_carracing-v3/
+checkpoints/sb3_checkpoints/sb3_test_carracing-v3_best/
+checkpoints/sb3_checkpoints/sb3_test_carracing-v3_final.zip

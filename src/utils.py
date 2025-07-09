@@ -2,6 +2,7 @@
 import os
 from collections import deque
 from typing import Optional, Any
+from pathlib import Path
 
 import cv2
 import gymnasium as gym
@@ -24,12 +25,33 @@ ACTION_DIM = 3  # CarRacing: Steering, Gas, Brake
 DEVICE_STR = "cuda" if torch.cuda.is_available() else "cpu"
 DEVICE = torch.device(DEVICE_STR)  # Use GPU if available, else CPU
 
+# --- Directory Paths ---
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+CHECKPOINTS_DIR = PROJECT_ROOT / "checkpoints"
+SB3_CHECKPOINTS_DIR = CHECKPOINTS_DIR / "sb3_checkpoints"
+VQVAE_CHECKPOINTS_DIR = CHECKPOINTS_DIR / "vqvae_checkpoints"
+GRU_WM_CHECKPOINTS_DIR = CHECKPOINTS_DIR / "gru_wm_checkpoints"
+VIDEO_DIR = PROJECT_ROOT / "videos"
+IMAGES_DIR = PROJECT_ROOT / "images"
+ASSETS_DIR = PROJECT_ROOT / "assets"  # used in webapp for visualization
+DATA_DIR = PROJECT_ROOT / "data"  # For storing datasets, e.g., frames for VAE training
+LOGS_DIR = PROJECT_ROOT / "logs"
+
+CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+SB3_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+VQVAE_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+GRU_WM_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+VIDEO_DIR.mkdir(parents=True, exist_ok=True)
+IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+LOGS_DIR.mkdir(parents=True, exist_ok=True)
+
 # --- File Paths ---
-VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_cvae_ld{LATENT_DIM}_epoch10.pth"
-VQ_VAE_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_vqvae_ld{64}.pth"
+VAE_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_vae_ld{LATENT_DIM}.pth"
+VQ_VAE_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{64}.pth"
 WM_MODEL_SUFFIX = f"ld{LATENT_DIM}_ac{ACTION_DIM}"
-WM_CHECKPOINT_FILENAME = f"checkpoints/{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
-WM_CHECKPOINT_FILENAME_GRU = f"checkpoints/{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
+WM_CHECKPOINT_FILENAME_GRU = CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
 
 
 # --- Preprocessing Function ---

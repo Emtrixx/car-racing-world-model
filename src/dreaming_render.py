@@ -9,9 +9,10 @@ import torch
 from stable_baselines3 import PPO
 
 from play_game_sb3 import SB3_MODEL_PATH
+from src.utils import VIDEO_DIR, ASSETS_DIR, DATA_DIR
 from utils import WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM
 from vq_conv_vae import VQVAE, EMBEDDING_DIM, NUM_EMBEDDINGS
-from world_model import WorldModelGRU, GRU_HIDDEN_DIM
+from world_model import WorldModelGRU
 
 
 def get_starting_state_from_image(image_path: str, world_model: WorldModelGRU, vq_vae: VQVAE, device):
@@ -249,9 +250,10 @@ def generate_video(frames, output_path, fps=30):
 if __name__ == '__main__':
     # --- Configuration ---
     DREAM_STEPS = 300
-    SAMPLE_IMAGE_DIR = "./assets/sample_images/"
+    SAMPLE_IMAGE_DIR = ASSETS_DIR / "sample_images"
+    INIT_FRAMES_DIR = DATA_DIR / "init_frames"
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-    OUTPUT_DIR = "videos"
+    OUTPUT_DIR = VIDEO_DIR
     os.makedirs(OUTPUT_DIR, exist_ok=True)
 
     # Load world model
@@ -260,7 +262,6 @@ if __name__ == '__main__':
         latent_dim=EMBEDDING_DIM,
         codebook_size=NUM_EMBEDDINGS,
         action_dim=ACTION_DIM,
-        hidden_dim=GRU_HIDDEN_DIM
     ).to(DEVICE)
     world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
 
@@ -296,7 +297,7 @@ if __name__ == '__main__':
     # primed_h, first_frame_tensor = get_starting_state_from_image(start_image_path, world_model, vq_vae, DEVICE)
 
     # --- setup for dreaming from a sequence of images ---
-    image_files = sorted([os.path.join("./data/init_frames", f) for f in os.listdir("./data/init_frames")])
+    image_files = sorted([os.path.join(INIT_FRAMES_DIR, f) for f in os.listdir(INIT_FRAMES_DIR)])
     priming_sequence = image_files[:10]
     primed_h, last_frame_reconstruction, frame_tensor = get_starting_state_from_sequence(priming_sequence, world_model,
                                                                                          vq_vae, DEVICE)

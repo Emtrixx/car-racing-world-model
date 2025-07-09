@@ -2,12 +2,13 @@ import torch
 from torch import nn as nn
 from torch.distributions import Normal
 
-from utils import LATENT_DIM, ACTION_DIM, NUM_STACK
+from src.utils import LATENT_DIM, ACTION_DIM, NUM_STACK
 
 
 # --- Actor Network ---
 class Actor(nn.Module):
-    def __init__(self, state_dim=LATENT_DIM * NUM_STACK, action_dim=ACTION_DIM, hidden_dim=256, log_std_min=-20, log_std_max=2):
+    def __init__(self, state_dim=LATENT_DIM * NUM_STACK, action_dim=ACTION_DIM, hidden_dim=256, log_std_min=-20,
+                 log_std_max=2):
         super().__init__()
         self.action_dim = action_dim
         self.log_std_min = log_std_min
@@ -30,7 +31,6 @@ class Actor(nn.Module):
         # Initial bias of -1.0 means initial std ~ exp(-1) ~ 0.36
         # Adjust as needed based on action scale and desired initial exploration
         torch.nn.init.constant_(self.fc_log_std.bias, -1.0)
-
 
     def forward(self, state):
         x = self.net(state)
@@ -55,7 +55,7 @@ class Critic(nn.Module):
             nn.Tanh(),
             nn.Linear(hidden_dim, hidden_dim),
             nn.Tanh(),
-            nn.Linear(hidden_dim, 1) # Output a single value
+            nn.Linear(hidden_dim, 1)  # Output a single value
         )
 
     def forward(self, state):

@@ -7,13 +7,13 @@ import torch
 from stable_baselines3 import PPO
 
 from play_game_sb3 import SB3_MODEL_PATH
+from src.utils import VIDEO_DIR
 from utils import (ENV_NAME, NUM_STACK, make_env_sb3,
-                   VQ_VAE_CHECKPOINT_FILENAME, DEVICE)
-from vq_conv_vae import VQVAE
+                   DEVICE)
 
 # --- Video Configuration ---
 NUM_EPISODES_TO_RECORD = 2  # How many episodes to record
-VIDEO_FILENAME = f"videos/{ENV_NAME}_policy_visualization.mp4"
+VIDEO_FILENAME = VIDEO_DIR / f"{ENV_NAME}_policy_visualization.mp4"
 FPS = 7  # Frames per second for the output video
 VIZ_WIDTH = 500  # Width of the policy visualization panel
 UPSCALE_FACTOR = 1
