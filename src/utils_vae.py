@@ -10,8 +10,7 @@ from stable_baselines3 import PPO
 from torch.utils.data import Dataset
 from tqdm import tqdm
 
-from src.utils import preprocess_observation, IMAGES_DIR
-from utils import DATA_DIR
+from src.utils import preprocess_observation, IMAGES_DIR, DATA_DIR
 
 
 # --- Dataset Class ---
