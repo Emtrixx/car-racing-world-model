@@ -48,10 +48,9 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- File Paths ---
-VAE_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_vae_ld{LATENT_DIM}.pth"
-VQ_VAE_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{64}.pth"
+VQ_VAE_CHECKPOINT_FILENAME = VQVAE_CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{64}.pth"
 WM_MODEL_SUFFIX = f"ld{LATENT_DIM}_ac{ACTION_DIM}"
-WM_CHECKPOINT_FILENAME_GRU = CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
+WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
 
 
 # --- Preprocessing Function ---

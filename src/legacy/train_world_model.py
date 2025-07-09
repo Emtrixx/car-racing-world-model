@@ -13,9 +13,9 @@ from src.world_model import WorldModelGRU
 from src.utils import WM_CHECKPOINT_FILENAME_GRU, FrameStackWrapper, NUM_STACK, IMAGES_DIR
 # Import from local modules
 from src.utils import (DEVICE, ENV_NAME, LATENT_DIM, ACTION_DIM,
-                       VAE_CHECKPOINT_FILENAME,
                        )
-from src.legacy.utils_legacy import transform, preprocess_and_encode, preprocess_and_encode_stack
+from src.legacy.utils_legacy import transform, preprocess_and_encode, preprocess_and_encode_stack, \
+    VAE_CHECKPOINT_FILENAME
 from src.legacy.utils_rl import PPO_ACTOR_SAVE_FILENAME, PPOPolicyWrapper
 
 # --- Configuration ---

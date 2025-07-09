@@ -16,7 +16,8 @@ from legacy.conv_vae import ConvVAE
 from world_model import WorldModelGRU
 # Import from local modules
 from src.utils import (DEVICE, ENV_NAME, transform,
-                       VAE_CHECKPOINT_FILENAME, preprocess_and_encode, IMAGES_DIR)
+                       preprocess_and_encode, IMAGES_DIR)
+from src.legacy.utils_legacy import VAE_CHECKPOINT_FILENAME
 from legacy.utils_rl import RandomPolicy, PPOHyperparameters, PPO_DREAM_ACTOR_SAVE_FILENAME, \
     PPO_DREAM_CRITIC_SAVE_FILENAME, RolloutBuffer
 

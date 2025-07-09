@@ -4,7 +4,8 @@ import torch
 from gymnasium import spaces
 from torchvision import transforms
 
-from src.utils import ENV_NAME, NUM_STACK, LATENT_DIM, DEVICE, ActionClipWrapper, FrameStackWrapper, IMG_SIZE
+from src.utils import ENV_NAME, NUM_STACK, LATENT_DIM, DEVICE, ActionClipWrapper, FrameStackWrapper, IMG_SIZE, \
+    CHECKPOINTS_DIR
 
 WM_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_mlp_{WM_MODEL_SUFFIX}.pth"
 
@@ -120,3 +121,6 @@ def preprocess_and_encode_stack(
             latent_vectors.append(mu.squeeze(0))
     concatenated_latents = torch.cat(latent_vectors, dim=0)
     return concatenated_latents
+
+
+VAE_CHECKPOINT_FILENAME = CHECKPOINTS_DIR / f"{ENV_NAME}_vae_ld{LATENT_DIM}.pth"
