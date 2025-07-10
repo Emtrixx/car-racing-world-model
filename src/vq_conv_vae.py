@@ -10,7 +10,7 @@ IMG_SIZE = 64
 # The embedding_dim must match the output channels of the Encoder
 VQVAE_EMBEDDING_DIM = 256
 # The number of discrete codes in the codebook (K)
-VQVAE_NUM_EMBEDDINGS = 1024
+VQVAE_NUM_EMBEDDINGS = 512
 # The commitment cost is a weighting factor for the commitment loss term
 COMMITMENT_COST = 0.25
 
