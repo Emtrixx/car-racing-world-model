@@ -49,7 +49,7 @@ def main():
     # --- load VQ-VAE model for reconstructing images ---
     vqvae_model = VQVAE().to(DEVICE)
     try:
-        vqvae_model.load_state_dict(torch.load("../" + VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
+        vqvae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
         print(f"VQ-VAE model loaded from '{VQ_VAE_CHECKPOINT_FILENAME}'.")
     except FileNotFoundError:
         print(f"VQ-VAE model file '{VQ_VAE_CHECKPOINT_FILENAME}' not found. Please train your model first.")
