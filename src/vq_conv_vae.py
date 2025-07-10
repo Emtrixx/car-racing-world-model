@@ -99,45 +99,107 @@ class VectorQuantizer(nn.Module):
         return vq_loss, quantized_latents.permute(0, 3, 1, 2).contiguous(), encoding_indices.view(latents.shape[:-1])
 
 
-class Encoder(nn.Module):
+class ResidualBlock(nn.Module):
     """
-    The CNN Encoder.
+    A simple residual block with two convolutional layers.
+    Uses GroupNorm for stabilization.
     """
 
     def __init__(self, in_channels, out_channels):
-        super(Encoder, self).__init__()
-        self.conv1 = nn.Conv2d(in_channels, 32, kernel_size=4, stride=2, padding=1)
-        self.conv2 = nn.Conv2d(32, 64, kernel_size=4, stride=2, padding=1)
-        self.conv3 = nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1)
-        self.conv4 = nn.Conv2d(128, out_channels, kernel_size=4, stride=2, padding=1)
+        super(ResidualBlock, self).__init__()
+        self.conv1 = nn.Conv2d(in_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.norm1 = nn.GroupNorm(8, out_channels)  # 8 groups is a common choice
+        self.conv2 = nn.Conv2d(out_channels, out_channels, kernel_size=3, stride=1, padding=1)
+        self.norm2 = nn.GroupNorm(8, out_channels)
+
+        # Shortcut connection if input and output channels don't match
+        if in_channels != out_channels:
+            self.shortcut = nn.Conv2d(in_channels, out_channels, kernel_size=1, stride=1)
+        else:
+            self.shortcut = nn.Identity()
 
     def forward(self, x):
-        x = F.relu(self.conv1(x))
-        x = F.relu(self.conv2(x))
-        x = F.relu(self.conv3(x))
-        x = F.relu(self.conv4(x))
-        return x
+        h = F.relu(self.norm1(self.conv1(x)))
+        h = self.norm2(self.conv2(h))
+        return F.relu(h + self.shortcut(x))
+
+
+class Encoder(nn.Module):
+    """
+    The Encoder network for the VQ-VAE.
+    Takes an image and downsamples it to a grid of latent embeddings.
+    """
+
+    def __init__(self, in_channels, embedding_dim):
+        super(Encoder, self).__init__()
+
+        self.layers = nn.Sequential(
+            # Input: (B, C, 64, 64)
+            nn.Conv2d(in_channels, 64, kernel_size=4, stride=2, padding=1),  # -> (B, 64, 32, 32)
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(64, 128, kernel_size=4, stride=2, padding=1),  # -> (B, 128, 16, 16)
+            nn.ReLU(inplace=True),
+
+            nn.Conv2d(128, 256, kernel_size=4, stride=2, padding=1),  # -> (B, 256, 8, 8)
+            nn.ReLU(inplace=True),
+
+            ResidualBlock(256, 256),
+            ResidualBlock(256, 256),
+
+            # Final convolution to produce the embeddings.
+            nn.Conv2d(256, embedding_dim, kernel_size=1, stride=1)  # -> (B, embedding_dim, 8, 8)
+        )
+
+    def forward(self, x):
+        """
+        Forward pass of the encoder.
+        Args:
+            x (torch.Tensor): Input image tensor of shape (B, C, H, W).
+        Returns:
+            torch.Tensor: Latent feature map of shape (B, D, H', W').
+        """
+        return self.layers(x)
 
 
 class Decoder(nn.Module):
     """
-    The CNN Decoder.
-    Takes the quantized feature map and reconstructs the image.
+    The Decoder network for the VQ-VAE.
+    Takes a quantized latent grid and upsamples it back to a full image.
+    Mirrors the Encoder's architecture.
     """
 
-    def __init__(self, in_channels, out_channels):
+    def __init__(self, embedding_dim, out_channels):
         super(Decoder, self).__init__()
-        self.convT1 = nn.ConvTranspose2d(in_channels, 128, kernel_size=4, stride=2, padding=1)
-        self.convT2 = nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1)
-        self.convT3 = nn.ConvTranspose2d(64, 32, kernel_size=4, stride=2, padding=1)
-        self.convT4 = nn.ConvTranspose2d(32, out_channels, kernel_size=4, stride=2, padding=1)
+
+        self.layers = nn.Sequential(
+            nn.Conv2d(embedding_dim, 256, kernel_size=1, stride=1),
+
+            ResidualBlock(256, 256),
+            ResidualBlock(256, 256),
+
+            # Input: (B, 256, 8, 8)
+            nn.ConvTranspose2d(256, 128, kernel_size=4, stride=2, padding=1),  # -> (B, 128, 16, 16)
+            nn.ReLU(inplace=True),
+
+            nn.ConvTranspose2d(128, 64, kernel_size=4, stride=2, padding=1),  # -> (B, 64, 32, 32)
+            nn.ReLU(inplace=True),
+
+            nn.ConvTranspose2d(64, out_channels, kernel_size=4, stride=2, padding=1),  # -> (B, C, 64, 64)
+
+            # Final activation to scale pixels to [-1, 1]
+            nn.Tanh()
+        )
 
     def forward(self, x):
-        x = F.relu(self.convT1(x))
-        x = F.relu(self.convT2(x))
-        x = F.relu(self.convT3(x))
-        # Use sigmoid to ensure output pixels are in the [0, 1] range
-        return torch.sigmoid(self.convT4(x))
+        """
+        Forward pass of the decoder.
+        Args:
+            x (torch.Tensor): Quantized latent tensor of shape (B, D, H', W').
+        Returns:
+            torch.Tensor: Reconstructed image tensor of shape (B, C, H, W).
+        """
+        return self.layers(x)
 
 
 class VQVAE(nn.Module):
