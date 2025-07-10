@@ -15,7 +15,7 @@ from stable_baselines3.common.utils import set_random_seed
 from torch import nn
 from torch.optim import Adam
 
-from src.vq_conv_vae import VQVAE_EMBEDDING_DIM
+from src.vq_conv_vae import VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
 from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS
 
 # --- Configuration Constants ---
@@ -50,7 +50,7 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 
 # --- File Paths ---
 # VQ_VAE_CHECKPOINT_FILENAME = VQVAE_CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{256}_cb{512}.pth"  # latent_dim=256, codebook_size=512
-VQ_VAE_CHECKPOINT_FILENAME = VQVAE_CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{256}_cb{2048}.pth"  # latent_dim=256, codebook_size=2048
+VQ_VAE_CHECKPOINT_FILENAME = VQVAE_CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{VQVAE_EMBEDDING_DIM}_cb{VQVAE_NUM_EMBEDDINGS}.pth"  # latent_dim=256, codebook_size=2048
 WM_MODEL_SUFFIX = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_hd{GRU_HIDDEN_DIM}_ly{GRU_NUM_LAYERS}"  # latent_dim=32, action_dim=3, hidden_dim=512, 3 layers
 WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
 
