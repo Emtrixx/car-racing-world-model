@@ -21,6 +21,7 @@ from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED_DIM, TRANSFORMER_NUM_HEADS, \
     TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE
 from src.vq_conv_vae import GRID_SIZE
+from utils import IMAGES_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -349,10 +350,7 @@ class WorldModelTransformerTrainer:
             plt.legend()
         plt.grid(True)
 
-        save_dir = self.config.get("plot_save_dir", "images")
-        os.makedirs(save_dir, exist_ok=True)
-
-        save_path = os.path.join(save_dir, "transformer_world_model_loss_plot_with_val.png")
+        save_path = os.path.join(IMAGES_DIR, "transformer_world_model_loss_plot_with_val.png")
         plt.savefig(save_path)
         print(f"Saved loss plot to {save_path}")
         plt.close()
