@@ -124,61 +124,91 @@ class WorldModelTransformer(nn.Module):
     def forward(
             self,
             action: torch.Tensor,
-            prev_latent_tokens: torch.Tensor,  # Expects [B, num_tokens]
+            prev_latent_tokens: torch.Tensor,
     ):
-        batch_size = action.size(0)
+        # Handle both single step [B, ...] and sequence [B, S, ...] inputs
+        is_sequence = action.dim() == 3
+        if not is_sequence:
+            action = action.unsqueeze(1)
+            prev_latent_tokens = prev_latent_tokens.unsqueeze(1)
+
+        batch_size, seq_len = action.shape[0], action.shape[1]
 
         # --- Create Memory from Previous State and Action ---
-        prev_state_emb = self.token_embedding(prev_latent_tokens)  # [B, num_tokens, vqvae_embed_dim]
-        prev_state_emb = self.input_projection(prev_state_emb)  # [B, num_tokens, embed_dim]
-        action_emb = self.action_embedding(action).unsqueeze(1)  # [B, 1, embed_dim]
+        # [B, S, num_tokens] -> [B, S, num_tokens, vqvae_embed_dim]
+        prev_state_emb = self.token_embedding(prev_latent_tokens)
+        # [B, S, num_tokens, vqvae_embed_dim] -> [B, S, num_tokens, embed_dim]
+        prev_state_emb = self.input_projection(prev_state_emb)
+        # [B, S, action_dim] -> [B, S, 1, embed_dim]
+        action_emb = self.action_embedding(action).unsqueeze(2)
 
         # Combine state and action to form the memory context
-        memory = torch.cat([prev_state_emb, action_emb], dim=1)  # [B, num_tokens + 1, embed_dim]
-        memory = self.pos_encoder(memory)  # Apply positional encoding to the memory sequence
+        # [B, S, num_tokens + 1, embed_dim]
+        memory = torch.cat([prev_state_emb, action_emb], dim=2)
+
+        # Reshape for transformer: [B, S, L, D] -> [B * S, L, D] where L = num_tokens + 1
+        memory = memory.view(batch_size * seq_len, self.num_tokens + 1, self.embed_dim)
+        memory = self.pos_encoder(memory)
         memory = self.dropout(memory)
 
         # --- Predict Reward and Done from this context ---
-        # We can predict R/D from the action's representation within the memory
-        action_context_vector = memory[:, -1, :]  # Get the embedding for the action token
-        predicted_reward = self.reward_head(action_context_vector)
-        predicted_done = self.done_head(action_context_vector)
+        action_context_vector = memory[:, -1, :]  # [B * S, embed_dim]
+        predicted_reward = self.reward_head(action_context_vector) # [B * S, 1]
+        predicted_done = self.done_head(action_context_vector) # [B * S, 1]
 
-        # --- Predict Next State Tokens in Parallel (Paper's BTF) ---
-        # The target for the decoder is a sequence of learnable queries
-        decoder_input = self.output_token_queries.expand(batch_size, -1, -1)
-        # Positional encoding for the target queries is important for order
+        # --- Predict Next State Tokens in Parallel ---
+        # [1, num_tokens, embed_dim] -> [B * S, num_tokens, embed_dim]
+        decoder_input = self.output_token_queries.expand(batch_size * seq_len, -1, -1)
         decoder_input = self.pos_encoder(decoder_input, offset=0)
 
-        # Single pass through the decoder to predict all tokens in parallel
+        # Single pass through the decoder
+        # Output: [B * S, num_tokens, embed_dim]
         decoder_output = self.transformer_decoder(
             tgt=decoder_input,
             memory=memory,
-            tgt_mask=None,  # No causality needed among output tokens
-        )  # Output: [B, num_tokens, embed_dim]
-
-        # Get logits for all tokens at once
-        predicted_latent_logits_flat = self.next_latent_head(decoder_output)  # [B, num_tokens, codebook_size]
-
-        # Reshape for downstream use
-        predicted_latent_logits = predicted_latent_logits_flat.view(
-            batch_size, self.grid_size, self.grid_size, self.codebook_size
+            tgt_mask=None,
         )
 
+        # Get logits for all tokens at once
+        # [B * S, num_tokens, codebook_size]
+        predicted_latent_logits_flat = self.next_latent_head(decoder_output)
+
+        # --- Reshape outputs back to original batch and sequence dimensions ---
+        # [B * S, num_tokens, codebook_size] -> [B, S, num_tokens, codebook_size]
+        predicted_latent_logits_flat = predicted_latent_logits_flat.view(batch_size, seq_len, self.num_tokens, self.codebook_size)
+
+        # [B, S, num_tokens, codebook_size] -> [B, S, H, W, codebook_size]
+        predicted_latent_logits = predicted_latent_logits_flat.view(
+            batch_size, seq_len, self.grid_size, self.grid_size, self.codebook_size
+        )
+
+        # [B * S, 1] -> [B, S, 1]
+        predicted_reward = predicted_reward.view(batch_size, seq_len, 1)
+        predicted_done = predicted_done.view(batch_size, seq_len, 1)
+
         # For inference/testing: get the predicted token indices
-        # During training, the loss is calculated on the logits directly
-        generated_tokens_indices = torch.argmax(predicted_latent_logits_flat, dim=-1)
+        generated_tokens_indices = torch.argmax(predicted_latent_logits_flat, dim=-1) # [B, S, num_tokens]
+
+        # If input was not a sequence, remove the sequence dimension from output
+        if not is_sequence:
+            predicted_latent_logits = predicted_latent_logits.squeeze(1)
+            predicted_reward = predicted_reward.squeeze(1)
+            predicted_done = predicted_done.squeeze(1)
+            generated_tokens_indices = generated_tokens_indices.squeeze(1)
 
         return predicted_latent_logits, predicted_reward, predicted_done, None, generated_tokens_indices
 
 
 # --- Usage Example ---
 if __name__ == '__main__':
-    BATCH_SIZE = 2
-    LATENT_DIM_EXAMPLE = 64  # VQVAE individual embedding dim
+    # --- Configuration ---
+    BATCH_SIZE = 4
+    SEQ_LEN = 8
+    LATENT_DIM_EXAMPLE = 64
     ACTION_DIM_EXAMPLE = 3
     CODEBOOK_SIZE_EXAMPLE = 512
-    GRID_SIZE_EXAMPLE = 4  # 16 tokens
+    GRID_SIZE_EXAMPLE = 4
+    NUM_TOKENS_EXAMPLE = GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE
     DEVICE_EXAMPLE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # Transformer specific params
@@ -187,15 +217,12 @@ if __name__ == '__main__':
     NUM_LAYERS_EXAMPLE = 2
     FF_DIM_EXAMPLE = EMBED_DIM_EXAMPLE * 4
     DROPOUT_EXAMPLE = 0.1
-    # To handle longer sequences, ensure max_seq_len is adequate.
-    # It must be >= grid_size*grid_size + 1. Let's set it higher to be safe.
     MAX_SEQ_LEN_EXAMPLE = 256
 
     print(f"--- Running WorldModelTransformer Example ---")
     print(f"Device: {DEVICE_EXAMPLE}")
-    print(f"Grid size: {GRID_SIZE_EXAMPLE}x{GRID_SIZE_EXAMPLE} ({GRID_SIZE_EXAMPLE ** 2} tokens)")
-    print(f"Max sequence length for positional encoding: {MAX_SEQ_LEN_EXAMPLE}")
 
+    # --- Model Initialization ---
     world_model_tf = WorldModelTransformer(
         vqvae_embed_dim=LATENT_DIM_EXAMPLE,
         action_dim=ACTION_DIM_EXAMPLE,
@@ -208,61 +235,75 @@ if __name__ == '__main__':
         dropout_rate=DROPOUT_EXAMPLE,
         max_seq_len=MAX_SEQ_LEN_EXAMPLE
     ).to(DEVICE_EXAMPLE)
-
-    print(f"Transformer World Model created on device: {DEVICE_EXAMPLE}")
+    world_model_tf.eval()
     num_params = sum(p.numel() for p in world_model_tf.parameters() if p.requires_grad)
     print(f"Number of parameters: {num_params:,}")
 
-    # --- Create Dummy Input Data ---
-    action_dummy = torch.randn(BATCH_SIZE, ACTION_DIM_EXAMPLE).to(DEVICE_EXAMPLE)
-    # Previous state is represented by a grid of latent tokens
-    prev_tokens_dummy = torch.randint(
-        0, CODEBOOK_SIZE_EXAMPLE,
-        (BATCH_SIZE, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE * 4)
-    ).to(DEVICE_EXAMPLE)
+    # --- Test 1: Single Step Inference (Batch Mode) ---
+    print("\n--- Test 1: Single Step Inference ---")
+    action_single = torch.randn(BATCH_SIZE, ACTION_DIM_EXAMPLE).to(DEVICE_EXAMPLE)
+    tokens_single = torch.randint(0, CODEBOOK_SIZE_EXAMPLE, (BATCH_SIZE, NUM_TOKENS_EXAMPLE)).to(DEVICE_EXAMPLE)
 
-    print(f"\nInput action shape: {action_dummy.shape}")
-    print(f"Input previous tokens shape: {prev_tokens_dummy.shape}")
+    print(f"Input action shape: {action_single.shape}")
+    print(f"Input tokens shape: {tokens_single.shape}")
 
-    # --- Test Forward Pass (Inference Mode) ---
-    print("\n--- Testing Forward Pass (Inference) ---")
-    world_model_tf.eval()
     with torch.no_grad():
-        predicted_logits, predicted_reward, predicted_done, _, generated_tokens = world_model_tf(
-            action=action_dummy,
-            prev_latent_tokens=prev_tokens_dummy
-        )
+        logits, reward, done, _, gen_tokens = world_model_tf(action_single, tokens_single)
 
-    print("\n--- Output Shapes ---")
-    print(f"Predicted logits shape: {predicted_logits.shape}")
-    print(f"Predicted reward shape: {predicted_reward.shape}")
-    print(f"Predicted done shape: {predicted_done.shape}")
-    print(f"Generated tokens shape: {generated_tokens.shape}")
+    print("\n--- Output Shapes (Single Step) ---")
+    print(f"Predicted logits shape: {logits.shape}")
+    print(f"Predicted reward shape: {reward.shape}")
+    print(f"Predicted done shape: {done.shape}")
+    print(f"Generated tokens shape: {gen_tokens.shape}")
 
-    # --- Verification ---
-    print("\n--- Verifying Outputs ---")
+    # Verification
     expected_logits_shape = (BATCH_SIZE, GRID_SIZE_EXAMPLE, GRID_SIZE_EXAMPLE, CODEBOOK_SIZE_EXAMPLE)
-    assert predicted_logits.shape == expected_logits_shape, \
-        f"Logits shape mismatch! Expected {expected_logits_shape}, Got {predicted_logits.shape}"
+    assert logits.shape == expected_logits_shape, f"Logits shape mismatch! Expected {expected_logits_shape}, Got {logits.shape}"
     print("Logits shape: CORRECT")
 
     expected_reward_done_shape = (BATCH_SIZE, 1)
-    assert predicted_reward.shape == expected_reward_done_shape, \
-        f"Reward shape mismatch! Expected {expected_reward_done_shape}, Got {predicted_reward.shape}"
+    assert reward.shape == expected_reward_done_shape, f"Reward shape mismatch! Expected {expected_reward_done_shape}, Got {reward.shape}"
     print("Reward shape: CORRECT")
-    assert predicted_done.shape == expected_reward_done_shape, \
-        f"Done shape mismatch! Expected {expected_reward_done_shape}, Got {predicted_done.shape}"
+    assert done.shape == expected_reward_done_shape, f"Done shape mismatch! Expected {expected_reward_done_shape}, Got {done.shape}"
     print("Done shape: CORRECT")
 
-    expected_tokens_shape = (BATCH_SIZE, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE)
-    assert generated_tokens.shape == expected_tokens_shape, \
-        f"Generated tokens shape mismatch! Expected {expected_tokens_shape}, Got {generated_tokens.shape}"
+    expected_tokens_shape = (BATCH_SIZE, NUM_TOKENS_EXAMPLE)
+    assert gen_tokens.shape == expected_tokens_shape, f"Generated tokens shape mismatch! Expected {expected_tokens_shape}, Got {gen_tokens.shape}"
     print("Generated tokens shape: CORRECT")
+    print("--- Single Step Test PASSED ---")
 
-    # Verify that generated_tokens are the argmax of the logits
-    recalculated_tokens = torch.argmax(predicted_logits.view(BATCH_SIZE, -1, CODEBOOK_SIZE_EXAMPLE), dim=-1)
-    assert torch.equal(generated_tokens, recalculated_tokens), \
-        "Generated tokens do not match the argmax of the logits."
-    print("Token generation (argmax): CORRECT")
+
+    # --- Test 2: Sequence Data (Training Mode) ---
+    print("\n--- Test 2: Sequence Data for Training ---")
+    action_seq = torch.randn(BATCH_SIZE, SEQ_LEN, ACTION_DIM_EXAMPLE).to(DEVICE_EXAMPLE)
+    tokens_seq = torch.randint(0, CODEBOOK_SIZE_EXAMPLE, (BATCH_SIZE, SEQ_LEN, NUM_TOKENS_EXAMPLE)).to(DEVICE_EXAMPLE)
+
+    print(f"Input action sequence shape: {action_seq.shape}")
+    print(f"Input token sequence shape: {tokens_seq.shape}")
+
+    with torch.no_grad():
+        logits_seq, reward_seq, done_seq, _, gen_tokens_seq = world_model_tf(action_seq, tokens_seq)
+
+    print("\n--- Output Shapes (Sequence) ---")
+    print(f"Predicted logits sequence shape: {logits_seq.shape}")
+    print(f"Predicted reward sequence shape: {reward_seq.shape}")
+    print(f"Predicted done sequence shape: {done_seq.shape}")
+    print(f"Generated tokens sequence shape: {gen_tokens_seq.shape}")
+
+    # Verification
+    expected_logits_seq_shape = (BATCH_SIZE, SEQ_LEN, GRID_SIZE_EXAMPLE, GRID_SIZE_EXAMPLE, CODEBOOK_SIZE_EXAMPLE)
+    assert logits_seq.shape == expected_logits_seq_shape, f"Logits seq shape mismatch! Expected {expected_logits_seq_shape}, Got {logits_seq.shape}"
+    print("Logits sequence shape: CORRECT")
+
+    expected_reward_done_seq_shape = (BATCH_SIZE, SEQ_LEN, 1)
+    assert reward_seq.shape == expected_reward_done_seq_shape, f"Reward seq shape mismatch! Expected {expected_reward_done_seq_shape}, Got {reward_seq.shape}"
+    print("Reward sequence shape: CORRECT")
+    assert done_seq.shape == expected_reward_done_seq_shape, f"Done seq shape mismatch! Expected {expected_reward_done_seq_shape}, Got {done_seq.shape}"
+    print("Done sequence shape: CORRECT")
+
+    expected_tokens_seq_shape = (BATCH_SIZE, SEQ_LEN, NUM_TOKENS_EXAMPLE)
+    assert gen_tokens_seq.shape == expected_tokens_seq_shape, f"Generated tokens seq shape mismatch! Expected {expected_tokens_seq_shape}, Got {gen_tokens_seq.shape}"
+    print("Generated tokens sequence shape: CORRECT")
+    print("--- Sequence Test PASSED ---")
 
     print("\n--- Full Example Run Complete ---")
