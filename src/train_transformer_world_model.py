@@ -9,6 +9,7 @@ import torch.nn as nn
 import numpy as np
 from stable_baselines3 import PPO
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
+from tqdm import tqdm
 
 from src.play_game_sb3 import SB3_MODEL_PATH
 from src.utils import (
@@ -331,6 +332,10 @@ class WorldModelTransformerTrainer:
         self.steps_history = []
         self.val_steps_history = []
 
+        # Accumulators for running average of validation losses
+        self.recent_val_losses = []
+        self.val_smoothing_window = self.config.get('val_smoothing_window', 5)  # Average over last N validation steps
+
     def plot_losses(self):
         import matplotlib.pyplot as plt
         print("Plotting training and validation losses...")
@@ -413,13 +418,16 @@ class WorldModelTransformerTrainer:
         self.world_model.train()
 
         global_step = 0
-        total_train_steps = len(self.train_dataloader) * num_epochs
-        log_freq = self.config.get('log_freq', 100)
-        val_freq = self.config.get('val_freq', log_freq * 5)
+        log_freq = self.config.get('log_freq', 10)
+        val_freq = self.config.get('val_freq', 200)
         checkpoint_freq = self.config.get('checkpoint_freq', 1000)
 
+        # Accumulators for logging averages
+        running_total_loss, running_token_loss, running_reward_loss, running_done_loss, running_grad_norm = 0.0, 0.0, 0.0, 0.0, 0.0
+
         for epoch in range(1, num_epochs + 1):
-            for batch_idx, batch in enumerate(self.train_dataloader):
+            epoch_progress = tqdm(self.train_dataloader, desc=f"Epoch {epoch}/{num_epochs}", leave=False)
+            for batch in epoch_progress:
                 global_step += 1
 
                 for key in batch:
@@ -445,21 +453,48 @@ class WorldModelTransformerTrainer:
 
                 self.optimizer.zero_grad()
                 total_loss.backward()
-                nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
+                grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
                 self.optimizer.step()
 
-                if global_step % log_freq == 0:
-                    print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
-                          f"Train Total Loss: {total_loss.item():.4f} | "
-                          f"Train Token Loss: {token_loss.item():.4f} | "
-                          f"Train Reward Loss: {reward_loss.item():.4f} | "
-                          f"Train Done Loss: {done_loss.item():.4f}")
+                # Append exact values to history for plotting
+                self.loss_history['train_total'].append(total_loss.item())
+                self.loss_history['train_token'].append(token_loss.item())
+                self.loss_history['train_reward'].append(reward_loss.item())
+                self.loss_history['train_done'].append(done_loss.item())
+                self.steps_history.append(global_step)
 
-                    self.loss_history['train_total'].append(total_loss.item())
-                    self.loss_history['train_token'].append(token_loss.item())
-                    self.loss_history['train_reward'].append(reward_loss.item())
-                    self.loss_history['train_done'].append(done_loss.item())
-                    self.steps_history.append(global_step)
+                # Add to running totals for logging
+                running_total_loss += total_loss.item()
+                running_token_loss += token_loss.item()
+                running_reward_loss += reward_loss.item()
+                running_done_loss += done_loss.item()
+                running_grad_norm += grad_norm.item()
+
+                if global_step % log_freq == 0:
+                    lr = self.optimizer.param_groups[0]['lr']
+                    avg_total_loss = running_total_loss / log_freq
+                    avg_token_loss = running_token_loss / log_freq
+                    avg_reward_loss = running_reward_loss / log_freq
+                    avg_done_loss = running_done_loss / log_freq
+                    avg_grad_norm = running_grad_norm / log_freq
+
+                    log_str = (
+                        f"\n  +-----------------+----------+\n"
+                        f"  |    Training     |  Value   |\n"
+                        f"  +-----------------+----------+\n"
+                        f"  | Step            | {global_step:<8} |\n"
+                        f"  | Avg Total Loss  | {avg_total_loss:<8.4f} |\n"
+                        f"  | Avg Token Loss  | {avg_token_loss:<8.4f} |\n"
+                        f"  | Avg Reward Loss | {avg_reward_loss:<8.4f} |\n"
+                        f"  | Avg Done Loss   | {avg_done_loss:<8.4f} |\n"
+                        f"  | Avg Grad Norm   | {avg_grad_norm:<8.4f} |\n"
+                        f"  | Learning Rate   | {lr:<8.6f} |\n"
+                        f"  +-----------------+----------+"
+                    )
+                    tqdm.write(log_str)
+
+                    # Reset accumulators
+                    running_total_loss, running_token_loss, running_reward_loss, running_done_loss, running_grad_norm = 0.0, 0.0, 0.0, 0.0, 0.0
 
                 if self.val_dataloader and global_step > 0 and global_step % val_freq == 0:
                     val_losses = self._evaluate()
@@ -469,16 +504,32 @@ class WorldModelTransformerTrainer:
                     self.loss_history['val_done'].append(val_losses['done'])
                     self.val_steps_history.append(global_step)
 
-                    print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
-                          f"Val Total Loss: {val_losses['total']:.4f} | Val Token: {val_losses['token']:.4f} | "
-                          f"Val Reward: {val_losses['reward']:.4f} | Val Done: {val_losses['done']:.4f}")
+                    self.recent_val_losses.append(val_losses)
+                    if len(self.recent_val_losses) > self.val_smoothing_window:
+                        self.recent_val_losses.pop(0)
+
+                    avg_val_loss = {k: np.mean([d[k] for d in self.recent_val_losses]) for k in val_losses}
+
+                    val_log_str = (
+                        f"\n  +-----------------+----------+\n"
+                        f"  |   Validation    |  Value   |\n"
+                        f"  +-----------------+----------+\n"
+                        f"  | Step            | {global_step:<8} |\n"
+                        f"  | Avg Total Loss  | {avg_val_loss['total']:<8.4f} |\n"
+                        f"  | Avg Token Loss  | {avg_val_loss['token']:<8.4f} |\n"
+                        f"  | Avg Reward Loss | {avg_val_loss['reward']:<8.4f} |\n"
+                        f"  | Avg Done Loss   | {avg_val_loss['done']:<8.4f} |\n"
+                        f"  +-----------------+----------+"
+                    )
+                    tqdm.write(val_log_str)
                     self.world_model.train()
 
                 if global_step > 0 and global_step % checkpoint_freq == 0:
                     model_state_to_save = self.world_model.module.state_dict() if isinstance(self.world_model,
                                                                                              nn.DataParallel) else self.world_model.state_dict()
                     torch.save(model_state_to_save, f"transformer_world_model_step_{global_step}.pth")
-                    print(f"Saved model checkpoint at step {global_step}.")
+                    tqdm.write(f"Saved model checkpoint at step {global_step}.")
+            epoch_progress.close()
 
         print("Training finished.")
         self.plot_losses()
