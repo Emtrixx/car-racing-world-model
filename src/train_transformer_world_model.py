@@ -544,7 +544,11 @@ if __name__ == "__main__":
                         help="Path to save the collected data to. Data is not saved unless this is specified.")
     parser.add_argument("--load-data-from", type=str, default=None,
                         help="Path to load data from, skipping collection.")
+    parser.add_argument("--checkpoint-path", type=str, default=None,
+                        help="Path to a pre-trained model checkpoint to load before training. If provided, "
+                             "the model will be loaded and training will continue from that point.")
     args = parser.parse_args()
+    checkpoint_path = args.checkpoint
 
     config = get_config(args.config)
     print(f"Loaded configuration: '{args.config}'")
@@ -647,6 +651,17 @@ if __name__ == "__main__":
         dropout_rate=config['dropout_rate'],
         max_seq_len=config['max_seq_len']
     )
+    if checkpoint_path and os.path.exists(checkpoint_path):
+        print(f"Loading pre-trained Transformer World Model from {checkpoint_path}...")
+        try:
+            world_model_transformer.load_state_dict(torch.load(checkpoint_path, map_location=config['device']))
+            print("Pre-trained model loaded successfully.")
+        except Exception as e:
+            print(f"Error loading pre-trained model: {e}")
+            import traceback
+
+            traceback.print_exc()
+
     world_model_transformer.to(config['device'])
 
     vq_vae_model = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS)
