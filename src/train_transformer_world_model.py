@@ -16,7 +16,7 @@ from src.utils import (
     ENV_NAME,
     ACTION_DIM,
     DEVICE, WM_CHECKPOINT_FILENAME_TRANSFORMER, VQ_VAE_CHECKPOINT_FILENAME, WorldModelDataCollector,
-    make_env_sb3, NUM_STACK
+    make_env_sb3, NUM_STACK, TRANSFORMER_WM_CHECKPOINTS_DIR
 )
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED_DIM, TRANSFORMER_NUM_HEADS, \
@@ -420,7 +420,7 @@ class WorldModelTransformerTrainer:
         global_step = 0
         log_freq = self.config.get('log_freq', 10)
         val_freq = self.config.get('val_freq', 200)
-        checkpoint_freq = self.config.get('checkpoint_freq', 1000)
+        checkpoint_freq = self.config.get('checkpoint_freq', 10000)
 
         # Accumulators for logging averages
         running_total_loss, running_token_loss, running_reward_loss, running_done_loss, running_grad_norm = 0.0, 0.0, 0.0, 0.0, 0.0
@@ -527,7 +527,8 @@ class WorldModelTransformerTrainer:
                 if global_step > 0 and global_step % checkpoint_freq == 0:
                     model_state_to_save = self.world_model.module.state_dict() if isinstance(self.world_model,
                                                                                              nn.DataParallel) else self.world_model.state_dict()
-                    torch.save(model_state_to_save, f"transformer_world_model_step_{global_step}.pth")
+                    torch.save(model_state_to_save,
+                               TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_step_{global_step}.pth")
                     tqdm.write(f"Saved model checkpoint at step {global_step}.")
             epoch_progress.close()
 

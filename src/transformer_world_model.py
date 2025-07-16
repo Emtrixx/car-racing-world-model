@@ -3,7 +3,7 @@ import math
 import torch
 from torch import nn
 
-from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS
+from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, GRID_SIZE
 
 # --- Default Hyperparameters ---
 TRANSFORMER_EMBED_DIM = 512
@@ -11,7 +11,6 @@ TRANSFORMER_NUM_HEADS = 8
 TRANSFORMER_NUM_LAYERS = 4
 TRANSFORMER_FF_DIM = 2048  # Typically 4 * embed_dim
 TRANSFORMER_DROPOUT_RATE = 0.1
-GRID_SIZE = 4  # Default grid size for the world model
 
 
 # --- Positional Encoding --- todo: remove duplicate
@@ -156,8 +155,8 @@ class WorldModelTransformer(nn.Module):
 
         # --- Predict Reward and Done from this context ---
         action_context_vector = memory[:, -1, :]  # [B * S, embed_dim]
-        predicted_reward = self.reward_head(action_context_vector) # [B * S, 1]
-        predicted_done = self.done_head(action_context_vector) # [B * S, 1]
+        predicted_reward = self.reward_head(action_context_vector)  # [B * S, 1]
+        predicted_done = self.done_head(action_context_vector)  # [B * S, 1]
 
         # --- Predict Next State Tokens in Parallel ---
         # [1, num_tokens, embed_dim] -> [B * S, num_tokens, embed_dim]
@@ -178,7 +177,8 @@ class WorldModelTransformer(nn.Module):
 
         # --- Reshape outputs back to original batch and sequence dimensions ---
         # [B * S, num_tokens, codebook_size] -> [B, S, num_tokens, codebook_size]
-        predicted_latent_logits_flat = predicted_latent_logits_flat.view(batch_size, seq_len, self.num_tokens, self.codebook_size)
+        predicted_latent_logits_flat = predicted_latent_logits_flat.view(batch_size, seq_len, self.num_tokens,
+                                                                         self.codebook_size)
 
         # [B, S, num_tokens, codebook_size] -> [B, S, H, W, codebook_size]
         predicted_latent_logits = predicted_latent_logits_flat.view(
@@ -190,7 +190,7 @@ class WorldModelTransformer(nn.Module):
         predicted_done = predicted_done.view(batch_size, seq_len, 1)
 
         # For inference/testing: get the predicted token indices
-        generated_tokens_indices = torch.argmax(predicted_latent_logits_flat, dim=-1) # [B, S, num_tokens]
+        generated_tokens_indices = torch.argmax(predicted_latent_logits_flat, dim=-1)  # [B, S, num_tokens]
 
         # If input was not a sequence, remove the sequence dimension from output
         if not is_sequence:
@@ -274,7 +274,6 @@ if __name__ == '__main__':
     assert gen_tokens.shape == expected_tokens_shape, f"Generated tokens shape mismatch! Expected {expected_tokens_shape}, Got {gen_tokens.shape}"
     print("Generated tokens shape: CORRECT")
     print("--- Single Step Test PASSED ---")
-
 
     # --- Test 2: Sequence Data (Training Mode) ---
     print("\n--- Test 2: Sequence Data for Training ---")

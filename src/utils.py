@@ -565,7 +565,7 @@ class WorldModelTrainer:
         total_train_steps = len(self.train_dataloader) * num_epochs  # Use self.train_dataloader
         log_freq = self.config.get('log_freq', 100)
         val_freq = self.config.get('val_freq', log_freq * 5)  # val_freq from config
-        checkpoint_freq = self.config.get('checkpoint_freq', 1000)
+        checkpoint_freq = self.config.get('checkpoint_freq', 10_000)
 
         for epoch in range(1, num_epochs + 1):
             for batch_idx, batch in enumerate(self.train_dataloader):  # Use self.train_dataloader
