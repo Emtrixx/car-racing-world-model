@@ -21,7 +21,7 @@ from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED_DIM, TRANSFORMER_NUM_HEADS, \
     TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE
 from src.vq_conv_vae import GRID_SIZE
-from utils import IMAGES_DIR
+from src.utils import IMAGES_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -602,9 +602,9 @@ if __name__ == "__main__":
     vq_vae_model.to(config['device'])
     vq_vae_model.eval()
 
-    if torch.cuda.device_count() > 1:
-        print(f"Using nn.DataParallel for Transformer model training across {torch.cuda.device_count()} GPUs.")
-        world_model_transformer = nn.DataParallel(world_model_transformer)
+    # if torch.cuda.device_count() > 1:
+    #     print(f"Using nn.DataParallel for Transformer model training across {torch.cuda.device_count()} GPUs.")
+    #     world_model_transformer = nn.DataParallel(world_model_transformer)
 
     trainer = WorldModelTransformerTrainer(
         world_model_transformer,
