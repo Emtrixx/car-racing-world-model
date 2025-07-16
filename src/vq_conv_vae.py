@@ -13,6 +13,7 @@ VQVAE_EMBEDDING_DIM = 256
 VQVAE_NUM_EMBEDDINGS = 512
 # The commitment cost is a weighting factor for the commitment loss term
 COMMITMENT_COST = 0.5
+GRID_SIZE = 8  # new one is 8 old one is 4
 
 
 class VectorQuantizer(nn.Module):

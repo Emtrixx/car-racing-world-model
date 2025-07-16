@@ -134,6 +134,9 @@ class WorldModelTransformer(nn.Module):
 
         batch_size, seq_len = action.shape[0], action.shape[1]
 
+        # [B, S, H, W] -> [B, S, H*W]
+        prev_latent_tokens = prev_latent_tokens.flatten(start_dim=2)
+
         # --- Create Memory from Previous State and Action ---
         # [B, S, num_tokens] -> [B, S, num_tokens, vqvae_embed_dim]
         prev_state_emb = self.token_embedding(prev_latent_tokens)
