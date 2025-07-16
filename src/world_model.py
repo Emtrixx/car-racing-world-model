@@ -2,10 +2,9 @@ import torch
 from torch import nn as nn
 import math
 
-from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS
+from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, GRID_SIZE
 
 GRU_HIDDEN_DIM = 512  # Default hidden dimension for GRU layers
-GRID_SIZE = 4  # Default grid size for the world model
 GRU_NUM_LAYERS = 3  # Default number of GRU layers
 
 
