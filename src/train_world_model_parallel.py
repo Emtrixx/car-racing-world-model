@@ -330,6 +330,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train GRU World Model")
     parser.add_argument("--config", type=str, default="default",
                         help="Name of the configuration to use (e.g., 'default', 'test').")
+    parser.add_argument("--save-data-to", type=str, default=None,
+                        help="Path to save the collected data to. Data is not saved unless this is specified.")
+    parser.add_argument("--load-data-from", type=str, default=None,
+                        help="Path to load data from, skipping collection.")
     args = parser.parse_args()
 
     # Load the chosen configuration
@@ -351,17 +355,35 @@ if __name__ == "__main__":
             f"CRITICAL ERROR: VAE Checkpoint {VQ_VAE_CHECKPOINT_FILENAME} not found. Exiting before starting workers.")
         exit()
 
-    # Collect Sequence Data (Parallelized)
-    print(f"Number of collection workers configured: {config['num_collection_workers']}")
-    start_collect_time = time.time()
-    sequence_data_buffer = collect_sequences_for_gru(
-        num_steps_total=config["num_steps"],
-        device_str_main=config["device"],
-        num_collection_workers_int=config["num_collection_workers"],
-        env_name_str_for_worker=config["env_name"],
-        max_episode_steps_collect_int=config["max_episode_steps_collect"]
-    )
-    print(f"Sequence data collection (parallel/serial) took {time.time() - start_collect_time:.2f} seconds.")
+    sequence_data_buffer = None
+    if args.load_data_from:
+        if os.path.exists(args.load_data_from):
+            print(f"Loading sequence data from {args.load_data_from}...")
+            sequence_data_buffer = torch.load(args.load_data_from, map_location=config['device'])
+            print("Data loaded successfully.")
+        else:
+            print(f"ERROR: Data file not found at {args.load_data_from}. Exiting.")
+            exit()
+    else:
+        # Collect Sequence Data (Parallelized)
+        print(f"Number of collection workers configured: {config['num_collection_workers']}")
+        start_collect_time = time.time()
+        sequence_data_buffer = collect_sequences_for_gru(
+            num_steps_total=config["num_steps"],
+            device_str_main=config["device"],
+            num_collection_workers_int=config["num_collection_workers"],
+            env_name_str_for_worker=config["env_name"],
+            max_episode_steps_collect_int=config["max_episode_steps_collect"]
+        )
+        print(f"Sequence data collection (parallel/serial) took {time.time() - start_collect_time:.2f} seconds.")
+
+        if sequence_data_buffer and args.save_data_to:
+            print(f"Saving collected data to {args.save_data_to}...")
+            save_dir = os.path.dirname(args.save_data_to)
+            if save_dir and not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
+            torch.save(sequence_data_buffer, args.save_data_to)
+            print(f"Data saved to {args.save_data_to}.")
 
     if not sequence_data_buffer:
         print("ERROR: No sequence data collected. Exiting.")
@@ -419,7 +441,7 @@ if __name__ == "__main__":
 
     # Initialize VQ-VAE Model
     vq_vae_model = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS)
-    vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME))
+    vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=config['device']))
     vq_vae_model.to(config['device'])
     vq_vae_model.eval()
 
