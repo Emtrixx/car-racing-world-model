@@ -548,7 +548,6 @@ if __name__ == "__main__":
                         help="Path to a pre-trained model checkpoint to load before training. If provided, "
                              "the model will be loaded and training will continue from that point.")
     args = parser.parse_args()
-    checkpoint_path = args.checkpoint
 
     config = get_config(args.config)
     print(f"Loaded configuration: '{args.config}'")
@@ -651,6 +650,7 @@ if __name__ == "__main__":
         dropout_rate=config['dropout_rate'],
         max_seq_len=config['max_seq_len']
     )
+    checkpoint_path = args.checkpoint_path
     if checkpoint_path and os.path.exists(checkpoint_path):
         print(f"Loading pre-trained Transformer World Model from {checkpoint_path}...")
         try:
