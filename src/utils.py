@@ -32,6 +32,7 @@ CHECKPOINTS_DIR = PROJECT_ROOT / "checkpoints"
 SB3_CHECKPOINTS_DIR = CHECKPOINTS_DIR / "sb3_checkpoints"
 VQVAE_CHECKPOINTS_DIR = CHECKPOINTS_DIR / "vqvae_checkpoints"
 GRU_WM_CHECKPOINTS_DIR = CHECKPOINTS_DIR / "gru_wm_checkpoints"
+TRANSFORMER_WM_CHECKPOINTS_DIR = CHECKPOINTS_DIR / "transformer_wm_checkpoints"
 VIDEO_DIR = PROJECT_ROOT / "videos"
 IMAGES_DIR = PROJECT_ROOT / "images"
 ASSETS_DIR = PROJECT_ROOT / "assets"  # used in webapp for visualization
@@ -42,6 +43,7 @@ CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 SB3_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 VQVAE_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 GRU_WM_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
+TRANSFORMER_WM_CHECKPOINTS_DIR.mkdir(parents=True, exist_ok=True)
 VIDEO_DIR.mkdir(parents=True, exist_ok=True)
 IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
@@ -51,8 +53,10 @@ LOGS_DIR.mkdir(parents=True, exist_ok=True)
 # --- File Paths ---
 # VQ_VAE_CHECKPOINT_FILENAME = VQVAE_CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{256}_cb{512}.pth"  # latent_dim=256, codebook_size=512
 VQ_VAE_CHECKPOINT_FILENAME = VQVAE_CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{VQVAE_EMBEDDING_DIM}_cb{VQVAE_NUM_EMBEDDINGS}.pth"  # latent_dim=256, codebook_size=2048
-WM_MODEL_SUFFIX = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_hd{GRU_HIDDEN_DIM}_ly{GRU_NUM_LAYERS}"  # latent_dim=32, action_dim=3, hidden_dim=512, 3 layers
-WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX}.pth"
+WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_hd{GRU_HIDDEN_DIM}_ly{GRU_NUM_LAYERS}"
+WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX_GRU}.pth"
+# placeholder (todo: add suffix)
+WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_transformer_default.pth"
 
 
 # --- Preprocessing Function ---
@@ -488,22 +492,25 @@ class WorldModelTrainer:
 
                 batch_size = batch['actions'].size(0)
                 # Correctly get initial hidden state, handling DataParallel
-                if isinstance(self.world_model, nn.DataParallel):
-                    hidden_state = self.world_model.module.get_initial_hidden_state(batch_size, self.device)
-                else:
-                    hidden_state = self.world_model.get_initial_hidden_state(batch_size, self.device)
+                current_model_module = self.world_model.module if isinstance(self.world_model,
+                                                                             nn.DataParallel) else self.world_model
+
+                # prev_model_state is the recurrent state (e.g. GRU hidden) or None for Transformer
+                prev_model_state = current_model_module.get_initial_hidden_state(batch_size, self.device)
 
                 seq_token_loss, seq_reward_loss, seq_done_loss = 0, 0, 0
                 sequence_length = batch['actions'].size(1)
 
                 for t in range(sequence_length):
                     action_t = batch['actions'][:, t]
-                    ground_truth_tokens_t = batch['next_tokens'][:, t]
+                    ground_truth_tokens_t = batch['next_tokens'][:, t]  # These are for the frame AFTER action_t
                     ground_truth_reward_t = batch['rewards'][:, t]
                     ground_truth_done_t = batch['dones'][:, t]
 
-                    pred_logits, pred_reward, pred_done_logits, next_hidden_state = self.world_model(
-                        action_t, hidden_state, ground_truth_tokens=ground_truth_tokens_t
+                    # For Transformer, block_tf_ratio and block_size are part of its own config,
+                    # not passed dynamically by the trainer loop here.
+                    pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
+                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t
                     )
 
                     b, h, w, c = pred_logits.shape
@@ -516,7 +523,7 @@ class WorldModelTrainer:
                     seq_token_loss += token_loss
                     seq_reward_loss += reward_loss
                     seq_done_loss += done_loss
-                    hidden_state = next_hidden_state
+                    prev_model_state = next_model_state  # Update recurrent state for next step in sequence
 
                 total_val_token_loss += (seq_token_loss / sequence_length)
                 total_val_reward_loss += (seq_reward_loss / sequence_length)
@@ -569,21 +576,23 @@ class WorldModelTrainer:
 
                 # Initialize hidden state for the start of the sequences
                 batch_size = batch['actions'].size(0)
-                hidden_state = self.world_model.get_initial_hidden_state(batch_size, self.device) \
-                    if not isinstance(self.world_model, nn.DataParallel) \
-                    else self.world_model.module.get_initial_hidden_state(batch_size, self.device)
+                current_model_module = self.world_model.module if isinstance(self.world_model,
+                                                                             nn.DataParallel) else self.world_model
+
+                prev_model_state = current_model_module.get_initial_hidden_state(batch_size, self.device)
 
                 total_token_loss, total_reward_loss, total_done_loss = 0, 0, 0
                 sequence_length = batch['actions'].size(1)
 
                 for t in range(sequence_length):
                     action_t = batch['actions'][:, t]
-                    ground_truth_tokens_t = batch['next_tokens'][:, t]
+                    ground_truth_tokens_t = batch['next_tokens'][:, t]  # Tokens for frame AFTER action_t
                     ground_truth_reward_t = batch['rewards'][:, t]
                     ground_truth_done_t = batch['dones'][:, t]
 
-                    pred_logits, pred_reward, pred_done_logits, next_hidden_state = self.world_model(
-                        action_t, hidden_state, ground_truth_tokens=ground_truth_tokens_t
+                    # For Transformer, block_tf_ratio and block_size are part of its own config.
+                    pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
+                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t
                     )
 
                     b, h, w, c = pred_logits.shape
@@ -596,7 +605,7 @@ class WorldModelTrainer:
                     total_token_loss += token_loss
                     total_reward_loss += reward_loss
                     total_done_loss += done_loss
-                    hidden_state = next_hidden_state
+                    prev_model_state = next_model_state  # Update recurrent state
 
                 avg_token_loss = total_token_loss / sequence_length
                 avg_reward_loss = total_reward_loss / sequence_length
