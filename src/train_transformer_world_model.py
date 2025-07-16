@@ -490,6 +490,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train Transformer World Model")
     parser.add_argument("--config", type=str, default="default",
                         help="Name of the configuration to use (e.g., 'default', 'test').")
+    parser.add_argument("--save-data-to", type=str, default=None,
+                        help="Path to save the collected data to. Data is not saved unless this is specified.")
+    parser.add_argument("--load-data-from", type=str, default=None,
+                        help="Path to load data from, skipping collection.")
     args = parser.parse_args()
 
     config = get_config(args.config)
@@ -505,21 +509,40 @@ if __name__ == "__main__":
 
     if not os.path.exists(VQ_VAE_CHECKPOINT_FILENAME):
         print(
-            f"CRITICAL ERROR: VAE Checkpoint {VQ_VAE_CHECKPOINT_FILENAME} not found. Exiting before starting workers.")
+            f"CRITICAL ERROR: VAE Checkpoint {VQ_VAE_CHECKPOINT_FILENAME} not found. Exiting.")
         exit()
 
-    start_collect_time = time.time()
-    sequence_data_buffer = collect_sequences_for_transformer(
-        num_steps_total=config["num_steps"],
-        device_str_main=config["device"],
-        num_collection_workers_int=config["num_collection_workers"],
-        env_name_str_for_worker=config["env_name"],
-        max_episode_steps_collect_int=config["max_episode_steps_collect"]
-    )
-    print(f"Sequence data collection took {time.time() - start_collect_time:.2f} seconds.")
+    sequence_data_buffer = None
+    if args.load_data_from:
+        if os.path.exists(args.load_data_from):
+            print(f"Loading sequence data from {args.load_data_from}...")
+            sequence_data_buffer = torch.load(args.load_data_from, map_location=config['device'])
+            print("Data loaded successfully.")
+        else:
+            print(f"ERROR: Data file not found at {args.load_data_from}. Exiting.")
+            exit()
+    else:
+        # This block is for data collection
+        start_collect_time = time.time()
+        sequence_data_buffer = collect_sequences_for_transformer(
+            num_steps_total=config["num_steps"],
+            device_str_main=config["device"],
+            num_collection_workers_int=config["num_collection_workers"],
+            env_name_str_for_worker=config["env_name"],
+            max_episode_steps_collect_int=config["max_episode_steps_collect"]
+        )
+        print(f"Sequence data collection took {time.time() - start_collect_time:.2f} seconds.")
+
+        if sequence_data_buffer and args.save_data_to:
+            print(f"Saving collected data to {args.save_data_to}...")
+            save_dir = os.path.dirname(args.save_data_to)
+            if save_dir and not os.path.exists(save_dir):
+                os.makedirs(save_dir, exist_ok=True)
+            torch.save(sequence_data_buffer, args.save_data_to)
+            print(f"Data saved to {args.save_data_to}.")
 
     if not sequence_data_buffer:
-        print("ERROR: No sequence data collected. Exiting.")
+        print("ERROR: No sequence data collected or loaded. Exiting.")
         exit()
 
     print("Splitting data into training and validation sets...")
