@@ -172,7 +172,7 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
         data = data[:n_samples]
 
     with torch.no_grad():
-        recon_batch, _, _, _ = model(data)
+        recon_batch, _, _, _, _ = model(data)
 
     original = data.cpu()
     reconstructed = recon_batch.cpu()

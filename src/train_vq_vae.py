@@ -43,13 +43,17 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device):
         data = data.to(device)
         optimizer.zero_grad()
 
-        recon_batch, vq_loss, _quantized, _encoding_indices = model(data)
+        recon_batch, vq_loss, _quantized, _encoding_indices, z = model(data)
         # Calculate the loss
         loss = vq_loss + F.mse_loss(recon_batch, data)  # VQ loss + reconstruction loss
         loss.backward()
         optimizer.step()
 
         train_loss += loss.item()
+
+        # Reset dead codes in the VQ layer
+        if batch_idx % 2500 == 0:
+            model.vq_layer.reset_dead_codes(z)
 
         if batch_idx % 50 == 0:
             print(f'  Train Epoch: {epoch} [{batch_idx * len(data)}/{len(dataloader.dataset)} '

@@ -99,6 +99,41 @@ class VectorQuantizer(nn.Module):
         # Reshape back to the original [B, C, H, W] format
         return vq_loss, quantized_latents.permute(0, 3, 1, 2).contiguous(), encoding_indices.view(latents.shape[:-1])
 
+    @torch.no_grad()
+    def reset_dead_codes(self, batch_latents):
+        """
+        Finds and resets dead codes. A dead code is one whose EMA cluster size
+        is below a threshold. It is reset to a random encoder output from the
+        current batch. This method should be called periodically during training.
+
+        Args:
+            batch_latents (torch.Tensor): The continuous output of the encoder
+                                          for the current batch.
+        """
+        # Flatten the batch of encoder outputs
+        flat_latents = batch_latents.view(-1, self.embedding_dim)
+
+        # Find dead codes (very low usage)
+        # Using a threshold of 1.0, meaning a code is dead if it's used less
+        # than once on average in the EMA window.
+        dead_code_indices = torch.where(self.ema_cluster_size < 1.0)[0]
+        num_dead = len(dead_code_indices)
+
+        if num_dead > 0:
+            print(f"Resetting {num_dead} dead codes.")
+
+            # Choose an equal number of random latents from the batch
+            random_latents_indices = torch.randperm(flat_latents.size(0))[:num_dead]
+            random_latents = flat_latents[random_latents_indices].to(self.embedding.weight.device)
+
+            # Assign the random latents to the dead codebook entries
+            self.embedding.weight.data[dead_code_indices] = random_latents
+
+            # Reset the EMA stats for the dead codes as well
+            # Give it a fresh start with a count of 1.0
+            self.ema_cluster_size[dead_code_indices] = 1.0
+            self.ema_dw[dead_code_indices] = random_latents
+
 
 class ResidualBlock(nn.Module):
     """
@@ -228,7 +263,7 @@ class VQVAE(nn.Module):
         # Shape: [Batch, Height, Width]
         # `quantized` is the continuous representation used by PPO.
         # Shape: [Batch, EmbeddingDim, Height_feat, Width_feat]
-        return x_recon, vq_loss, quantized, encoding_indices
+        return x_recon, vq_loss, quantized, encoding_indices, z
 
 
 if __name__ == '__main__':

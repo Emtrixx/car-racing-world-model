@@ -689,7 +689,8 @@ if __name__ == "__main__":
     try:
         model_state_to_save = world_model_transformer.module.state_dict() if isinstance(world_model_transformer,
                                                                                         nn.DataParallel) else world_model_transformer.state_dict()
-        torch.save(model_state_to_save, WM_CHECKPOINT_FILENAME_TRANSFORMER)
-        print(f"Transformer World Model saved to {WM_CHECKPOINT_FILENAME_TRANSFORMER}")
+        filename = f"transformer_world_model_{config['config']}.pth"
+        torch.save(model_state_to_save, TRANSFORMER_WM_CHECKPOINTS_DIR / filename)
+        print(f"Transformer World Model saved to {filename}")
     except Exception as e:
         print(f"Error saving Transformer World Model: {e}")
