@@ -52,7 +52,7 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device):
         train_loss += loss.item()
 
         # Reset dead codes in the VQ layer
-        if batch_idx % 2500 == 0:
+        if batch_idx > 0 and batch_idx % 2500 == 0:
             model.vq_layer.reset_dead_codes(z)
 
         if batch_idx % 50 == 0:
