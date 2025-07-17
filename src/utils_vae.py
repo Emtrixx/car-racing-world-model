@@ -54,14 +54,14 @@ def collect_and_save_frames(num_frames, save_dir="data/frames", batch_size=1000,
 
     observation, _ = env.reset()
     for _ in range(50):
-        action, _ = model.predict(observation, deterministic=True)
+        action, _ = model.predict(observation, deterministic=False)
         observation, _, _, _, _ = env.step(action)
 
     step = 0
     # Initialize tqdm progress bar
     with tqdm(total=num_frames, desc="Collecting frames") as pbar:
         while pbar.n < num_frames:
-            action, _ = model.predict(observation, deterministic=True)
+            action, _ = model.predict(observation, deterministic=False)
             observation, _, terminated, truncated, _ = env.step(action)
 
             if step % frame_skip == 0:

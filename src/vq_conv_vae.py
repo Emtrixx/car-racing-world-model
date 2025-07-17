@@ -12,7 +12,7 @@ VQVAE_EMBEDDING_DIM = 256
 # The number of discrete codes in the codebook (K)
 VQVAE_NUM_EMBEDDINGS = 512
 # The commitment cost is a weighting factor for the commitment loss term
-COMMITMENT_COST = 0.25
+COMMITMENT_COST = 1.0
 GRID_SIZE = 8  # new one is 8 old one is 4
 
 
