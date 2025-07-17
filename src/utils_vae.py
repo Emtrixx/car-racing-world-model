@@ -180,16 +180,17 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
     fig, axes = plt.subplots(2, n_samples, figsize=(n_samples * 2, 4))
     fig.suptitle(f'Epoch {epoch} - Original vs. Reconstructed', fontsize=16)
     for i in range(n_samples):
-        # Display Original Image in Grayscale
-        img_orig = original[i].squeeze().numpy()
-        axes[0, i].imshow(np.clip(img_orig, 0, 1), cmap='gray')  # <-- Set colormap
-        axes[0, i].set_title(f'Original {i + 1}')
-        axes[0, i].axis('off')
+        # check if images are grayscale and display accordingly
+        if original[i].dim() == 3 and original[i].shape[0] == 1:
+            axes[0, i].imshow(original[i].squeeze(), cmap='gray')
+            axes[1, i].imshow(reconstructed[i].squeeze(), cmap='gray')
+        else:
+            axes[0, i].imshow(original[i].permute(1, 2, 0).numpy())
+            axes[1, i].imshow(reconstructed[i].permute(1, 2, 0).numpy())
 
-        # Display Reconstructed Image in Grayscale
-        img_recon = reconstructed[i].squeeze().numpy()
-        axes[1, i].imshow(np.clip(img_recon, 0, 1), cmap='gray')  # <-- Set colormap
+        axes[0, i].set_title(f'Original {i + 1}')
         axes[1, i].set_title(f'Recon {i + 1}')
+        axes[0, i].axis('off')
         axes[1, i].axis('off')
 
     plt.tight_layout(rect=[0, 0.03, 1, 0.95])

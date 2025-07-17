@@ -3,8 +3,8 @@ from torch import nn
 from torch.nn import functional as F
 
 # You can adjust these based on your specific needs
-# IMG_CHANNELS = 3
-IMG_CHANNELS = 1  # For grayscale images
+IMG_CHANNELS = 3
+# IMG_CHANNELS = 1  # For grayscale images
 IMG_SIZE = 64
 # VQ-VAE Hyperparameters
 # The embedding_dim must match the output channels of the Encoder
@@ -12,7 +12,7 @@ VQVAE_EMBEDDING_DIM = 256
 # The number of discrete codes in the codebook (K)
 VQVAE_NUM_EMBEDDINGS = 512
 # The commitment cost is a weighting factor for the commitment loss term
-COMMITMENT_COST = 1.0
+COMMITMENT_COST = 0.25
 GRID_SIZE = 8  # new one is 8 old one is 4
 
 

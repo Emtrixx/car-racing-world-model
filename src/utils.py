@@ -56,7 +56,11 @@ VQ_VAE_CHECKPOINT_FILENAME = VQVAE_CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{VQVAE
 WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_hd{GRU_HIDDEN_DIM}_ly{GRU_NUM_LAYERS}"
 WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX_GRU}.pth"
 # placeholder (todo: add suffix)
-WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_transformer_default.pth"
+WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_default.pth"
+
+
+# WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_test.pth"
+# WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_step_18000.pth"
 
 
 # --- Preprocessing Function ---
@@ -76,16 +80,17 @@ def preprocess_observation(obs, resize_dim=(64, 64)):
     cropped_obs = obs[:-12, :, :]
 
     # 2. Grayscaling
-    gray_obs = cv2.cvtColor(cropped_obs, cv2.COLOR_RGB2GRAY)
+    # gray_obs = cv2.cvtColor(cropped_obs, cv2.COLOR_RGB2GRAY)
 
     # 3. Resizing
-    resized_obs = cv2.resize(gray_obs, resize_dim, interpolation=cv2.INTER_AREA)
+    resized_obs = cv2.resize(cropped_obs, resize_dim, interpolation=cv2.INTER_AREA)
 
     # 4. Normalization
     normalized_obs = resized_obs / 255.0
 
     # Add channel dimension for consistency (e.g., for TensorFlow or PyTorch)
-    return normalized_obs.reshape(resize_dim[0], resize_dim[1], 1)
+    # return normalized_obs.reshape(resize_dim[0], resize_dim[1], 1)
+    return normalized_obs.astype(np.float32)  # Ensure float32 dtype
 
 
 class FrameStackWrapper(gym.Wrapper):
