@@ -58,7 +58,7 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device):
         codebook_usage = len(unique_codes) / model.vq_layer.num_embeddings * 100
 
         # Reset dead codes in the VQ layer
-        if batch_idx > 0 and batch_idx % 1000 == 0:
+        if batch_idx > 0 and batch_idx % 300 == 0:
             model.vq_layer.reset_dead_codes(z)
 
         if batch_idx % 50 == 0:
