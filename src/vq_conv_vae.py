@@ -12,7 +12,7 @@ VQVAE_EMBEDDING_DIM = 256
 # The number of discrete codes in the codebook (K)
 VQVAE_NUM_EMBEDDINGS = 512
 # The commitment cost is a weighting factor for the commitment loss term
-COMMITMENT_COST = 0.5
+COMMITMENT_COST = 0.25
 GRID_SIZE = 8  # new one is 8 old one is 4
 
 
@@ -275,7 +275,7 @@ if __name__ == '__main__':
     dummy_input = torch.randn(16, IMG_CHANNELS, IMG_SIZE, IMG_SIZE)
 
     # Forward pass
-    reconstruction, vq_loss, quantized_output, tokens = model(dummy_input)
+    reconstruction, vq_loss, quantized_output, tokens, _ = model(dummy_input)
 
     # Calculate reconstruction loss (e.g., Mean Squared Error)
     recon_loss = F.mse_loss(reconstruction, dummy_input)

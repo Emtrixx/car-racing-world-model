@@ -90,7 +90,7 @@ def main():
                     preprocessed_obs = torch.tensor(preprocessed_obs, dtype=torch.float32).permute(2, 0,
                                                                                                    1)
                     obs_tensor = preprocessed_obs.unsqueeze(0).to(DEVICE)  # Add batch dimension and move to device
-                    reconstructed_image, _, _, encoding_indices = vqvae_model(obs_tensor)
+                    reconstructed_image, _, _, encoding_indices, _ = vqvae_model(obs_tensor)
                     reconstructed_image = reconstructed_image.squeeze(0)
                     reconstructed_image = reconstructed_image.permute(1, 2, 0).cpu().numpy()
                     reconstructed_image = np.clip(reconstructed_image, 0, 1)  # Ensure values are in [0, 1]

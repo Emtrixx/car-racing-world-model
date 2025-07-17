@@ -38,12 +38,13 @@ def get_config(name="default"):
 def train_vqvae_epoch(model, dataloader, optimizer, epoch, device):
     model.train()
     train_loss = 0
+    total_used_codes = set()
 
     for batch_idx, data in enumerate(dataloader):
         data = data.to(device)
         optimizer.zero_grad()
 
-        recon_batch, vq_loss, _quantized, _encoding_indices, z = model(data)
+        recon_batch, vq_loss, _quantized, encoding_indices, z = model(data)
         # Calculate the loss
         loss = vq_loss + F.mse_loss(recon_batch, data)  # VQ loss + reconstruction loss
         loss.backward()
@@ -51,16 +52,23 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device):
 
         train_loss += loss.item()
 
+        # Track codebook usage
+        unique_codes = torch.unique(encoding_indices)
+        total_used_codes.update(unique_codes.cpu().numpy())
+        codebook_usage = len(unique_codes) / model.vq_layer.num_embeddings * 100
+
         # Reset dead codes in the VQ layer
-        if batch_idx > 0 and batch_idx % 2500 == 0:
-            model.vq_layer.reset_dead_codes(z)
+        if batch_idx > 0 and batch_idx % 1000 == 0:
+            model.vq_layer.reset_dead_codes()
 
         if batch_idx % 50 == 0:
             print(f'  Train Epoch: {epoch} [{batch_idx * len(data)}/{len(dataloader.dataset)} '
-                  f'({100. * batch_idx / len(dataloader):.0f}%)]\tLoss: {loss.item():.4f}')
+                  f'({100. * batch_idx / len(dataloader):.0f}%)]\tLoss: {loss.item():.4f}\t'
+                  f'Codebook Usage: {codebook_usage:.2f}%')
 
     avg_loss = train_loss / len(dataloader.dataset)
-    print(f'====> Epoch: {epoch} Average loss: {avg_loss:.4f}')
+    epoch_codebook_usage = len(total_used_codes) / model.vq_layer.num_embeddings * 100
+    print(f'====> Epoch: {epoch} Average loss: {avg_loss:.4f} | Total Codebook Usage: {epoch_codebook_usage:.2f}%')
     return avg_loss
 
 
@@ -95,7 +103,7 @@ if __name__ == "__main__":
         ema_decay=config["ema_decay"],
         ema_epsilon=config["ema_epsilon"]
     ).to(DEVICE)
-    optimizer = optim.Adam(model.parameters(), lr=config["learning_rate"])
+    optimizer = optim.AdamW(model.parameters(), lr=config["learning_rate"])
 
     # Training Loop
     start_time = time.time()
