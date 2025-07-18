@@ -7,7 +7,7 @@ from torch import optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
-from src.utils import DEVICE, ENV_NAME, VQ_VAE_CHECKPOINT_FILENAME
+from src.utils import DEVICE, ENV_NAME, VQ_VAE_CHECKPOINT_FILENAME, VQ_VAE_CHECKPOINT_BEST_FILENAME
 from src.utils_vae import FrameDataset, visualize_reconstruction, collect_and_save_frames, load_frames_from_disk
 from src.vq_conv_vae import VQVAE, LPIPSLoss
 
@@ -24,7 +24,7 @@ def get_config(name="default"):
             "ema_decay": 0.99,  # EMA decay parameter for VQ-VAE
             "ema_epsilon": 1e-5,  # EMA epsilon for VQ-VAE
             "validation_split": 0.1,  # train/val split
-            "patience": 6,  # early stopping
+            "patience": 10,  # early stopping
             "min_delta": 0.001  # early stopping
         },
     }
@@ -177,8 +177,8 @@ if __name__ == "__main__":
         if best_val_loss - val_loss > config["min_delta"]:
             best_val_loss = val_loss
             epochs_no_improve = 0
-            torch.save(model.state_dict(), VQ_VAE_CHECKPOINT_FILENAME)
-            print(f"Validation loss improved. Saved model to {VQ_VAE_CHECKPOINT_FILENAME}")
+            torch.save(model.state_dict(), VQ_VAE_CHECKPOINT_BEST_FILENAME)
+            print(f"Validation loss improved. Saved model to {VQ_VAE_CHECKPOINT_BEST_FILENAME}")
         else:
             epochs_no_improve += 1
 
