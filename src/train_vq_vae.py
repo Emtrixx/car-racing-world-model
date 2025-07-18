@@ -19,21 +19,24 @@ def get_config(name="default"):
             "batch_size": 128,  # Batch size for training
             "learning_rate": 1e-3,  # Learning rate for optimizer
             "epochs": 50,  # Number of training epochs
+            "num_batches_for_init": 50,  # Number of batches to use for initializing the codebook
             "perceptual_loss_weight": 0.1,  # Weight for perceptual loss in total loss calculation
             "ema_decay": 0.99,  # EMA decay parameter for VQ-VAE
-            "ema_epsilon": 1e-5  # EMA epsilon for VQ-VAE
+            "ema_epsilon": 1e-5,  # EMA epsilon for VQ-VAE
+            "validation_split": 0.1,  # train/val split
+            "patience": 6,  # early stopping
+            "min_delta": 0.001  # early stopping
         },
-        # for testing
-        "test": {
-            "num_frames_collect": 10000,
-            "batch_size": 32,
-            "learning_rate": 1e-3,
-            "epochs": 5,
-            "perceptual_loss_weight": 0.5,  # Weight for perceptual loss in total loss calculation
-            "ema_decay": 0.99,
-            "ema_epsilon": 1e-5
-        }
     }
+    configs["test"] = configs["default"].copy()
+    configs["test"].update({
+        "num_frames_collect": 10000,
+        "batch_size": 32,
+        "epochs": 5,
+        "num_batches_for_init": 10,
+        "perceptual_loss_weight": 0.5,  # Weight for perceptual loss in total loss calculation
+    }
+    )
     return configs.get(name, configs["default"])
 
 
@@ -87,20 +90,34 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device, perceptual_lo
     avg_p_loss = total_p_loss / len(dataloader)
     avg_vq_loss = total_vq_loss / len(dataloader)
     avg_perplexity = total_perplexity / len(dataloader)
-    ema_perplexity = model.vq_layer.get_ema_perplexity()
 
     print(f'====> Epoch: {epoch} | Avg Loss: {avg_train_loss:.4f} | '
           f'Avg Recon Loss: {avg_recon_loss:.4f} '
           f'| Avg Perceptual Loss: {avg_p_loss:.4f} '
           f' | Avg VQ Loss: {avg_vq_loss:.4f} | '
-          f'Avg Perplexity: {avg_perplexity:.2f}'
-          f' | EMA Perplexity: {ema_perplexity:.2f}')
-
-    # --- Resetting dead codes to random latents from the last batch ---
-    if epoch > 1:
-        model.vq_layer.reset_dead_codes(z)
+          f'Avg Perplexity: {avg_perplexity:.2f}')
 
     return avg_train_loss
+
+
+def validate_vqvae(model, dataloader, device, perceptual_loss, perceptual_loss_weight=0.1):
+    """
+    Validates the VQ-VAE model on the validation set.
+    """
+    model.eval()
+    total_val_loss = 0
+    with torch.no_grad():
+        for data in dataloader:
+            data = data.to(device)
+            x_recon, vq_loss, _, _, _, _ = model(data)
+            recon_loss = F.mse_loss(x_recon, data)
+            p_loss = perceptual_loss(x_recon, data)
+            total_loss = recon_loss + vq_loss + (perceptual_loss_weight * p_loss)
+            total_val_loss += total_loss.item()
+
+    avg_val_loss = total_val_loss / len(dataloader)
+    print(f'====> Validation Loss: {avg_val_loss:.4f}')
+    return avg_val_loss
 
 
 if __name__ == "__main__":
@@ -127,22 +144,47 @@ if __name__ == "__main__":
 
     # Create Dataset and DataLoader
     dataset = FrameDataset(frame_data)
-    dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True)
+
+    # Split dataset into training and validation
+    val_size = int(len(dataset) * config['validation_split'])
+    train_size = len(dataset) - val_size
+    train_dataset, val_dataset = torch.utils.data.random_split(dataset, [train_size, val_size])
+
+    train_loader = DataLoader(train_dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True)
+    val_loader = DataLoader(val_dataset, batch_size=config["batch_size"], shuffle=False, drop_last=True)
 
     # Initialize Model and Optimizer
     model = VQVAE().to(DEVICE)
-    model.initialize_codebook(dataloader, DEVICE, num_batches_for_init=50)
+    model.initialize_codebook(train_loader, DEVICE, num_batches_for_init=50)
     optimizer = optim.AdamW(model.parameters(), lr=config["learning_rate"])
 
     perceptual_loss = LPIPSLoss().to(DEVICE)
 
     # Training Loop
     start_time = time.time()
+    best_val_loss = float('inf')
+    epochs_no_improve = 0
+
     for epoch in range(1, config["epochs"] + 1):
-        train_vqvae_epoch(model, dataloader, optimizer, epoch, DEVICE, perceptual_loss,
+        train_vqvae_epoch(model, train_loader, optimizer, epoch, DEVICE, perceptual_loss,
                           perceptual_loss_weight=config["perceptual_loss_weight"])
+        val_loss = validate_vqvae(model, val_loader, DEVICE, perceptual_loss,
+                                  perceptual_loss_weight=config["perceptual_loss_weight"])
+
         if epoch % 5 == 0 or epoch == config["epochs"]:
-            visualize_reconstruction(model, dataloader, DEVICE, epoch)
+            visualize_reconstruction(model, val_loader, DEVICE, epoch)
+
+        if best_val_loss - val_loss > config["min_delta"]:
+            best_val_loss = val_loss
+            epochs_no_improve = 0
+            torch.save(model.state_dict(), VQ_VAE_CHECKPOINT_FILENAME)
+            print(f"Validation loss improved. Saved model to {VQ_VAE_CHECKPOINT_FILENAME}")
+        else:
+            epochs_no_improve += 1
+
+        if epochs_no_improve >= config["patience"]:
+            print(f"Early stopping triggered after {epoch} epochs.")
+            break
 
         # print(torch.cuda.memory_summary(device=DEVICE, abbreviated=True))
     end_time = time.time()
