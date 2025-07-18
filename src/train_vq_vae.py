@@ -137,6 +137,8 @@ if __name__ == "__main__":
                           perceptual_loss_weight=config["perceptual_loss_weight"])
         if epoch % 5 == 0 or epoch == config["epochs"]:
             visualize_reconstruction(model, dataloader, DEVICE, epoch)
+
+        print(torch.cuda.memory_summary(device=DEVICE, abbreviated=True))
     end_time = time.time()
     print(f"\nVAE Training finished in {end_time - start_time:.2f} seconds.")
 
