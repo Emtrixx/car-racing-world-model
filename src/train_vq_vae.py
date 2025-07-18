@@ -56,7 +56,7 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device, perceptual_lo
 
         # --- FORWARD PASS ---
         # The model returns the VQ loss, the reconstructed data, and the perplexity
-        x_recon, vq_loss, quantized, _encoding_indices, _z, perplexity = model(data)
+        x_recon, vq_loss, quantized, _encoding_indices, z, perplexity = model(data)
 
         # --- LOSS CALCULATION ---
         # Reconstruction Loss: How well the model reconstructs the input
@@ -87,12 +87,18 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device, perceptual_lo
     avg_p_loss = total_p_loss / len(dataloader)
     avg_vq_loss = total_vq_loss / len(dataloader)
     avg_perplexity = total_perplexity / len(dataloader)
+    ema_perplexity = model.vq_layer.get_ema_perplexity()
 
     print(f'====> Epoch: {epoch} | Avg Loss: {avg_train_loss:.4f} | '
           f'Avg Recon Loss: {avg_recon_loss:.4f} '
           f'| Avg Perceptual Loss: {avg_p_loss:.4f} '
           f' | Avg VQ Loss: {avg_vq_loss:.4f} | '
-          f'Avg Perplexity: {avg_perplexity:.2f}')
+          f'Avg Perplexity: {avg_perplexity:.2f}'
+          f' | EMA Perplexity: {ema_perplexity:.2f}')
+
+    # --- Resetting dead codes to random latents from the last batch ---
+    if epoch > 1:
+        model.vq_layer.reset_dead_codes(z)
 
     return avg_train_loss
 
@@ -138,7 +144,7 @@ if __name__ == "__main__":
         if epoch % 5 == 0 or epoch == config["epochs"]:
             visualize_reconstruction(model, dataloader, DEVICE, epoch)
 
-        print(torch.cuda.memory_summary(device=DEVICE, abbreviated=True))
+        # print(torch.cuda.memory_summary(device=DEVICE, abbreviated=True))
     end_time = time.time()
     print(f"\nVAE Training finished in {end_time - start_time:.2f} seconds.")
 

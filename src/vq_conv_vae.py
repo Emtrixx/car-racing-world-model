@@ -66,16 +66,16 @@ class VectorQuantizerEMA(nn.Module):
                  epsilon: float = 1e-5):
         super(VectorQuantizerEMA, self).__init__()
 
-        self._embedding_dim = embedding_dim
+        self.embedding_dim = embedding_dim
         self._num_embeddings = num_embeddings
         self._commitment_cost = commitment_cost
         self._decay = decay
         self._epsilon = epsilon
 
         # Initialize the codebook embeddings. These are not trained by the optimizer.
-        embeddings = torch.empty(self._num_embeddings, self._embedding_dim)
+        embeddings = torch.empty(self._num_embeddings, self.embedding_dim)
         nn.init.uniform_(embeddings, -1.0 / self._num_embeddings, 1.0 / self._num_embeddings)
-        self.register_buffer("_embeddings", embeddings)
+        self.register_buffer("embeddings", embeddings)
 
         # Buffers for tracking cluster sizes and EMA for the codebook
         self.register_buffer("_ema_cluster_size", torch.zeros(num_embeddings))
@@ -87,19 +87,19 @@ class VectorQuantizerEMA(nn.Module):
         input_shape = inputs_permuted.shape
 
         # Flatten input to (B*H*W, C)
-        flat_input = inputs_permuted.view(-1, self._embedding_dim)
+        flat_input = inputs_permuted.view(-1, self.embedding_dim)
 
         # Calculate distances between flattened input and codebook vectors
         distances = (torch.sum(flat_input ** 2, dim=1, keepdim=True)
-                     + torch.sum(self._embeddings ** 2, dim=1)
-                     - 2 * torch.matmul(flat_input, self._embeddings.t()))
+                     + torch.sum(self.embeddings ** 2, dim=1)
+                     - 2 * torch.matmul(flat_input, self.embeddings.t()))
 
         # Find the closest codebook vector indices
         encoding_indices = torch.argmin(distances, dim=1)
         encodings = F.one_hot(encoding_indices, self._num_embeddings).float()
 
         # Quantize the flattened input
-        quantized = torch.matmul(encodings, self._embeddings).view(input_shape)
+        quantized = torch.matmul(encodings, self.embeddings).view(input_shape)
 
         # EMA Codebook Update
         if self.training:
@@ -120,7 +120,7 @@ class VectorQuantizerEMA(nn.Module):
                 self._ema_w = self._ema_w * self._decay + (1 - self._decay) * dw
 
                 # Update the codebook with the new EMA weights
-                self._embeddings = self._ema_w / self._ema_cluster_size.unsqueeze(1)
+                self.embeddings = self._ema_w / self._ema_cluster_size.unsqueeze(1)
 
         # The VQ loss is now only the commitment cost. The codebook loss is gone.
         commitment_loss = F.mse_loss(inputs_permuted, quantized.detach())
@@ -172,9 +172,58 @@ class VectorQuantizerEMA(nn.Module):
             centroids = new_centroids
 
         # Update the codebook with the K-Means centroids
-        self._embeddings.data.copy_(centroids)
+        self.embeddings.data.copy_(centroids)
         self._ema_w.data.copy_(centroids)
         print("Codebook initialized.")
+
+    @torch.no_grad()
+    def reset_dead_codes(self, batch_latents):
+        """
+        Finds and resets dead codes. A dead code is one whose EMA cluster size
+        is below a threshold. It is reset to a random encoder output from the
+        current batch. This method should be called periodically during training.
+
+        Args:
+            batch_latents (torch.Tensor): The continuous output of the encoder
+                                          (after _pre_vq_conv) for the current batch.
+        """
+        # Flatten the batch of encoder outputs to (B*H*W, C)
+        flat_latents = batch_latents.permute(0, 2, 3, 1).contiguous().view(-1, self.embedding_dim)
+
+        # Find dead codes (very low usage). A threshold of 1.0 means a code is
+        # considered dead if it's used less than once on average in the EMA window.
+        dead_code_indices = torch.where(self._ema_cluster_size < 1.0)[0]
+        num_dead = len(dead_code_indices)
+
+        if num_dead > 0:
+            print(f"Resetting {num_dead} dead codes.")
+
+            # Choose an equal number of random latents from the batch
+            num_latents = flat_latents.size(0)
+            if num_latents == 0:
+                return  # Cannot reset if the batch is empty
+
+            random_latents_indices = torch.randperm(num_latents, device=flat_latents.device)[:num_dead]
+            random_latents = flat_latents[random_latents_indices]
+
+            # Assign the random latents to the dead codebook entries
+            self.embeddings.data[dead_code_indices] = random_latents
+
+            # Reset the EMA stats for the dead codes as well
+            self._ema_cluster_size[dead_code_indices] = 1.0  # Give it a fresh start
+            self._ema_w.data[dead_code_indices] = random_latents
+
+    def get_ema_perplexity(self):
+        """
+        Calculates perplexity based on the EMA cluster size.
+        This provides a smoothed, long-term measure of codebook usage.
+        """
+        # Normalize the cluster sizes to get a probability distribution
+        ema_probs = self._ema_cluster_size / torch.sum(self._ema_cluster_size)
+
+        # Calculate perplexity from this smoothed distribution
+        perplexity = torch.exp(-torch.sum(ema_probs * torch.log(ema_probs + 1e-10)))
+        return perplexity
 
 
 class ResidualBlock(nn.Module):
@@ -276,16 +325,16 @@ class VQVAE(nn.Module):
                  decay=DECAY):
         super(VQVAE, self).__init__()
 
-        self._encoder = Encoder(in_channels, num_hiddens, num_residual_layers, embedding_dim)
+        self.encoder = Encoder(in_channels, num_hiddens, num_residual_layers, embedding_dim)
         self._pre_vq_conv = nn.Conv2d(embedding_dim, embedding_dim, kernel_size=1, stride=1)
-        self._vq_vae = VectorQuantizerEMA(num_embeddings, embedding_dim, commitment_cost, decay)
-        self._decoder = Decoder(embedding_dim, num_hiddens, num_residual_layers, in_channels)
+        self.vq_layer = VectorQuantizerEMA(num_embeddings, embedding_dim, commitment_cost, decay)
+        self.decoder = Decoder(embedding_dim, num_hiddens, num_residual_layers, in_channels)
 
     def forward(self, x):
-        z = self._encoder(x)
+        z = self.encoder(x)
         z = self._pre_vq_conv(z)
-        vq_loss, quantized, perplexity, encoding_indices = self._vq_vae(z)
-        x_recon = self._decoder(quantized)
+        vq_loss, quantized, perplexity, encoding_indices = self.vq_layer(z)
+        x_recon = self.decoder(quantized)
         return x_recon, vq_loss, quantized, encoding_indices, z, perplexity
 
     def initialize_codebook(self, data_loader, device, num_batches_for_init=50):
@@ -303,13 +352,13 @@ class VQVAE(nn.Module):
                 if i >= num_batches_for_init:
                     break
                 data = data.to(device)
-                z = self._encoder(data)
+                z = self.encoder(data)
                 z = self._pre_vq_conv(z)
                 # z shape: (B, C, H, W) -> flatten to (B*H*W, C)
                 all_encoder_outputs.append(z.permute(0, 2, 3, 1).reshape(-1, VQVAE_EMBEDDING_DIM))
 
         # Pass the collected encoder outputs to the quantizer's init method
-        self._vq_vae.initialize_codebook_with_kmeans(torch.cat(all_encoder_outputs, dim=0))
+        self.vq_layer.initialize_codebook_with_kmeans(torch.cat(all_encoder_outputs, dim=0))
         self.train()  # Set model back to training mode
 
 
