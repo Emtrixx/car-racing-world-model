@@ -20,4 +20,4 @@ tensorboard~=2.19.0
 tensorboard-data-server~=0.7.2
 opencv-python-headless~=4.11
 huggingface_sb3~=3.0
-git+https://github.com/codelion/openevolve.git
+lpips~=0.1.4
