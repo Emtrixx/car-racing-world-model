@@ -128,7 +128,7 @@ if __name__ == "__main__":
     model.initialize_codebook(dataloader, DEVICE, num_batches_for_init=4)
     optimizer = optim.AdamW(model.parameters(), lr=config["learning_rate"])
 
-    perceptual_loss = LPIPSLoss()
+    perceptual_loss = LPIPSLoss().to(DEVICE)
 
     # Training Loop
     start_time = time.time()
