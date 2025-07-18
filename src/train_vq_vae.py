@@ -125,7 +125,7 @@ if __name__ == "__main__":
 
     # Initialize Model and Optimizer
     model = VQVAE().to(DEVICE)
-    model.initialize_codebook(dataloader, DEVICE, num_batches_for_init=4)
+    model.initialize_codebook(dataloader, DEVICE, num_batches_for_init=50)
     optimizer = optim.AdamW(model.parameters(), lr=config["learning_rate"])
 
     perceptual_loss = LPIPSLoss().to(DEVICE)
