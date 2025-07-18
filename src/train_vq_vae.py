@@ -90,12 +90,18 @@ def train_vqvae_epoch(model, dataloader, optimizer, epoch, device, perceptual_lo
     avg_p_loss = total_p_loss / len(dataloader)
     avg_vq_loss = total_vq_loss / len(dataloader)
     avg_perplexity = total_perplexity / len(dataloader)
+    ema_perplexity = model.vq_layer.get_ema_perplexity()
 
     print(f'====> Epoch: {epoch} | Avg Loss: {avg_train_loss:.4f} | '
           f'Avg Recon Loss: {avg_recon_loss:.4f} '
           f'| Avg Perceptual Loss: {avg_p_loss:.4f} '
           f' | Avg VQ Loss: {avg_vq_loss:.4f} | '
-          f'Avg Perplexity: {avg_perplexity:.2f}')
+          f'Avg Perplexity: {avg_perplexity:.2f}'
+          f' | EMA Perplexity: {ema_perplexity:.2f}')
+
+    # --- Resetting dead codes to random latents from the last batch ---
+    if epoch > 1:
+        model.vq_layer.reset_dead_codes(z)
 
     return avg_train_loss
 
