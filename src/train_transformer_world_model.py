@@ -411,7 +411,7 @@ class WorldModelTransformerTrainer:
             )
         else:
             self.world_model.token_embedding.weight.data.copy_(
-                self.vq_vae_model.vq_layer.embedding.weight.data
+                self.vq_vae_model.vq_layer.embeddings.data
             )
         print("Copied VQ-VAE weights to world model token embedding.")
 
@@ -689,7 +689,7 @@ if __name__ == "__main__":
     try:
         model_state_to_save = world_model_transformer.module.state_dict() if isinstance(world_model_transformer,
                                                                                         nn.DataParallel) else world_model_transformer.state_dict()
-        filename = f"transformer_world_model_{config['config']}.pth"
+        filename = f"transformer_world_model_{args.config}.pth"
         torch.save(model_state_to_save, TRANSFORMER_WM_CHECKPOINTS_DIR / filename)
         print(f"Transformer World Model saved to {filename}")
     except Exception as e:
