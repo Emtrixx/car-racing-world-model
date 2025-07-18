@@ -103,23 +103,24 @@ class VectorQuantizerEMA(nn.Module):
 
         # EMA Codebook Update
         if self.training:
-            # Update the EMA cluster size
-            self._ema_cluster_size = self._ema_cluster_size * self._decay + \
-                                     (1 - self._decay) * torch.sum(encodings, 0)
+            with torch.no_grad():
+                # Update the EMA cluster size
+                self._ema_cluster_size = self._ema_cluster_size * self._decay + \
+                                         (1 - self._decay) * torch.sum(encodings, 0)
 
-            # Laplace smoothing to handle potential division by zero
-            n = torch.sum(self._ema_cluster_size.data)
-            self._ema_cluster_size = (
-                    (self._ema_cluster_size + self._epsilon)
-                    / (n + self._num_embeddings * self._epsilon) * n
-            )
+                # Laplace smoothing to handle potential division by zero
+                n = torch.sum(self._ema_cluster_size.data)
+                self._ema_cluster_size = (
+                        (self._ema_cluster_size + self._epsilon)
+                        / (n + self._num_embeddings * self._epsilon) * n
+                )
 
-            # Update the EMA weights for the codebook
-            dw = torch.matmul(encodings.t(), flat_input)
-            self._ema_w = self._ema_w * self._decay + (1 - self._decay) * dw
+                # Update the EMA weights for the codebook
+                dw = torch.matmul(encodings.t(), flat_input)
+                self._ema_w = self._ema_w * self._decay + (1 - self._decay) * dw
 
-            # Update the codebook with the new EMA weights
-            self._embeddings = self._ema_w / self._ema_cluster_size.unsqueeze(1)
+                # Update the codebook with the new EMA weights
+                self._embeddings = self._ema_w / self._ema_cluster_size.unsqueeze(1)
 
         # The VQ loss is now only the commitment cost. The codebook loss is gone.
         commitment_loss = F.mse_loss(inputs_permuted, quantized.detach())
