@@ -144,21 +144,29 @@ def load_frames_from_disk(load_dir=DATA_DIR / "frames", max_frames_to_load=None)
 # --- Debugging Function to Display a Frame ---
 def visualize_single_frame(frame_tensor, title="Sample Frame"):
     """
-    Displays a single grayscale frame tensor using matplotlib.
+    Displays a single frame tensor using matplotlib.
 
     Args:
-        frame_tensor (torch.Tensor): A single frame tensor with shape (1, H, W).
+        frame_tensor (torch.Tensor): A single frame tensor with shape (C, H, W).
         title (str): The title for the plot.
     """
     if not isinstance(frame_tensor, torch.Tensor) or frame_tensor.dim() != 3:
-        print("Error: Input must be a 3D PyTorch tensor of shape (1, H, W).")
+        print("Error: Input must be a 3D PyTorch tensor of shape (C, H, W).")
         return
 
-    # Remove channel dimension (1, H, W) -> (H, W) and convert to numpy
-    img_np = frame_tensor.squeeze().cpu().numpy()
-
+    # Create a single figure with a specific size
     plt.figure(figsize=(4, 4))
-    plt.imshow(img_np, cmap='gray')
+
+    if frame_tensor.shape[0] == 1:
+        # Grayscale: remove channel dim (1, H, W) -> (H, W) and convert to numpy
+        img_np = frame_tensor.squeeze().cpu().numpy()
+        plt.imshow(img_np, cmap='gray')
+    else:
+        # RGB: convert to numpy and permute to (H, W, C)
+        img_np = frame_tensor.permute(1, 2, 0).cpu().numpy()
+        plt.imshow(img_np)
+
+    # Add title and turn off axes for the current figure
     plt.title(title)
     plt.axis('off')
     plt.show()
@@ -208,5 +216,6 @@ if __name__ == '__main__':
 
         # --- Step 3: Use the debugging function to view a sample frame ---
         print("Displaying a sample frame for verification...")
+        random_frame_index = np.random.randint(0, len(loaded_frames))
         # Display the 100th frame from the loaded dataset
-        visualize_single_frame(loaded_frames[100], title="Frame #100")
+        visualize_single_frame(loaded_frames[random_frame_index], title=f"Sample Frame {random_frame_index + 1}")
