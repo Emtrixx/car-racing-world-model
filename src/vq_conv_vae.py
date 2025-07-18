@@ -314,7 +314,7 @@ class Decoder(nn.Module):
         for residual_block in self._residual_stack:
             x = residual_block(x)
 
-        return self._upsample(x)
+        return torch.sigmoid(self._upsample(x))
 
 
 class VQVAE(nn.Module):
