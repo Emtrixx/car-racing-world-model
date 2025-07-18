@@ -17,7 +17,7 @@ VQVAE_EMBEDDING_DIM = 256
 # The number of discrete codes in the codebook (K)
 VQVAE_NUM_EMBEDDINGS = 512
 # The commitment cost is a weighting factor for the commitment loss term
-COMMITMENT_COST = 0.25
+COMMITMENT_COST = 0.05
 # Decay for the EMA update, a value close to 1 is standard.
 DECAY = 0.99
 # Weight for the perceptual loss term in the total loss function
