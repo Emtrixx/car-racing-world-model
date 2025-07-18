@@ -60,7 +60,8 @@ def main():
     # --- Play and Collect Images ---
     saved_count = 0
     step_count = 0
-    reconstruction_data = []
+    reconstruction_examples = []
+    codebook_usage = np.zeros(vqvae_model.vq_layer._num_embeddings, dtype=int)
 
     # Run multiple episodes until we have enough images
     while saved_count < NUM_IMAGES_TO_SAVE:
@@ -90,7 +91,7 @@ def main():
                     preprocessed_obs = torch.tensor(preprocessed_obs, dtype=torch.float32).permute(2, 0,
                                                                                                    1)
                     obs_tensor = preprocessed_obs.unsqueeze(0).to(DEVICE)  # Add batch dimension and move to device
-                    reconstructed_image, _, _, encoding_indices, _ = vqvae_model(obs_tensor)
+                    reconstructed_image, _, _, encoding_indices, _, _ = vqvae_model(obs_tensor)
                     reconstructed_image = reconstructed_image.squeeze(0)
                     reconstructed_image = reconstructed_image.permute(1, 2, 0).cpu().numpy()
                     reconstructed_image = np.clip(reconstructed_image, 0, 1)  # Ensure values are in [0, 1]
@@ -99,8 +100,12 @@ def main():
                     reconstructed_image_path = OUTPUT_DIR / reconstructed_image_filename
                     Image.fromarray(np.squeeze(reconstructed_image)).save(reconstructed_image_path)
 
+                # Update codebook usage
+                unique_indices, counts = np.unique(encoding_indices.cpu().numpy(), return_counts=True)
+                codebook_usage[unique_indices] += counts
+
                 # Save the preprocessed observation for potential further analysis
-                reconstruction_data.append({
+                reconstruction_examples.append({
                     "example_id": saved_count,
                     "original_image_path": "data/sample_images/" + image_filename,
                     "reconstructed_image_path": "data/sample_images/" + reconstructed_image_filename,
@@ -109,12 +114,19 @@ def main():
 
                 saved_count += 1
 
+    # --- Create final data structure ---
+    output_data = {
+        "codebook_size": vqvae_model.vq_layer._num_embeddings,
+        "codebook_usage_frequencies": codebook_usage.tolist(),
+        "reconstruction_examples": reconstruction_examples
+    }
+
     # Save reconstruction data to a JSON file
     reconstruction_data_path = OUTPUT_DIR.parent / "reconstruction_data.json"
     print(f"Saving reconstruction data to {reconstruction_data_path}")
     with open(reconstruction_data_path, 'w') as f:
         import json
-        json.dump(reconstruction_data, f, indent=4)
+        json.dump(output_data, f, indent=4)
 
     env.close()
 

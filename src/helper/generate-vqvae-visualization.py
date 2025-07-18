@@ -55,7 +55,7 @@ if __name__ == '__main__':
         print("Please train your model and save it as 'vq_vae_model.pth'.")
 
     model.eval()
-    codebook_weights = model.vq_layer.embedding.weight.data.cpu().numpy()
+    codebook_weights = model.vq_layer.embeddings.data.cpu().numpy()
 
     # --- Project Codebook to 2D using t-SNE ---
     print("Projecting codebook to 2D using t-SNE... (This may take a moment)")
