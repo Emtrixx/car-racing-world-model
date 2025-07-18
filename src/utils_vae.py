@@ -172,10 +172,10 @@ def visualize_reconstruction(model, dataloader, device, epoch, n_samples=8):
         data = data[:n_samples]
 
     with torch.no_grad():
-        recon_batch, _, _, _, _ = model(data)
+        x_recon, _loss, _quantized, _encoding_indices, _z, _perplexity = model(data)
 
     original = data.cpu()
-    reconstructed = recon_batch.cpu()
+    reconstructed = x_recon.cpu()
 
     fig, axes = plt.subplots(2, n_samples, figsize=(n_samples * 2, 4))
     fig.suptitle(f'Epoch {epoch} - Original vs. Reconstructed', fontsize=16)

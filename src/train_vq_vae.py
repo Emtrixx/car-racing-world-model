@@ -36,40 +36,55 @@ def get_config(name="default"):
 
 
 def train_vqvae_epoch(model, dataloader, optimizer, epoch, device):
+    """
+    Trains the VQ-VAE model for one epoch.
+    """
     model.train()
-    train_loss = 0
-    total_used_codes = set()
+
+    # Trackers for metrics
+    total_train_loss = 0
+    total_recon_loss = 0
+    total_vq_loss = 0
+    total_perplexity = 0
 
     for batch_idx, data in enumerate(dataloader):
         data = data.to(device)
         optimizer.zero_grad()
 
-        recon_batch, vq_loss, _quantized, encoding_indices, z = model(data)
-        # Calculate the loss
-        loss = vq_loss + F.mse_loss(recon_batch, data)  # VQ loss + reconstruction loss
-        loss.backward()
+        # --- FORWARD PASS ---
+        # The model returns the VQ loss, the reconstructed data, and the perplexity
+        x_recon, loss, quantized, _encoding_indices, _z, perplexity = model(data)
+
+        # --- LOSS CALCULATION ---
+        # 1. Reconstruction Loss: How well the model reconstructs the input
+        recon_loss = F.mse_loss(x_recon, data)
+
+        # 2. Total Loss: The sum of reconstruction loss and the VQ loss
+        # The vq_loss already includes the commitment loss, as calculated inside the VectorQuantizer
+        total_loss = recon_loss + loss
+
+        # --- BACKWARD PASS & OPTIMIZATION ---
+        total_loss.backward()
         optimizer.step()
 
-        train_loss += loss.item()
+        # --- UPDATE METRICS ---
+        total_train_loss += total_loss.item()
+        total_recon_loss += recon_loss.item()
+        total_vq_loss += loss.item()
+        total_perplexity += perplexity.item()
 
-        # Track codebook usage
-        unique_codes = torch.unique(encoding_indices)
-        total_used_codes.update(unique_codes.cpu().numpy())
-        codebook_usage = len(unique_codes) / model.vq_layer.num_embeddings * 100
+    # --- LOGGING EPOCH RESULTS ---
+    # Calculate average metrics for the entire epoch
+    avg_train_loss = total_train_loss / len(dataloader)
+    avg_recon_loss = total_recon_loss / len(dataloader)
+    avg_vq_loss = total_vq_loss / len(dataloader)
+    avg_perplexity = total_perplexity / len(dataloader)
 
-        # Reset dead codes in the VQ layer
-        if epoch > 1 and batch_idx > 0 and batch_idx % 300 == 0:
-            model.vq_layer.reset_dead_codes(z)
+    print(f'====> Epoch: {epoch} | Avg Loss: {avg_train_loss:.4f} | '
+          f'Avg Recon Loss: {avg_recon_loss:.4f} | Avg VQ Loss: {avg_vq_loss:.4f} | '
+          f'Avg Perplexity: {avg_perplexity:.2f}')
 
-        if batch_idx % 50 == 0:
-            print(f'  Train Epoch: {epoch} [{batch_idx * len(data)}/{len(dataloader.dataset)} '
-                  f'({100. * batch_idx / len(dataloader):.0f}%)]\tLoss: {loss.item():.4f}\t'
-                  f'Codebook Usage: {codebook_usage:.2f}%')
-
-    avg_loss = train_loss / len(dataloader.dataset)
-    epoch_codebook_usage = len(total_used_codes) / model.vq_layer.num_embeddings * 100
-    print(f'====> Epoch: {epoch} Average loss: {avg_loss:.4f} | Total Codebook Usage: {epoch_codebook_usage:.2f}%')
-    return avg_loss
+    return avg_train_loss
 
 
 if __name__ == "__main__":
@@ -99,10 +114,7 @@ if __name__ == "__main__":
     dataloader = DataLoader(dataset, batch_size=config["batch_size"], shuffle=True, drop_last=True)
 
     # Initialize Model and Optimizer
-    model = VQVAE(
-        ema_decay=config["ema_decay"],
-        ema_epsilon=config["ema_epsilon"]
-    ).to(DEVICE)
+    model = VQVAE().to(DEVICE)
     optimizer = optim.AdamW(model.parameters(), lr=config["learning_rate"])
 
     # Training Loop
