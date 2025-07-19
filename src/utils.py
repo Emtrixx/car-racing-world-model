@@ -264,7 +264,7 @@ class SkipStartFramesWrapper(gym.Wrapper):
 def make_env_sb3(
         env_id: str,
         frame_stack_num: int,
-        gamma: float,
+        gamma: float = 0.99,  # Discount factor for rewards
         render_mode: str = None,
         max_episode_steps: int = None,
         seed: int = 0  # Seed for reproducibility
