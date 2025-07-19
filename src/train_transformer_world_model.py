@@ -66,8 +66,8 @@ def get_config(name="default"):
             "ff_dim": TRANSFORMER_FF_DIM,
             "grid_size": GRID_SIZE,
             "dropout_rate": TRANSFORMER_DROPOUT_RATE,
-            #
-            "max_seq_len": 256
+            # context length number of frames plus 1 for the action
+            "max_seq_len": (GRID_SIZE * GRID_SIZE) * SEQUENCE_LENGTH + 1,
         }
     }
     # test configuration for quick runs
