@@ -120,7 +120,7 @@ class WorldModelDataCollector:
         # Encode to get the token indices from the VQ-VAE
         with torch.no_grad():
             z_continuous = self.vq_vae_model.encoder(processed_tensor)
-            loss, quantized_out, perplexity, encoding_indices_out = self.vq_vae_model.vq_layer(z_continuous)
+            _loss, _quantized_out, _perplexity, encoding_indices_out = self.vq_vae_model.vq_layer(z_continuous)
 
         return encoding_indices_out.view(1, -1)  # Flatten to [1, 16]
 
