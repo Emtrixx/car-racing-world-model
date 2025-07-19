@@ -31,7 +31,7 @@ NUM_STEPS = 1_000_000
 WM_EPOCHS = 10
 WM_BATCH_SIZE = 32
 WM_LEARNING_RATE = 1e-4
-SEQUENCE_LENGTH = 32
+SEQUENCE_LENGTH = 16
 MAX_GRAD_NORM = 1.0
 
 # Parallelism Configuration
@@ -66,7 +66,8 @@ def get_config(name="default"):
             "ff_dim": TRANSFORMER_FF_DIM,
             "grid_size": GRID_SIZE,
             "dropout_rate": TRANSFORMER_DROPOUT_RATE,
-            "max_seq_len": (GRID_SIZE * GRID_SIZE) + 1,
+            # context length number of frames plus 1 for the action
+            "max_seq_len": (GRID_SIZE * GRID_SIZE) * SEQUENCE_LENGTH + 1,
         }
     }
     # test configuration for quick runs

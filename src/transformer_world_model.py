@@ -55,7 +55,7 @@ class WorldModelTransformer(nn.Module):
             ff_dim: int = TRANSFORMER_FF_DIM,  # Typically 4 * embed_dim
             grid_size: int = GRID_SIZE,
             dropout_rate: float = TRANSFORMER_DROPOUT_RATE,
-            max_seq_len: int = 100,  # Max sequence length for pos encoding (num_tokens + 1 typically)
+            max_seq_len: int = 128,  # Max sequence length for pos encoding (num_tokens + 1 typically)
             block_tf_ratio: float = 0.5,  # Added for storing from config
             block_size: int = 4  # Added for storing from config
     ):
