@@ -19,11 +19,14 @@ OUTPUT_DIR = Path("../../assets/sample_images/")
 
 
 def save_preprocessed_observation(preprocessed_obs, filename):
-    """Saves a preprocessed (normalized, grayscale) observation as a PNG image."""
+    """Saves a preprocessed observation as a PNG image."""
     # The observation is normalized in [0, 1], so scale it to [0, 255] for saving.
     img_array = (preprocessed_obs * 255).astype(np.uint8)
-    # Squeeze the channel dimension (H, W, 1) -> (H, W) before creating the image.
-    img = Image.fromarray(np.squeeze(img_array))
+
+    # Adjust for grayscale or RGB images
+    if len(img_array.shape) == 3 and img_array.shape[-1] == 1:  # Grayscale
+        img_array = np.squeeze(img_array)  # Remove channel dimension
+    img = Image.fromarray(img_array)
     img.save(filename)
 
 
@@ -80,25 +83,33 @@ def main():
                 # Apply the preprocessing function to the raw observation
                 preprocessed_obs = preprocess_observation(observation)
 
-                # save sample image
+                # Adjust for grayscale or RGB images
+                if len(preprocessed_obs.shape) == 2:  # Grayscale
+                    preprocessed_obs = np.expand_dims(preprocessed_obs, axis=-1)  # Add channel dimension
+
+                # Save sample image
                 image_filename = f"frame_{saved_count:04d}.png"
                 image_path = OUTPUT_DIR / image_filename
                 print(f"  - Saving preprocessed frame {saved_count + 1} to {image_path}")
                 save_preprocessed_observation(preprocessed_obs, image_path)
 
-                # save reconstructed image using VQ-VAE
+                # Save reconstructed image using VQ-VAE
                 with torch.no_grad():
-                    preprocessed_obs = torch.tensor(preprocessed_obs, dtype=torch.float32).permute(2, 0,
-                                                                                                   1)
+                    preprocessed_obs = torch.tensor(preprocessed_obs, dtype=torch.float32).permute(2, 0, 1)
                     obs_tensor = preprocessed_obs.unsqueeze(0).to(DEVICE)  # Add batch dimension and move to device
                     reconstructed_image, _, _, encoding_indices, _, _ = vqvae_model(obs_tensor)
                     reconstructed_image = reconstructed_image.squeeze(0)
                     reconstructed_image = reconstructed_image.permute(1, 2, 0).cpu().numpy()
                     reconstructed_image = np.clip(reconstructed_image, 0, 1)  # Ensure values are in [0, 1]
                     reconstructed_image = (reconstructed_image * 255).astype(np.uint8)
+
+                    # Adjust for grayscale or RGB images
+                    if len(reconstructed_image.shape) == 3 and reconstructed_image.shape[-1] == 1:  # Grayscale
+                        reconstructed_image = np.squeeze(reconstructed_image)  # Remove channel dimension
+
                     reconstructed_image_filename = f"reconstructed_frame_{saved_count:04d}.png"
                     reconstructed_image_path = OUTPUT_DIR / reconstructed_image_filename
-                    Image.fromarray(np.squeeze(reconstructed_image)).save(reconstructed_image_path)
+                    Image.fromarray(reconstructed_image).save(reconstructed_image_path)
 
                 # Update codebook usage
                 unique_indices, counts = np.unique(encoding_indices.cpu().numpy(), return_counts=True)

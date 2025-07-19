@@ -37,9 +37,12 @@ def get_starting_state_from_image(image_path: str, world_model: Union[WorldModel
     frame_np = imageio.imread(image_path)
     frame_tensor = torch.tensor(frame_np, dtype=torch.float32, device=device) / 255.0
 
-    if len(frame_tensor.shape) == 2:
-        frame_tensor = frame_tensor.unsqueeze(0)
-    frame_tensor = frame_tensor.unsqueeze(0)
+    # Adjust for grayscale or RGB images
+    if len(frame_tensor.shape) == 2:  # Grayscale
+        frame_tensor = frame_tensor.unsqueeze(0)  # Add channel dimension
+    elif len(frame_tensor.shape) == 3 and frame_tensor.shape[-1] == 3:  # RGB
+        frame_tensor = frame_tensor.permute(2, 0, 1)  # Convert HWC to CHW
+    frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dimension
 
     with torch.no_grad():
         first_frame_tensor, _, _, indices = vq_vae(frame_tensor)
@@ -88,9 +91,12 @@ def get_starting_state_from_sequence(image_paths: List[str],
             for image_path in image_paths:
                 frame_np = imageio.imread(image_path)
                 frame_tensor = torch.tensor(frame_np, dtype=torch.float32, device=device) / 255.0
-                if len(frame_tensor.shape) == 2:
-                    frame_tensor = frame_tensor.unsqueeze(0)
-                frame_tensor = frame_tensor.unsqueeze(0)
+                # Adjust for grayscale or RGB images
+                if len(frame_tensor.shape) == 2:  # Grayscale
+                    frame_tensor = frame_tensor.unsqueeze(0)  # Add channel dimension
+                elif len(frame_tensor.shape) == 3 and frame_tensor.shape[-1] == 3:  # RGB
+                    frame_tensor = frame_tensor.permute(2, 0, 1)  # Convert HWC to CHW
+                frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dimension
 
                 reconstruction, _, _, indices = vq_vae(frame_tensor)
                 indices = indices.view(1, -1)
@@ -106,11 +112,14 @@ def get_starting_state_from_sequence(image_paths: List[str],
             for image_path in image_paths:
                 frame_np = imageio.imread(image_path)
                 frame_tensor = torch.tensor(frame_np, dtype=torch.float32, device=device) / 255.0
-                if len(frame_tensor.shape) == 2:
-                    frame_tensor = frame_tensor.unsqueeze(0)
-                frame_tensor = frame_tensor.unsqueeze(0)
+                # Adjust for grayscale or RGB images
+                if len(frame_tensor.shape) == 2:  # Grayscale
+                    frame_tensor = frame_tensor.unsqueeze(0)  # Add channel dimension
+                elif len(frame_tensor.shape) == 3 and frame_tensor.shape[-1] == 3:  # RGB
+                    frame_tensor = frame_tensor.permute(2, 0, 1)  # Convert HWC to CHW
+                frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dimension
 
-                reconstruction, _, _, indices = vq_vae(frame_tensor)
+                reconstruction, _, _, indices, _, _ = vq_vae(frame_tensor)
                 last_tokens = indices.view(1, -1)
                 last_frame_reconstruction = reconstruction
         return None, last_tokens, last_frame_reconstruction
@@ -250,7 +259,7 @@ def dream_transformer(world_model: WorldModelTransformer,
             sampled_indices = torch.distributions.Categorical(logits=logits_flat).sample()
 
             # Use the 'sampled_indices' for decoding the image
-            quantized_vectors = vq_vae.vq_layer.embedding(sampled_indices)
+            quantized_vectors = vq_vae.vq_layer.embeddings[sampled_indices]
             quantized_grid = quantized_vectors.reshape(b, h, w, -1)  # Use h, w from above
             quantized_grid_permuted = quantized_grid.permute(0, 3, 1, 2)
 
