@@ -349,18 +349,103 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
     return env
 
 
+class BasePolicy:
+    """Base class for policies."""
+
+    def predict(self, obs, deterministic=False):
+        """
+        Predict action based on observation.
+        Returns action and optional state.
+        """
+        raise NotImplementedError
+
+    def reset(self):
+        """Reset policy state if it's stateful."""
+        pass
+
+
+class PPOPolicy(BasePolicy):
+    """Wrapper for a Stable Baselines3 PPO agent."""
+
+    def __init__(self, ppo_agent):
+        self.ppo_agent = ppo_agent
+        self.name = "PPOPolicy"
+
+    def predict(self, obs, deterministic=False):
+        action, _states = self.ppo_agent.predict(obs, deterministic=deterministic)
+        return action, _states
+
+
+class ScriptedPolicy(BasePolicy):
+    """A policy that executes a scripted sequence of actions."""
+
+    def __init__(self, policy_type='straight', **kwargs):
+        self.policy_type = policy_type
+        self.episode_step = 0
+        self.kwargs = kwargs
+        self.name = f"ScriptedPolicy({self.policy_type})"
+
+    def predict(self, obs, deterministic=None):
+        self.episode_step += 1
+        action = self._get_action()
+        return np.array(action, dtype=np.float32), None
+
+    def _get_action(self):
+        if self.policy_type == 'still':
+            # No steer, no gas, brake
+            return [0.0, -1.0, 1.0]
+        elif self.policy_type == 'straight':
+            # Drive straight with some gas
+            return [0.0, 0.8, 0.0]
+        elif self.policy_type == 'left_turn':
+            # Gentle left turn
+            return [-0.8, 0.5, 0.0]
+        elif self.policy_type == 'right_turn':
+            # Gentle right turn
+            return [0.8, 0.5, 0.0]
+        elif self.policy_type == 'hard_brake':
+            # Drive straight for a bit, then brake hard
+            duration = self.kwargs.get('duration', 50)
+            if self.episode_step < duration:
+                return [0.0, 1.0, 0.0]  # Full gas
+            else:
+                return [0.0, -1.0, 1.0]  # Hard brake
+        elif self.policy_type == 'drive_and_stand_still':
+            duration = self.kwargs.get('duration', 100)
+            if self.episode_step < duration:
+                return [0.0, 0.8, 0.0]  # Drive straight
+            else:
+                return [0.0, -1.0, 1.0]  # Stand still
+        else:
+            # Default: do nothing
+            return [0.0, 0.0, 0.0]
+
+    def reset(self):
+        self.episode_step = 0
+
+
 class WorldModelDataCollector:
     """
-    Collects training data for the World Model by running a pretrained policy.
+    Collects training data for the World Model by running a policy.
+    The policy can be a pretrained agent or a scripted policy.
     """
 
-    def __init__(self, env, ppo_agent, vq_vae_model, device):
+    def __init__(self, env, policies, vq_vae_model, device):
         self.env = env
-        self.ppo_agent = ppo_agent
+        self.policies = policies if isinstance(policies, list) else [policies]
         self.vq_vae_model = vq_vae_model
         self.device = device
         # Use a simple deque as a replay buffer
         self.replay_buffer = deque(maxlen=250_000)
+        self.current_policy = None
+
+    def select_new_policy(self):
+        """Randomly selects a policy from the list for the next episode."""
+        self.current_policy = np.random.choice(self.policies)
+        policy_name = getattr(self.current_policy, 'name', self.current_policy.__class__.__name__)
+        print(f"Switched to policy: {policy_name}")
+        if hasattr(self.current_policy, 'reset'):
+            self.current_policy.reset()
 
     def get_vq_indices(self, obs_raw_numpy: np.ndarray) -> torch.Tensor:
         """
@@ -391,7 +476,7 @@ class WorldModelDataCollector:
 
     def collect_steps(self, num_steps: int):
         """
-        Runs the PPO agent in the environment for a given number of steps.
+        Runs policies in the environment for a given number of steps.
 
         Args:
             num_steps (int): The total number of steps to collect.
@@ -399,9 +484,12 @@ class WorldModelDataCollector:
         print(f"Collecting {num_steps} steps of experience...")
         obs, _ = self.env.reset()
 
+        # Select initial policy for the first episode
+        self.select_new_policy()
+
         for step in range(num_steps):
-            # Get action from the pretrained PPO agent
-            action, _ = self.ppo_agent.predict(obs, deterministic=False)
+            # Get action from the current policy
+            action, _ = self.current_policy.predict(obs, deterministic=False)
 
             # Step the environment with the action
             next_obs, reward, done, truncated, info = self.env.step(action)
@@ -423,6 +511,8 @@ class WorldModelDataCollector:
             if done or truncated:
                 obs, _ = self.env.reset()
                 print(f"Episode finished. Buffer size: {len(self.replay_buffer)}")
+                # Select a new policy for the next episode
+                self.select_new_policy()
 
         print(f"Collection complete. Final buffer size: {len(self.replay_buffer)}")
 

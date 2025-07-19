@@ -15,7 +15,7 @@ from src.utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     ACTION_DIM,  # Default: 3
     DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, WorldModelDataCollector, WorldModelTrainer,
-    make_env_sb3, NUM_STACK
+    make_env_sb3, NUM_STACK, PPOPolicy, ScriptedPolicy
 )
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
@@ -131,7 +131,19 @@ def collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_name
             return
 
         # --- Prepare for Data Collection ---
-        collector = WorldModelDataCollector(env, ppo_agent, vq_vae, device_str_for_worker)
+        # Create a list of policies to use for data collection
+        ppo_policy = PPOPolicy(ppo_agent)
+        scripted_policies = [
+            ScriptedPolicy('still'),
+            ScriptedPolicy('straight'),
+            ScriptedPolicy('left_turn'),
+            ScriptedPolicy('right_turn'),
+            ScriptedPolicy('hard_brake', duration=50),
+            ScriptedPolicy('drive_and_stand_still', duration=100)
+        ]
+        all_policies = [ppo_policy] + scripted_policies
+
+        collector = WorldModelDataCollector(env, all_policies, vq_vae, device_str_for_worker)
         collector.collect_steps(num_steps=num_steps_to_collect_by_worker)
 
         env.close()
