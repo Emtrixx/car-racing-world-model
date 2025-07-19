@@ -19,6 +19,7 @@ from src.utils import (
     make_env_sb3, NUM_STACK, TRANSFORMER_WM_CHECKPOINTS_DIR
 )
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
+from src.logger import ExperimentLogger
 from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED_DIM, TRANSFORMER_NUM_HEADS, \
     TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE
 from src.vq_conv_vae import GRID_SIZE
@@ -312,53 +313,19 @@ class TransformerSequenceDataset(Dataset):
 
 
 class WorldModelTransformerTrainer:
-    def __init__(self, world_model, vq_vae_model, config, train_dataloader, val_dataloader=None):
+    def __init__(self, world_model, vq_vae_model, config, train_dataloader, val_dataloader=None, logger=None):
         self.world_model = world_model
         self.vq_vae_model = vq_vae_model
         self.config = config
         self.device = config['device']
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
+        self.logger = logger
 
         self.optimizer = torch.optim.Adam(self.world_model.parameters(), lr=config['learning_rate'])
         self.token_loss_fn = nn.CrossEntropyLoss()
         self.reward_loss_fn = nn.MSELoss()
         self.done_loss_fn = nn.BCEWithLogitsLoss()
-
-        self.loss_history = {
-            'train_total': [], 'train_token': [], 'train_reward': [], 'train_done': [],
-            'val_total': [], 'val_token': [], 'val_reward': [], 'val_done': []
-        }
-        self.steps_history = []
-        self.val_steps_history = []
-
-        # Accumulators for running average of validation losses
-        self.recent_val_losses = []
-        self.val_smoothing_window = self.config.get('val_smoothing_window', 5)  # Average over last N validation steps
-
-    def plot_losses(self):
-        import matplotlib.pyplot as plt
-        print("Plotting training and validation losses...")
-        plt.figure(figsize=(12, 8))
-
-        if self.loss_history['train_total']:
-            plt.plot(self.steps_history, self.loss_history['train_total'], label='Train Total Loss')
-
-        if self.loss_history['val_total']:
-            plt.plot(self.val_steps_history, self.loss_history['val_total'], label='Validation Total Loss',
-                     linestyle=':')
-
-        plt.title(f"Transformer World Model Training & Validation Loss (SeqLen {self.config['sequence_length']})")
-        plt.xlabel("Training Steps")
-        plt.ylabel("Loss")
-        if self.loss_history['train_total'] or self.loss_history['val_total']:
-            plt.legend()
-        plt.grid(True)
-
-        save_path = os.path.join(IMAGES_DIR, "transformer_world_model_loss_plot_with_val.png")
-        plt.savefig(save_path)
-        print(f"Saved loss plot to {save_path}")
-        plt.close()
 
     def _evaluate(self):
         self.world_model.eval()
@@ -456,12 +423,16 @@ class WorldModelTransformerTrainer:
                 grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
                 self.optimizer.step()
 
-                # Append exact values to history for plotting
-                self.loss_history['train_total'].append(total_loss.item())
-                self.loss_history['train_token'].append(token_loss.item())
-                self.loss_history['train_reward'].append(reward_loss.item())
-                self.loss_history['train_done'].append(done_loss.item())
-                self.steps_history.append(global_step)
+                # Log training metrics
+                if self.logger:
+                    self.logger.log_metrics({
+                        'train_total_loss': total_loss.item(),
+                        'train_token_loss': token_loss.item(),
+                        'train_reward_loss': reward_loss.item(),
+                        'train_done_loss': done_loss.item(),
+                        'grad_norm': grad_norm.item(),
+                        'learning_rate': self.optimizer.param_groups[0]['lr']
+                    }, step=global_step)
 
                 # Add to running totals for logging
                 running_total_loss += total_loss.item()
@@ -498,28 +469,24 @@ class WorldModelTransformerTrainer:
 
                 if self.val_dataloader and global_step > 0 and global_step % val_freq == 0:
                     val_losses = self._evaluate()
-                    self.loss_history['val_total'].append(val_losses['total'])
-                    self.loss_history['val_token'].append(val_losses['token'])
-                    self.loss_history['val_reward'].append(val_losses['reward'])
-                    self.loss_history['val_done'].append(val_losses['done'])
-                    self.val_steps_history.append(global_step)
-
-                    self.recent_val_losses.append(val_losses)
-                    if len(self.recent_val_losses) > self.val_smoothing_window:
-                        self.recent_val_losses.pop(0)
-
-                    avg_val_loss = {k: np.mean([d[k] for d in self.recent_val_losses]) for k in val_losses}
+                    if self.logger:
+                        self.logger.log_metrics({
+                            f'val_total_loss': val_losses['total'],
+                            f'val_token_loss': val_losses['token'],
+                            f'val_reward_loss': val_losses['reward'],
+                            f'val_done_loss': val_losses['done'],
+                        }, step=global_step)
 
                     val_log_str = (
                         f"\n  +-----------------+----------+\n"
                         f"  |   Validation    |  Value   |\n"
                         f"  +-----------------+----------+\n"
                         f"  | Step            | {global_step:<8} |\n"
-                        f"  | Avg Total Loss  | {avg_val_loss['total']:<8.4f} |\n"
-                        f"  | Avg Token Loss  | {avg_val_loss['token']:<8.4f} |\n"
-                        f"  | Avg Reward Loss | {avg_val_loss['reward']:<8.4f} |\n"
-                        f"  | Avg Done Loss   | {avg_val_loss['done']:<8.4f} |\n"
-                        f"  +-----------------+----------+"
+                        f"  | Avg Total Loss  | {val_losses['total']:<8.4f} |\n"
+                        f"  | Avg Token Loss  | {val_losses['token']:<8.4f} |\n"
+                        f"  | Avg Reward Loss | {val_losses['reward']:<8.4f} |\n"
+                        f"  | Avg Done Loss   | {val_losses['done']:<8.4f} |\n"
+                        f"  +-----------------+----------+\n"
                     )
                     tqdm.write(val_log_str)
                     self.world_model.train()
@@ -533,7 +500,6 @@ class WorldModelTransformerTrainer:
             epoch_progress.close()
 
         print("Training finished.")
-        self.plot_losses()
 
 
 if __name__ == "__main__":
@@ -544,6 +510,8 @@ if __name__ == "__main__":
                         help="Path to save the collected data to. Data is not saved unless this is specified.")
     parser.add_argument("--load-data-from", type=str, default=None,
                         help="Path to load data from, skipping collection.")
+    parser.add_argument("--run-name", type=str, default=None,
+                        help="Name of the run for logging purposes.")
     parser.add_argument("--checkpoint-path", type=str, default=None,
                         help="Path to a pre-trained model checkpoint to load before training. If provided, "
                              "the model will be loaded and training will continue from that point.")
@@ -673,18 +641,25 @@ if __name__ == "__main__":
     #     print(f"Using nn.DataParallel for Transformer model training across {torch.cuda.device_count()} GPUs.")
     #     world_model_transformer = nn.DataParallel(world_model_transformer)
 
+    logger = ExperimentLogger(log_dir="logs/transformer_wm_logs", experiment_name="transformer_wm_training")
+    run_name = args.run_name if args.run_name else f"{args.config}_{int(time.time())}"
+    logger.start_run(run_name=run_name, config=config)
+
     trainer = WorldModelTransformerTrainer(
         world_model_transformer,
         vq_vae_model,
         config,
         train_dataloader,
-        val_dataloader
+        val_dataloader,
+        logger
     )
 
     print("Starting Transformer World Model training via WorldModelTransformerTrainer...")
     start_train_time = time.time()
     trainer.train(num_epochs=config["epochs"])
     print(f"Transformer World Model training took {time.time() - start_train_time:.2f} seconds.")
+
+    logger.end_run()
 
     try:
         model_state_to_save = world_model_transformer.module.state_dict() if isinstance(world_model_transformer,
