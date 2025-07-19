@@ -387,7 +387,7 @@ class WorldModelTransformerTrainer:
         global_step = 0
         log_freq = self.config.get('log_freq', 10)
         val_freq = self.config.get('val_freq', 200)
-        checkpoint_freq = self.config.get('checkpoint_freq', 10000)
+        checkpoint_freq = self.config.get('checkpoint_freq', 5000)
 
         # Accumulators for logging averages
         running_total_loss, running_token_loss, running_reward_loss, running_done_loss, running_grad_norm = 0.0, 0.0, 0.0, 0.0, 0.0
