@@ -410,6 +410,7 @@ if __name__ == "__main__":
 
     config = get_config(args.config)
     print(f"Loaded configuration: '{args.config}'")
+    print(f"Device: {config['device']}")
 
     try:
         mp.set_start_method('spawn', force=True)
