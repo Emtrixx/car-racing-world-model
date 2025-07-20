@@ -95,8 +95,10 @@ class WorldModelTransformer(nn.Module):
         # --- Output Prediction Heads ---
         # Operate on the output of the Transformer decoder
         self.next_latent_head = nn.Linear(embed_dim, codebook_size)
-        self.reward_head = nn.Linear(embed_dim, 1)
-        self.done_head = nn.Linear(embed_dim, 1)
+        # Heads for reward and done prediction (operates on flattened state representation)
+        flattened_dim = self.num_tokens * embed_dim
+        self.reward_head = nn.Linear(flattened_dim, 1)
+        self.done_head = nn.Linear(flattened_dim, 1)
 
     def forward(
             self,
@@ -104,7 +106,7 @@ class WorldModelTransformer(nn.Module):
             latent_token_history: torch.Tensor,
     ):
         """
-        Predicts the next state given a HISTORY of actions and latent tokens.
+        Predicts the next state given a history of actions and latent tokens.
 
         Args:
             action_history (torch.Tensor): Shape [B, H, action_dim]
@@ -134,13 +136,6 @@ class WorldModelTransformer(nn.Module):
         memory = self.pos_encoder(memory)
         memory = self.dropout(memory)
 
-        # Predict reward and done from the context of the *last action* in the sequence
-        # The last action provides the most recent context for immediate outcomes.
-        # The vector for the last action is at the end of the `memory` sequence.
-        last_action_context_vector = memory[:, -1, :]  # [B, embed_dim]
-        predicted_reward = self.reward_head(last_action_context_vector)
-        predicted_done = self.done_head(last_action_context_vector)
-
         # Predict Next State Tokens in Parallel (BTF mechanism)
         # The decoder input (queries) remains the same.
         # [1, num_tokens, embed_dim] -> [B, num_tokens, embed_dim]
@@ -155,6 +150,15 @@ class WorldModelTransformer(nn.Module):
             memory=memory,
             tgt_mask=None,  # No mask needed for parallel decoding queries
         )
+
+        # --- Predict Reward and Done from the predicted next state's context ---
+        # Flatten the decoder output to create a single feature vector.
+        # [B, num_tokens, embed_dim] -> [B, num_tokens * embed_dim]
+        next_state_context_flat = torch.flatten(decoder_output, start_dim=1)
+
+        # Use the flattened context for reward and done prediction
+        predicted_reward = self.reward_head(next_state_context_flat)
+        predicted_done = self.done_head(next_state_context_flat)
 
         # Get logits for all next-state tokens at once
         # [B, num_tokens, codebook_size]
