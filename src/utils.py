@@ -556,11 +556,11 @@ class WorldModelTrainer:
         print("Starting world model training...")
         if isinstance(self.world_model, nn.DataParallel):
             self.world_model.module.token_embedding.weight.data.copy_(
-                self.vq_vae_model.vq_layer.embedding.weight.data
+                self.vq_vae_model.vq_layer.embeddings.data
             )
         else:
             self.world_model.token_embedding.weight.data.copy_(
-                self.vq_vae_model.vq_layer.embedding.weight.data
+                self.vq_vae_model.vq_layer.embeddings.data
             )
         print("Copied VQ-VAE weights to world model token embedding.")
 
