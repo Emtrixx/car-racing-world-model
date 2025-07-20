@@ -170,10 +170,10 @@ if __name__ == '__main__':
 
     # --- Save video ---
     if dreamed_frames:
-        video_path = VIDEO_DIR / f"{ENV_NAME}_dream_sequence.mp4"
+        video_path = VIDEO_DIR / f"world_model_dream_transformer.mp4"
         height, width, layers = dreamed_frames[0].shape
         fourcc = cv2.VideoWriter_fourcc(*'mp4v')
-        video = cv2.VideoWriter(str(video_path), fourcc, 30, (width, height))
+        video = cv2.VideoWriter(str(video_path), fourcc, 7, (width, height))
         for frame in dreamed_frames:
             video.write(cv2.cvtColor(frame, cv2.COLOR_RGB2BGR))
         video.release()
