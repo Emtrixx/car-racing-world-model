@@ -283,21 +283,6 @@ class WorldModelTransformerTrainer:
         action_hist = batch['action_history']
         token_hist = batch['latent_token_history']
         target_tokens = batch['target_next_tokens']
-
-        # --- START DEBUG CODE ---
-        # Get the codebook size from your model instance.
-        # The exact attribute name might differ based on your model's code.
-        codebook_size = self.world_model.codebook_size
-
-        max_token = target_tokens.max()
-        if max_token >= codebook_size:
-            print(f"FATAL: Out-of-bounds token index detected!")
-            print(f"Max token in batch: {max_token}")
-            print(f"Model codebook size: {codebook_size}")
-            # This will cause a clean exit instead of a silent crash
-            raise ValueError("Token index is out of bounds for the model's embedding layer.")
-            # --- END DEBUG CODE ---
-
         target_reward = batch['target_reward']
         target_done = batch['target_done']
 
