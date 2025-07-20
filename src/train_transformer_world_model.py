@@ -120,6 +120,7 @@ class WorldModelDataCollector:
         # Encode to get the token indices from the VQ-VAE
         with torch.no_grad():
             z_continuous = self.vq_vae_model.encoder(processed_tensor)
+            z_continuous = self.vq_vae_model._pre_vq_conv(z_continuous)
             _loss, _quantized_out, _perplexity, encoding_indices_out = self.vq_vae_model.vq_layer(z_continuous)
 
         return encoding_indices_out.view(1, -1)  # Flatten to [1, 16]
@@ -227,7 +228,9 @@ class TransformerHistoryDataset(Dataset):
 
     def __init__(self, data_dict, history_length):
         self.data = data_dict
+        # History_length is the number of (state, action) pairs
         self.history_length = history_length
+        # We need history_length transitions to form one sequence, plus one more for the target
         self.num_sequences = len(data_dict['actions']) - history_length
 
     def __len__(self):
