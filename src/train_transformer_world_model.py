@@ -325,14 +325,15 @@ class WorldModelTransformerTrainer:
             'done': done_loss / num_batches,
         }
 
-    def train(self, num_epochs):
+    def train(self, num_epochs, copy_vq_weights=True):
         """Main training loop."""
         print("Starting Transformer world model training...")
-        if isinstance(self.world_model, nn.DataParallel):
-            self.world_model.module.token_embedding.weight.data.copy_(self.vq_vae_model.vq_layer.embeddings.data)
-        else:
-            self.world_model.token_embedding.weight.data.copy_(self.vq_vae_model.vq_layer.embeddings.data)
-        print("Copied VQ-VAE weights to world model token embedding.")
+        if copy_vq_weights:
+            if isinstance(self.world_model, nn.DataParallel):
+                self.world_model.module.token_embedding.weight.data.copy_(self.vq_vae_model.vq_layer.embeddings.data)
+            else:
+                self.world_model.token_embedding.weight.data.copy_(self.vq_vae_model.vq_layer.embeddings.data)
+            print("Copied VQ-VAE weights to world model token embedding.")
 
         global_step = 0
         log_freq = self.config.get('log_freq', 10)
@@ -499,7 +500,7 @@ if __name__ == "__main__":
     )
 
     start_train_time = time.time()
-    trainer.train(num_epochs=config["epochs"])
+    trainer.train(num_epochs=config["epochs"], copy_vq_weights=args.checkpoint_path is None)
     print(f"Total training took {time.time() - start_train_time:.2f} seconds.")
     logger.end_run()
 
