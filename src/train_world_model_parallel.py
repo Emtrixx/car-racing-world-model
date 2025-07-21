@@ -21,7 +21,7 @@ from src.utils_wm import collect_sequences_for_gru
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
 from src.utils import GRU_WM_CHECKPOINTS_DIR
-from utils import LOGS_DIR
+from src.utils import LOGS_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
