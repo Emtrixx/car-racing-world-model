@@ -82,8 +82,8 @@ def get_config(name="default"):
         "max_episode_steps_collect": 100,
         "dropout_rate": 0.1,
     })
-    configs["profiler"] = configs["default"].copy()
-    configs["profiler"].update({
+    configs["profile"] = configs["default"].copy()
+    configs["profile"].update({
         "num_steps": 1000,
         "epochs": 1,
     })
