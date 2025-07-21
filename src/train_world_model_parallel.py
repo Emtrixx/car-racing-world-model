@@ -435,7 +435,7 @@ if __name__ == "__main__":
     if args.load_data_from:
         if os.path.exists(args.load_data_from):
             print(f"Loading sequence data from {args.load_data_from}...")
-            sequence_data_buffer = torch.load(args.load_data_from, map_location=config['device'])
+            sequence_data_buffer = torch.load(args.load_data_from, map_location="cpu")
             limit = config["num_steps"]
             if limit < len(sequence_data_buffer['actions']):
                 # Limit the dataset to the first 'limit' sequences
