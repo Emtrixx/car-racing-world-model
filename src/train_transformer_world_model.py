@@ -222,7 +222,7 @@ class WorldModelTransformerTrainer:
 
             profiler = torch.profiler.profile(
                 activities=activities,
-                schedule=torch.profiler.schedule(wait=10, warmup=5, active=10, repeat=1),
+                schedule=torch.profiler.schedule(wait=50, warmup=5, active=10, repeat=1),
                 on_trace_ready=torch.profiler.tensorboard_trace_handler(str(trace_dir)),
                 record_shapes=True,
                 with_stack=True,
