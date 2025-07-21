@@ -420,7 +420,7 @@ if __name__ == "__main__":
 
     print(f"Starting GRU World Model training on device: {config['device']}")
 
-    if config['device'] == 'cuda':
+    if "cuda" in str(config['device']):
         torch.set_float32_matmul_precision('high')
 
     # checks for checkpoint files

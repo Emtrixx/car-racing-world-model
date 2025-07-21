@@ -310,7 +310,7 @@ if __name__ == "__main__":
     print(f"Loaded configuration: '{args.config}'")
     print(f"Device: {config['device']}")
 
-    if config['device'] == 'cuda':
+    if "cuda" in str(config['device']):
         torch.set_float32_matmul_precision('high')
 
     try:
