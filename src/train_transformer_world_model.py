@@ -22,6 +22,7 @@ from src.utils import (
 from src.vq_conv_vae import GRID_SIZE
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.utils_wm import collect_data_parallel
+from utils import LOGS_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -80,6 +81,11 @@ def get_config(name="default"):
         "num_loader_workers": 2,
         "max_episode_steps_collect": 100,
         "dropout_rate": 0.1,
+    })
+    configs["profiler"] = configs["default"].copy()
+    configs["profiler"].update({
+        "num_steps": 1000,
+        "epochs": 1,
     })
     return configs[name]
 
@@ -186,7 +192,7 @@ class WorldModelTransformerTrainer:
             'done': done_loss / num_batches,
         }
 
-    def train(self, num_epochs, copy_vq_weights=True):
+    def train(self, num_epochs, copy_vq_weights=True, profile=False):
         """Main training loop."""
         print("Starting Transformer world model training...")
         if copy_vq_weights:
@@ -200,6 +206,29 @@ class WorldModelTransformerTrainer:
         log_freq = self.config.get('log_freq', 10)
         val_freq = self.config.get('val_freq', 200)
         checkpoint_freq = self.config.get('checkpoint_freq', 5000)
+
+        profiler = None
+        if profile:
+            print("Profiling enabled. The profiler will start after a few warmup steps.")
+            log_dir = self.logger.log_dir if self.logger else LOGS_DIR / "transformer_wm_logs/profiler_logs"
+            run_name = self.logger.run_name if self.logger and self.logger.run_name else f"run_{int(time.time())}"
+            trace_dir = Path(log_dir) / run_name / "profile"
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            print(f"Profiler traces will be saved to: {trace_dir}")
+
+            activities = [torch.profiler.ProfilerActivity.CPU]
+            if 'cuda' in str(self.device):
+                activities.append(torch.profiler.ProfilerActivity.CUDA)
+
+            profiler = torch.profiler.profile(
+                activities=activities,
+                schedule=torch.profiler.schedule(wait=10, warmup=5, active=10, repeat=1),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(str(trace_dir)),
+                record_shapes=True,
+                with_stack=True,
+                profile_memory=True
+            )
+            profiler.start()
 
         for epoch in range(1, num_epochs + 1):
             self.world_model.train()
@@ -256,6 +285,13 @@ class WorldModelTransformerTrainer:
                     torch.save(model_state, TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_step_{global_step}.pth")
                     tqdm.write(f"Saved model checkpoint at step {global_step}.")
 
+                if profiler:
+                    profiler.step()
+
+        if profiler:
+            profiler.stop()
+            print("Profiling finished. You can view the trace with TensorBoard.")
+
         print("Training finished.")
 
 
@@ -267,6 +303,7 @@ if __name__ == "__main__":
     parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
     parser.add_argument("--checkpoint-path", type=str, default=None,
                         help="Path to a model checkpoint to resume training.")
+    parser.add_argument("--profile", action="store_true", help="Enable profiling.")
     args = parser.parse_args()
 
     config = get_config(args.config)
@@ -366,7 +403,7 @@ if __name__ == "__main__":
     )
 
     start_train_time = time.time()
-    trainer.train(num_epochs=config["epochs"], copy_vq_weights=args.checkpoint_path is None)
+    trainer.train(num_epochs=config["epochs"], copy_vq_weights=args.checkpoint_path is None, profile=args.profile)
     print(f"Total training took {time.time() - start_train_time:.2f} seconds.")
     logger.end_run()
 
