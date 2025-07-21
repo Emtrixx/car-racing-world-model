@@ -434,6 +434,11 @@ if __name__ == "__main__":
         if os.path.exists(args.load_data_from):
             print(f"Loading sequence data from {args.load_data_from}...")
             sequence_data_buffer = torch.load(args.load_data_from, map_location=config['device'])
+            limit = config["num_steps"]
+            if limit < len(sequence_data_buffer['actions']):
+                # Limit the dataset to the first 'limit' sequences
+                for key in sequence_data_buffer:
+                    sequence_data_buffer[key] = sequence_data_buffer[key][:limit]
             print("Data loaded successfully.")
         else:
             print(f"ERROR: Data file not found at {args.load_data_from}. Exiting.")

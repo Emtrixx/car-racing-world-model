@@ -325,6 +325,11 @@ if __name__ == "__main__":
     if args.load_data_from and Path(args.load_data_from).exists():
         print(f"Loading data from {args.load_data_from}...")
         data_buffer = torch.load(args.load_data_from, map_location='cpu')
+        limit = config["num_steps"]
+        if limit < len(data_buffer['actions']):
+            # Limit the dataset to the first 'limit' sequences
+            for key in data_buffer:
+                data_buffer[key] = data_buffer[key][:limit]
     else:
         start_time = time.time()
         data_buffer = collect_data_for_transformer(
