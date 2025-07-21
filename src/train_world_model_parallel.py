@@ -29,7 +29,7 @@ NUM_STEPS = 1_000_000  # Number of steps to collect for training the world model
 WM_EPOCHS = 10  # Number of epochs to train the world model
 WM_BATCH_SIZE = 128  # Sequences per batch
 WM_LEARNING_RATE = 1e-4  # Learning rate for world model optimizer
-SEQUENCE_LENGTH = 32  # Length of sequences to train on
+SEQUENCE_LENGTH = 256  # Length of sequences to train on
 MAX_GRAD_NORM = 1.0  # Max gradient norm for clipping
 
 # Parallelism Configuration
@@ -249,17 +249,18 @@ class GruWorldModelTrainer:
             'done': avg_val_done_loss.item(),
         }
 
-    def train(self, num_epochs, profile=False):
+    def train(self, num_epochs, copy_vq_weights=True, profile=False):
         """Main training loop that iterates over a DataLoader."""
         print("Starting world model training...")
-        if isinstance(self.world_model, nn.DataParallel):
-            self.world_model.module.token_embedding.weight.data.copy_(
-                self.vq_vae_model.vq_layer.embeddings.data
-            )
-        else:
-            self.world_model.token_embedding.weight.data.copy_(
-                self.vq_vae_model.vq_layer.embeddings.data
-            )
+        if copy_vq_weights:
+            if isinstance(self.world_model, nn.DataParallel):
+                self.world_model.module.token_embedding.weight.data.copy_(
+                    self.vq_vae_model.vq_layer.embeddings.data
+                )
+            else:
+                self.world_model.token_embedding.weight.data.copy_(
+                    self.vq_vae_model.vq_layer.embeddings.data
+                )
         print("Copied VQ-VAE weights to world model token embedding.")
 
         self.world_model.train()
@@ -551,7 +552,9 @@ if __name__ == "__main__":
     print("Starting GRU World Model training via WorldModelTrainer...")
     start_train_time = time.time()
     # trainer saves checkpoints automatically during training
-    trainer.train(num_epochs=config["epochs"], profile=args.profile)  # Dataloaders are now passed in constructor
+    trainer.train(num_epochs=config["epochs"],
+                  copy_vq_weights=args.checkpoint_path is None,
+                  profile=args.profile)
     print(f"GRU World Model training took {time.time() - start_train_time:.2f} seconds.")
 
     # Save the final GRU World Model
