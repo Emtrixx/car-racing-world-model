@@ -24,14 +24,14 @@ from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
 # Training Hyperparameters
 NUM_STEPS = 1_000_000  # Number of steps to collect for training the world model
 WM_EPOCHS = 10  # Number of epochs to train the world model
-WM_BATCH_SIZE = 32  # Sequences per batch
+WM_BATCH_SIZE = 128  # Sequences per batch
 WM_LEARNING_RATE = 1e-4  # Learning rate for world model optimizer
 SEQUENCE_LENGTH = 32  # Length of sequences to train on
 MAX_GRAD_NORM = 1.0  # Max gradient norm for clipping
 
 # Parallelism Configuration
 NUM_COLLECTION_WORKERS = 4  # For multiprocessing data collection
-NUM_LOADER_WORKERS = 4  # For DataLoader for PyTorch training
+NUM_LOADER_WORKERS = 12  # For DataLoader for PyTorch training
 
 # Environment settings for data collection
 MAX_EPISODE_STEPS_COLLECT = 1000  # Max steps per episode in the collection environment
@@ -438,6 +438,9 @@ if __name__ == "__main__":
         dropout_rate=config['dropout_rate']  # Pass dropout_rate
     )
     world_model_gru.to(config['device'])
+
+    # Compile the GRU model
+    world_model_gru = torch.compile(world_model_gru)
 
     # Initialize VQ-VAE Model
     vq_vae_model = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS)
