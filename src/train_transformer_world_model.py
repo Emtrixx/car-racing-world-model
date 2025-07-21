@@ -22,7 +22,7 @@ from src.utils import (
 from src.vq_conv_vae import GRID_SIZE
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.utils_wm import collect_data_parallel
-from utils import LOGS_DIR
+from src.utils import LOGS_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -210,8 +210,8 @@ class WorldModelTransformerTrainer:
         profiler = None
         if profile:
             print("Profiling enabled. The profiler will start after a few warmup steps.")
-            log_dir = self.logger.log_dir if self.logger else LOGS_DIR / "transformer_wm_logs/profiler_logs"
-            run_name = self.logger.run_name if self.logger and self.logger.run_name else f"run_{int(time.time())}"
+            log_dir = self.logger.log_dir if self.logger else LOGS_DIR / "profiler_logs"
+            run_name = self.logger.experiment_name if self.logger and self.logger.experiment_name else f"run_{int(time.time())}"
             trace_dir = Path(log_dir) / run_name / "profile"
             trace_dir.mkdir(parents=True, exist_ok=True)
             print(f"Profiler traces will be saved to: {trace_dir}")

@@ -1,13 +1,14 @@
-
 import mlflow
 import os
+
 
 class ExperimentLogger:
     def __init__(self, log_dir="logs", experiment_name="default_experiment"):
         self.log_dir = log_dir
+        self.experiment_name = experiment_name
         if not os.path.exists(self.log_dir):
             os.makedirs(self.log_dir)
-        
+
         mlflow.set_tracking_uri(f"file://{os.path.abspath(self.log_dir)}")
         mlflow.set_experiment(experiment_name)
 
