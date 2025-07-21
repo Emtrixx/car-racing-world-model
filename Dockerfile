@@ -24,7 +24,7 @@ RUN apt-get update && \
     libxext6 \
     libxrender-dev && \
     pip install --no-cache-dir -r requirements.txt && \
-    apt-get purge -y --auto-remove swig build-essential && \
+    apt-get purge -y --auto-remove swig && \
     rm -rf /var/lib/apt/lists/*
 
 # Copy the rest of the project files into the working directory
