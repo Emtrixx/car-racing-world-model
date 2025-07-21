@@ -67,7 +67,7 @@ def get_config(name="default"):
             "grid_size": GRID_SIZE,
             "dropout_rate": TRANSFORMER_DROPOUT_RATE,
             # At least the length of the history multiplied by (tokens per state + 1 for action).
-            "max_seq_len": 2048  # for positional encoding
+            "max_seq_len": 4096  # for positional encoding
         }
     }
     # Test configuration for quick runs
@@ -91,25 +91,41 @@ def get_config(name="default"):
 
 
 class TransformerHistoryDataset(Dataset):
-    """Dataset to provide history of states and actions for the world model."""
+    """
+    Dataset to provide history of states and actions for the world model.
+    This version is aware of episode boundaries to avoid creating sequences
+    that cross from one episode to another.
+    """
 
     def __init__(self, data_dict, history_length):
         self.data = data_dict
-        # History_length is the number of (state, action) pairs
         self.history_length = history_length
-        # We need history_length transitions to form one sequence, plus one more for the target
-        self.num_sequences = len(data_dict['actions']) - history_length
+        self.total_steps = len(data_dict['actions'])
+
+        # is_first_steps is a boolean tensor indicating the start of an episode.
+        is_first_steps = data_dict.get('is_first_steps', torch.zeros(self.total_steps, dtype=torch.bool))
+        if is_first_steps.ndim > 1:
+            is_first_steps = is_first_steps.squeeze(1)
+
+        self.valid_indices = []
+        for i in range(self.total_steps - self.history_length):
+            # A sequence is valid if it does not contain any episode starts
+            # after the first element. The first element (i) can be a start.
+            window = is_first_steps[i + 1: i + self.history_length + 1]
+            if not torch.any(window):
+                self.valid_indices.append(i)
 
     def __len__(self):
-        return self.num_sequences
+        return len(self.valid_indices)
 
     def __getitem__(self, idx):
-        # History ends at idx + history_length. Target is the sample at this index.
-        end_idx = idx + self.history_length
+        # Map the requested index to a valid starting index in the dataset
+        start_idx = self.valid_indices[idx]
+        end_idx = start_idx + self.history_length
 
         # History of actions and previous states
-        action_history = self.data['actions'][idx:end_idx]
-        token_history = self.data['prev_tokens'][idx:end_idx]
+        action_history = self.data['actions'][start_idx:end_idx]
+        token_history = self.data['prev_tokens'][start_idx:end_idx]
 
         # The target is the outcome of the last action in the history
         target_next_tokens = self.data['next_tokens'][end_idx - 1]
@@ -333,8 +349,10 @@ if __name__ == "__main__":
     else:
         start_time = time.time()
         data_buffer = collect_data_for_transformer(
-            num_steps=config["num_steps"], device=config["device"],
-            num_workers=config["num_collection_workers"], env_name=config["env_name"],
+            num_steps=config["num_steps"],
+            device=config["device"],
+            num_workers=config["num_collection_workers"],
+            env_name=config["env_name"],
             max_episode_steps=config["max_episode_steps_collect"]
         )
         print(f"Data collection took {time.time() - start_time:.2f} seconds.")

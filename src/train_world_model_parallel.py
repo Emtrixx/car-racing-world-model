@@ -261,7 +261,7 @@ class GruWorldModelTrainer:
                 self.world_model.token_embedding.weight.data.copy_(
                     self.vq_vae_model.vq_layer.embeddings.data
                 )
-        print("Copied VQ-VAE weights to world model token embedding.")
+            print("Copied VQ-VAE weights to world model token embedding.")
 
         self.world_model.train()
 

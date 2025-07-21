@@ -34,8 +34,6 @@ class TransformerWorldModelDataCollector:
         Returns:
             torch.Tensor: A tensor of token indices with shape [1, 16].
         """
-        # Preprocess the raw observation
-        # processed_frame = preprocess_observation(obs_raw_numpy)
         # env now returns preprocessed frames directly
         processed_frame = obs_raw_numpy
 
@@ -56,28 +54,33 @@ class TransformerWorldModelDataCollector:
         """Runs the PPO agent in the environment for a given number of steps."""
         print(f"Collecting {num_steps} steps of experience...")
         obs, _ = self.env.reset()
+        is_first_step_in_episode = True
 
         # We need the initial state's tokens to start the buffer correctly.
-        initial_tokens = self.get_vq_indices(obs[-1])
+        prev_tokens = self.get_vq_indices(obs[-1])
 
         for step in tqdm(range(num_steps), desc="Collecting Steps"):
             action, _ = self.ppo_agent.predict(obs, deterministic=False)
             next_obs, reward, done, truncated, info = self.env.step(action)
-            next_state_tokens = self.get_vq_indices(next_obs[-1])
+            next_tokens = self.get_vq_indices(next_obs[-1])
 
             self.replay_buffer.append({
-                "prev_tokens": initial_tokens.squeeze(0).to(torch.int64),
+                "prev_tokens": prev_tokens.squeeze(0).to(torch.int64),
                 "action": torch.tensor(action, dtype=torch.float32),
                 "reward": torch.tensor([reward], dtype=torch.float32),
                 "done": torch.tensor([done or truncated], dtype=torch.float32),
-                "next_tokens": next_state_tokens.squeeze(0).to(torch.int64)
+                "next_tokens": next_tokens.squeeze(0).to(torch.int64),
+                "is_first_step": torch.tensor([is_first_step_in_episode], dtype=torch.bool)
             })
+            is_first_step_in_episode = False
 
-            initial_tokens = next_state_tokens
             obs = next_obs
+            prev_tokens = next_tokens
+
             if done or truncated:
                 obs, _ = self.env.reset()
-                initial_tokens = self.get_vq_indices(obs[-1])
+                prev_tokens = self.get_vq_indices(obs[-1])
+                is_first_step_in_episode = True
 
 
 def transformer_collect_sequences_worker(worker_id, num_steps_to_collect, env_name, device_str, max_episode_steps):
@@ -103,6 +106,7 @@ def transformer_collect_sequences_worker(worker_id, num_steps_to_collect, env_na
             'rewards': torch.stack([s['reward'] for s in collector.replay_buffer]),
             'dones': torch.stack([s['done'] for s in collector.replay_buffer]),
             'next_tokens': torch.stack([s['next_tokens'] for s in collector.replay_buffer]),
+            'is_first_steps': torch.stack([s['is_first_step'] for s in collector.replay_buffer]),
         }
 
         temp_dir = Path("./tmp_worker_data")
