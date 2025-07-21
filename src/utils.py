@@ -656,7 +656,8 @@ class WorldModelTrainer:
                 if global_step > 0 and global_step % checkpoint_freq == 0:
                     model_state_to_save = self.world_model.module.state_dict() if isinstance(self.world_model,
                                                                                              nn.DataParallel) else self.world_model.state_dict()
-                    torch.save(model_state_to_save, f"world_model_step_{global_step}.pth")
+                    filename = GRU_WM_CHECKPOINTS_DIR / f"world_model_step_{global_step}.pth"
+                    torch.save(model_state_to_save, filename)
                     print(f"Saved model checkpoint at step {global_step}.")
 
         print("Training finished.")
