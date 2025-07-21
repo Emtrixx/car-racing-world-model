@@ -519,12 +519,12 @@ if __name__ == "__main__":
     )
     world_model_gru.to(config['device'])
 
+    # Compile the GRU model
+    world_model_gru = torch.compile(world_model_gru)
+
     if args.checkpoint_path and Path(args.checkpoint_path).exists():
         print(f"Loading pre-trained model from {args.checkpoint_path}...")
         world_model_gru.load_state_dict(torch.load(args.checkpoint_path, map_location=config['device']))
-
-    # Compile the GRU model
-    world_model_gru = torch.compile(world_model_gru)
 
     # Initialize VQ-VAE Model
     vq_vae_model = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS)

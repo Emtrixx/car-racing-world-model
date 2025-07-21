@@ -386,12 +386,12 @@ if __name__ == "__main__":
     ).to(
         config['device'])
 
+    # Compile the model for performance
+    world_model = torch.compile(world_model)
+
     if args.checkpoint_path and Path(args.checkpoint_path).exists():
         print(f"Loading pre-trained model from {args.checkpoint_path}...")
         world_model.load_state_dict(torch.load(args.checkpoint_path, map_location=config['device']))
-
-    # Compile the model for performance
-    world_model = torch.compile(world_model)
 
     vq_vae_model = VQVAE().to(config['device'])
     vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=config['device']))
