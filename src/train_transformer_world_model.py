@@ -401,8 +401,7 @@ if __name__ == "__main__":
         action_dim=config['action_dim'],
         codebook_size=VQVAE_NUM_EMBEDDINGS,
         vqvae_embed_dim=VQVAE_EMBEDDING_DIM,
-    ).to(
-        config['device'])
+    ).to(config['device'])
 
     # Compile the model for performance
     world_model = torch.compile(world_model)

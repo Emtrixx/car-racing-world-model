@@ -190,7 +190,8 @@ class GruWorldModelDataCollector:
         # Encode to get the token indices from the VQ-VAE
         with torch.no_grad():
             z_continuous = self.vq_vae_model.encoder(processed_tensor)
-            loss, quantized_out, perplexity, encoding_indices_out = self.vq_vae_model.vq_layer(z_continuous)
+            z_continuous = self.vq_vae_model._pre_vq_conv(z_continuous)
+            _loss, _quantized_out, _perplexity, encoding_indices_out = self.vq_vae_model.vq_layer(z_continuous)
 
         return encoding_indices_out.view(1, -1)  # Flatten to [1, 16]
 
@@ -203,8 +204,9 @@ class GruWorldModelDataCollector:
         """
         print(f"Collecting {num_steps} steps of experience...")
         obs, _ = self.env.reset()
+        is_first_step_in_episode = True
 
-        for step in range(num_steps):
+        for step in tqdm(range(num_steps), desc="Collecting GRU Steps"):
             # Get action from the pretrained PPO agent
             action, _ = self.ppo_agent.predict(obs, deterministic=False)
 
@@ -219,15 +221,18 @@ class GruWorldModelDataCollector:
             self.replay_buffer.append({
                 "action": torch.tensor(action, dtype=torch.float32),
                 "reward": torch.tensor([reward], dtype=torch.float32),
-                "done": torch.tensor([done], dtype=torch.float32),
-                "next_tokens": next_state_tokens.squeeze(0).to(torch.int64)  # Store as [16]
+                "done": torch.tensor([done or truncated], dtype=torch.float32),
+                "next_tokens": next_state_tokens.squeeze(0).to(torch.int64),  # Store as [16]
+                "is_first_step": torch.tensor([is_first_step_in_episode], dtype=torch.bool)
             })
+            is_first_step_in_episode = False
 
             # Update observation and reset if the episode is over
             obs = next_obs
             if done or truncated:
                 obs, _ = self.env.reset()
-                print(f"Episode finished. Buffer size: {len(self.replay_buffer)}")
+                is_first_step_in_episode = True
+                tqdm.write(f"Episode finished. Buffer size: {len(self.replay_buffer)}")
 
         print(f"Collection complete. Final buffer size: {len(self.replay_buffer)}")
 
@@ -240,49 +245,25 @@ def gru_collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_
         import time
         import torch
         import gymnasium as gym
+        from tqdm import tqdm
 
         print(
-            f"[Worker {worker_id}, PID {os.getpid()}] Starting, assigned {num_steps_to_collect_by_worker} episodes. Device: {device_str_for_worker}")
+            f"[Worker {worker_id}, PID {os.getpid()}] Starting, assigned {num_steps_to_collect_by_worker} steps. Device: {device_str_for_worker}")
 
         # --- Initialize Environment ---
-        env = env = make_env_sb3(
-            env_id=ENV_NAME,
+        env = make_env_sb3(
+            env_id=env_name_str,
             frame_stack_num=NUM_STACK,
-            gamma=0.99,  # Standard gamma, used by NormalizeReward
-            render_mode="rgb_array",
-            max_episode_steps=max_episode_steps_collect_int,  # Use the max steps from worker args
+            max_episode_steps=max_episode_steps_collect_int,
         )
 
-        # print observation and action spaces
-        print(f"[Worker {worker_id}] Observation space: {env.observation_space}")
-        print(f"[Worker {worker_id}] Action space: {env.action_space}")
-
         # --- Load PPO Model ---
-        print(f"Loading trained SB3 PPO agent from: {SB3_MODEL_PATH}")
-        if not SB3_MODEL_PATH.exists():
-            print(f"ERROR: SB3 PPO Model not found at {SB3_MODEL_PATH}")
-            if hasattr(env, 'close'): env.close()
-            return
-        try:
-            ppo_agent = PPO.load(SB3_MODEL_PATH, device=DEVICE, env=env,
-                                 deterministic=False)  # deterministic=False for exploration
-            print(f"Successfully loaded SB3 PPO agent. Agent device: {ppo_agent.device}")
-        except Exception as e:
-            print(f"ERROR loading SB3 PPO agent: {e}")
-            if hasattr(env, 'close'): env.close()
-            import traceback
-            traceback.print_exc()
-            return
+        ppo_agent = PPO.load(SB3_MODEL_PATH, device=device_str_for_worker, env=env)
 
         # --- Load VQ-VAE Model ---
-        vq_vae = VQVAE().to(DEVICE)
-
-        try:
-            print(f"Loading trained model from: {VQ_VAE_CHECKPOINT_FILENAME}")
-            vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
-        except FileNotFoundError:
-            print("VQ-VAE Model file not found")
-            return
+        vq_vae = VQVAE().to(device_str_for_worker)
+        vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=device_str_for_worker))
+        vq_vae.eval()
 
         # --- Prepare for Data Collection ---
         collector = GruWorldModelDataCollector(env, ppo_agent, vq_vae, device_str_for_worker)
@@ -290,40 +271,31 @@ def gru_collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_
 
         env.close()
         print(
-            f"[Worker {worker_id}, PID {os.getpid()}] Finished data collection. Collected {len(collector.replay_buffer)} sequences.")
+            f"[Worker {worker_id}, PID {os.getpid()}] Finished data collection. Collected {len(collector.replay_buffer)} transitions.")
 
         # --- Prepare Data for Saving ---
-        actions = torch.stack([s['action'] for s in collector.replay_buffer])
-        rewards = torch.stack([s['reward'] for s in collector.replay_buffer])
-        dones = torch.stack([s['done'] for s in collector.replay_buffer])
-        next_tokens = torch.stack([s['next_tokens'] for s in collector.replay_buffer])
+        if not collector.replay_buffer:
+            print(f"[Worker {worker_id}] Replay buffer is empty. Nothing to save.")
+            return None
 
         data_to_save = {
-            'actions': actions,
-            'rewards': rewards,
-            'dones': dones,
-            'next_tokens': next_tokens
+            'actions': torch.stack([s['action'] for s in collector.replay_buffer]),
+            'rewards': torch.stack([s['reward'] for s in collector.replay_buffer]),
+            'dones': torch.stack([s['done'] for s in collector.replay_buffer]),
+            'next_tokens': torch.stack([s['next_tokens'] for s in collector.replay_buffer]),
+            'is_first_steps': torch.stack([s['is_first_step'] for s in collector.replay_buffer]),
         }
         # Create a directory for temporary worker data if it doesn't exist
-        temp_data_dir = "./tmp_worker_data"
-        if not os.path.exists(temp_data_dir):
-            try:
-                os.makedirs(temp_data_dir)
-                print(f"[Worker {worker_id}] Created directory: {temp_data_dir}")
-            except OSError as e:
-                print(f"[Worker {worker_id}] Error creating directory {temp_data_dir}: {e}")
-                # Fallback to current directory if subdir creation fails
-                temp_data_dir = ".."
+        temp_data_dir = Path("./tmp_worker_data")
+        temp_data_dir.mkdir(exist_ok=True)
 
         # Generate unique filename
         timestamp = int(time.time() * 1000)
-        filename = os.path.join(temp_data_dir, f"temp_worker_data_{worker_id}_{timestamp}.pt")
+        filename = temp_data_dir / f"temp_gru_worker_data_{worker_id}_{timestamp}.pt"
 
         try:
-            print(f"[Worker {worker_id}] Attempting to save data to {filename}...")
             torch.save(data_to_save, filename)
-            print(f"[Worker {worker_id}] Successfully saved data to {filename}.")
-            return filename  # Return the filepath
+            return str(filename)  # Return the filepath
         except Exception as e_save:
             print(f"[Worker {worker_id}] ERROR saving data to {filename}: {e_save}")
             import traceback
@@ -333,7 +305,7 @@ def gru_collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_
         print(f"[Worker {worker_id}, PID {os.getpid()}] ERROR: {e}")
         import traceback
         traceback.print_exc()
-        if 'worker_env' in locals():  # Ensure env is closed if it was initialized
+        if 'env' in locals() and 'env' in dir():
             env.close()
         return None  # Return None on general error in worker
 
@@ -344,95 +316,59 @@ def collect_sequences_for_gru(num_steps_total, device_str_main,
                               max_episode_steps_collect_int
                               ):
     print(
-        f"Starting parallel collection with {num_collection_workers_int} workers for {num_steps_total} total episodes...")
+        f"Starting parallel collection with {num_collection_workers_int} workers for {num_steps_total} total steps...")
 
     if num_collection_workers_int <= 0:
         print("Warning: num_collection_workers is not positive. Defaulting to 1 worker (serial collection).")
         num_collection_workers_int = 1
 
-    steps_per_worker = [num_steps_total // num_collection_workers_int] * num_collection_workers_int
-    remainder_episodes = num_steps_total % num_collection_workers_int
-    for i in range(remainder_episodes):
-        steps_per_worker[i] += 1
+    steps_per_worker = np.full(num_collection_workers_int, num_steps_total // num_collection_workers_int)
+    steps_per_worker[:num_steps_total % num_collection_workers_int] += 1
 
-    worker_args_list = []
-    actual_workers_to_spawn = 0
-    for worker_id in range(num_collection_workers_int):
-        if steps_per_worker[worker_id] == 0:
-            print(f"Skipping worker {worker_id} as it has no episodes assigned.")
-            continue
-        actual_workers_to_spawn += 1
-        args = (
-            worker_id,
-            steps_per_worker[worker_id],
-            env_name_str_for_worker,
-            device_str_main,
-            max_episode_steps_collect_int
-        )
-        worker_args_list.append(args)
+    worker_args_list = [
+        (i, steps_per_worker[i], env_name_str_for_worker, device_str_main, max_episode_steps_collect_int)
+        for i in range(num_collection_workers_int) if steps_per_worker[i] > 0
+    ]
 
     if not worker_args_list:
-        print("No episodes to collect or no workers to assign after distribution. Skipping parallel collection.")
-        return []
+        print("No steps to collect or no workers to assign. Skipping parallel collection.")
+        return None
 
-    # actual_workers_to_spawn should be used for Pool size if it can be less than num_collection_workers_int
-    # due to low total episode count.
-    pool_size = min(actual_workers_to_spawn, num_collection_workers_int)
-    if pool_size == 0:  # Should be caught by "if not worker_args_list" but as a safeguard.
-        print("No workers to spawn. Returning empty list.")
-        return []
+    pool_size = len(worker_args_list)
+    print(f"Distributing work: {steps_per_worker} steps per worker. Spawning {pool_size} worker processes.")
 
-    print(f"Distributing work: {steps_per_worker} episodes per worker. Spawning {pool_size} worker processes.")
-
-    # Note: mp.set_start_method should be called once in if __name__ == "__main__"
     with mp.Pool(processes=pool_size) as pool:
-        # Results will now be filepaths or None
         filepath_results = pool.starmap(gru_collect_sequences_worker, worker_args_list)
 
     all_worker_data_dicts = []
-    for worker_idx, filepath_result in enumerate(filepath_results):
-        worker_actual_id = worker_args_list[worker_idx][0]  # Get actual worker_id from args
-        if filepath_result and os.path.exists(filepath_result):
+    for filepath_result in filepath_results:
+        if filepath_result and Path(filepath_result).exists():
             try:
-                print(f"Loading data from worker {worker_actual_id}'s file: {filepath_result}")
-                worker_data = torch.load(filepath_result, weights_only=False)
+                worker_data = torch.load(filepath_result)
                 all_worker_data_dicts.append(worker_data)
-                print(
-                    f"Successfully loaded {len(worker_data)} sequences from worker {worker_actual_id} (file: {filepath_result}).")
-                # Optionally, delete the temporary file after successful loading
-                try:
-                    os.remove(filepath_result)
-                    print(f"Removed temporary file: {filepath_result}")
-                except OSError as e_remove:
-                    print(f"Warning: Could not remove temporary file {filepath_result}: {e_remove}")
+                os.remove(filepath_result)
             except Exception as e_load:
-                print(f"ERROR loading data from worker {worker_actual_id}'s file {filepath_result}: {e_load}")
-        elif filepath_result:  # Filepath was returned but does not exist
-            print(f"Worker {worker_actual_id} returned filepath {filepath_result}, but file not found.")
-        else:  # Worker returned None (either general error or save error)
-            print(f"Worker {worker_actual_id} failed to produce a data file.")
+                print(f"ERROR loading or removing data from file {filepath_result}: {e_load}")
+        elif filepath_result:
+            print(f"Worker returned filepath {filepath_result}, but file not found.")
+        else:
+            print(f"A worker failed to produce a data file.")
 
     if not all_worker_data_dicts:
         print("No valid data loaded from any worker.")
         return None
 
     final_data_buffer = {
-        'actions': torch.cat([d['actions'] for d in all_worker_data_dicts], dim=0),
-        'rewards': torch.cat([d['rewards'] for d in all_worker_data_dicts], dim=0),
-        'dones': torch.cat([d['dones'] for d in all_worker_data_dicts], dim=0),
-        'next_tokens': torch.cat([d['next_tokens'] for d in all_worker_data_dicts], dim=0),
+        key: torch.cat([d[key] for d in all_worker_data_dicts], dim=0)
+        for key in all_worker_data_dicts[0]
     }
 
     print(f"Finished collecting. Total transitions from all workers: {len(final_data_buffer['actions'])}.")
-    # Clean up the temporary directory if it's empty and was created
-    temp_data_dir = "./tmp_worker_data"
-    if os.path.exists(temp_data_dir) and not os.listdir(temp_data_dir):
+    temp_data_dir = Path("./tmp_worker_data")
+    if temp_data_dir.exists() and not any(temp_data_dir.iterdir()):
         try:
-            os.rmdir(temp_data_dir)
-            print(f"Removed empty temporary directory: {temp_data_dir}")
+            temp_data_dir.rmdir()
         except OSError as e_rmdir:
             print(f"Warning: Could not remove temporary directory {temp_data_dir}: {e_rmdir}")
-    elif os.path.exists(temp_data_dir) and os.listdir(temp_data_dir):
-        print(f"Warning: Temporary directory {temp_data_dir} is not empty. Manual cleanup might be needed.")
 
     return final_data_buffer

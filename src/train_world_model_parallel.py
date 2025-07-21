@@ -88,39 +88,57 @@ def get_config(name="default"):
 class SequenceDataset(Dataset):
     """
     A PyTorch Dataset for handling the structured dictionary of sequence data.
-    This dataset returns entire sequences of a fixed length.
+    This dataset returns entire sequences of a fixed length and is aware of
+    episode boundaries to avoid creating sequences that cross episodes.
     """
 
     def __init__(self, data_dict, sequence_length):
         """
         Args:
-            data_dict (dict): A dictionary where keys are 'actions', 'rewards', etc.,
-                              and values are tensors of the entire dataset.
+            data_dict (dict): A dictionary with keys 'actions', 'rewards', etc.,
+                              and values as tensors of the entire dataset.
             sequence_length (int): The length of the sequences to return.
         """
         self.data = data_dict
         self.sequence_length = sequence_length
-        # The number of possible start points for a sequence
-        self.num_sequences = len(data_dict['actions']) - sequence_length + 1
+        self.total_steps = len(data_dict['actions'])
+
+        # Get 'is_first_steps' tensor, which indicates episode starts.
+        # This is used to find valid sequence starting points.
+        is_first_steps = data_dict.get('is_first_steps', torch.zeros(self.total_steps, dtype=torch.bool))
+        if is_first_steps.ndim > 1:
+            is_first_steps = is_first_steps.squeeze(1)
+
+        # Pre-calculate all valid start indices for sequences.
+        # A sequence is valid if it does not contain an episode start
+        # at any point after the first step.
+        self.valid_indices = []
+        for i in range(self.total_steps - self.sequence_length + 1):
+            # The window to check is from the second element to the end of the sequence.
+            window = is_first_steps[i + 1: i + self.sequence_length]
+            if not torch.any(window):
+                self.valid_indices.append(i)
 
     def __len__(self):
-        """Returns the total number of possible sequences."""
-        return self.num_sequences
+        """Returns the total number of valid sequences."""
+        return len(self.valid_indices)
 
     def __getitem__(self, idx):
         """
-        Returns a dictionary containing one sequence of data starting at the given index.
+        Returns a dictionary containing one valid sequence of data.
         """
-        # Define the start and end of the sequence slice
-        start = idx
-        end = idx + self.sequence_length
+        # Map the provided index to a valid starting index in the original data.
+        start = self.valid_indices[idx]
+        end = start + self.sequence_length
 
-        # Slice each tensor to get the data for the full sequence
+        # Slice each tensor to get the data for the full sequence.
+        # We don't need to return 'is_first_steps' as the training loop
+        # for the GRU resets the hidden state for each new sequence.
         return {
             'actions': self.data['actions'][start:end],
             'rewards': self.data['rewards'][start:end],
             'dones': self.data['dones'][start:end],
-            'next_tokens': self.data['next_tokens'][start:end]
+            'next_tokens': self.data['next_tokens'][start:end],
         }
 
 
