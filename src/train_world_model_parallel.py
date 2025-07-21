@@ -27,7 +27,7 @@ from src.utils import LOGS_DIR
 # Training Hyperparameters
 NUM_STEPS = 1_000_000  # Number of steps to collect for training the world model
 WM_EPOCHS = 10  # Number of epochs to train the world model
-WM_BATCH_SIZE = 128  # Sequences per batch
+WM_BATCH_SIZE = 256  # Sequences per batch
 WM_LEARNING_RATE = 1e-4  # Learning rate for world model optimizer
 SEQUENCE_LENGTH = 32  # Length of sequences to train on
 MAX_GRAD_NORM = 1.0  # Max gradient norm for clipping

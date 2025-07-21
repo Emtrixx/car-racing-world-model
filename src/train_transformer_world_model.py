@@ -28,7 +28,7 @@ from src.utils import LOGS_DIR
 # Training Hyperparameters
 NUM_STEPS = 1_000_000
 WM_EPOCHS = 10
-WM_BATCH_SIZE = 256
+WM_BATCH_SIZE = 64
 WM_LEARNING_RATE = 1e-4
 HISTORY_LENGTH = 32  # Renamed from SEQUENCE_LENGTH
 MAX_GRAD_NORM = 1.0
