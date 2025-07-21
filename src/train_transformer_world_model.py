@@ -28,9 +28,9 @@ from src.utils import LOGS_DIR
 # Training Hyperparameters
 NUM_STEPS = 1_000_000
 WM_EPOCHS = 10
-WM_BATCH_SIZE = 128
+WM_BATCH_SIZE = 256
 WM_LEARNING_RATE = 1e-4
-HISTORY_LENGTH = 16  # Renamed from SEQUENCE_LENGTH
+HISTORY_LENGTH = 32  # Renamed from SEQUENCE_LENGTH
 MAX_GRAD_NORM = 1.0
 
 # Parallelism Configuration
@@ -67,7 +67,7 @@ def get_config(name="default"):
             "grid_size": GRID_SIZE,
             "dropout_rate": TRANSFORMER_DROPOUT_RATE,
             # At least the length of the history multiplied by (tokens per state + 1 for action).
-            "max_seq_len": 1024  # for positional encoding
+            "max_seq_len": 2048  # for positional encoding
         }
     }
     # Test configuration for quick runs
