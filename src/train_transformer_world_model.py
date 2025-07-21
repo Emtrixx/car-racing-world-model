@@ -310,6 +310,9 @@ if __name__ == "__main__":
     print(f"Loaded configuration: '{args.config}'")
     print(f"Device: {config['device']}")
 
+    if config['device'] == 'cuda':
+        torch.set_float32_matmul_precision('high')
+
     try:
         mp.set_start_method('spawn', force=True)
     except RuntimeError as e:
