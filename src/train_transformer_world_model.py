@@ -21,7 +21,7 @@ from src.utils import (
 )
 from src.vq_conv_vae import GRID_SIZE
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
-from src.utils_wm import collect_data_parallel
+from src.utils_wm import collect_data_for_transformer
 from src.utils import LOGS_DIR
 
 # --- Configuration ---
@@ -324,7 +324,7 @@ if __name__ == "__main__":
         data_buffer = torch.load(args.load_data_from, map_location='cpu')
     else:
         start_time = time.time()
-        data_buffer = collect_data_parallel(
+        data_buffer = collect_data_for_transformer(
             num_steps=config["num_steps"], device=config["device"],
             num_workers=config["num_collection_workers"], env_name=config["env_name"],
             max_episode_steps=config["max_episode_steps_collect"]

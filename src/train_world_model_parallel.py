@@ -5,21 +5,22 @@ import random
 import time
 from pathlib import Path
 
-import torch
-import torch.nn as nn
 import numpy as np
-from stable_baselines3 import PPO
+import torch
+from matplotlib import pyplot as plt
+from torch import nn
+from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
-from src.play_game_sb3 import SB3_MODEL_PATH
 from src.utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     ACTION_DIM,  # Default: 3
-    DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, WorldModelDataCollector, WorldModelTrainer,
-    make_env_sb3, NUM_STACK
+    DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME
 )
+from src.utils_wm import collect_sequences_for_gru
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
+from src.utils import GRU_WM_CHECKPOINTS_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -78,214 +79,6 @@ def get_config(name="default"):
     return configs[name]
 
 
-# --- Worker function for parallel data collection ---
-def collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_name_str,
-                             device_str_for_worker,
-                             max_episode_steps_collect_int):  # Added max_episode_steps
-    try:
-        import os
-        import time
-        import torch
-        import gymnasium as gym
-
-        print(
-            f"[Worker {worker_id}, PID {os.getpid()}] Starting, assigned {num_steps_to_collect_by_worker} episodes. Device: {device_str_for_worker}")
-
-        # --- Initialize Environment ---
-        env = env = make_env_sb3(
-            env_id=ENV_NAME,
-            frame_stack_num=NUM_STACK,
-            gamma=0.99,  # Standard gamma, used by NormalizeReward
-            render_mode="rgb_array",
-            max_episode_steps=max_episode_steps_collect_int,  # Use the max steps from worker args
-        )
-
-        # print observation and action spaces
-        print(f"[Worker {worker_id}] Observation space: {env.observation_space}")
-        print(f"[Worker {worker_id}] Action space: {env.action_space}")
-
-        # --- Load PPO Model ---
-        print(f"Loading trained SB3 PPO agent from: {SB3_MODEL_PATH}")
-        if not SB3_MODEL_PATH.exists():
-            print(f"ERROR: SB3 PPO Model not found at {SB3_MODEL_PATH}")
-            if hasattr(env, 'close'): env.close()
-            return
-        try:
-            ppo_agent = PPO.load(SB3_MODEL_PATH, device=DEVICE, env=env,
-                                 deterministic=False)  # deterministic=False for exploration
-            print(f"Successfully loaded SB3 PPO agent. Agent device: {ppo_agent.device}")
-        except Exception as e:
-            print(f"ERROR loading SB3 PPO agent: {e}")
-            if hasattr(env, 'close'): env.close()
-            import traceback
-            traceback.print_exc()
-            return
-
-        # --- Load VQ-VAE Model ---
-        vq_vae = VQVAE().to(DEVICE)
-
-        try:
-            print(f"Loading trained model from: {VQ_VAE_CHECKPOINT_FILENAME}")
-            vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
-        except FileNotFoundError:
-            print("VQ-VAE Model file not found")
-            return
-
-        # --- Prepare for Data Collection ---
-        collector = WorldModelDataCollector(env, ppo_agent, vq_vae, device_str_for_worker)
-        collector.collect_steps(num_steps=num_steps_to_collect_by_worker)
-
-        env.close()
-        print(
-            f"[Worker {worker_id}, PID {os.getpid()}] Finished data collection. Collected {len(collector.replay_buffer)} sequences.")
-
-        # --- Prepare Data for Saving ---
-        actions = torch.stack([s['action'] for s in collector.replay_buffer])
-        rewards = torch.stack([s['reward'] for s in collector.replay_buffer])
-        dones = torch.stack([s['done'] for s in collector.replay_buffer])
-        next_tokens = torch.stack([s['next_tokens'] for s in collector.replay_buffer])
-
-        data_to_save = {
-            'actions': actions,
-            'rewards': rewards,
-            'dones': dones,
-            'next_tokens': next_tokens
-        }
-        # Create a directory for temporary worker data if it doesn't exist
-        temp_data_dir = "./tmp_worker_data"
-        if not os.path.exists(temp_data_dir):
-            try:
-                os.makedirs(temp_data_dir)
-                print(f"[Worker {worker_id}] Created directory: {temp_data_dir}")
-            except OSError as e:
-                print(f"[Worker {worker_id}] Error creating directory {temp_data_dir}: {e}")
-                # Fallback to current directory if subdir creation fails
-                temp_data_dir = ".."
-
-        # Generate unique filename
-        timestamp = int(time.time() * 1000)
-        filename = os.path.join(temp_data_dir, f"temp_worker_data_{worker_id}_{timestamp}.pt")
-
-        try:
-            print(f"[Worker {worker_id}] Attempting to save data to {filename}...")
-            torch.save(data_to_save, filename)
-            print(f"[Worker {worker_id}] Successfully saved data to {filename}.")
-            return filename  # Return the filepath
-        except Exception as e_save:
-            print(f"[Worker {worker_id}] ERROR saving data to {filename}: {e_save}")
-            import traceback
-            traceback.print_exc()
-            return None  # Return None on save error
-    except Exception as e:
-        print(f"[Worker {worker_id}, PID {os.getpid()}] ERROR: {e}")
-        import traceback
-        traceback.print_exc()
-        if 'worker_env' in locals():  # Ensure env is closed if it was initialized
-            env.close()
-        return None  # Return None on general error in worker
-
-
-# --- Data Collection for GRU (Sequence Data) ---
-def collect_sequences_for_gru(num_steps_total, device_str_main,
-                              num_collection_workers_int,
-                              env_name_str_for_worker,
-                              max_episode_steps_collect_int
-                              ):
-    print(
-        f"Starting parallel collection with {num_collection_workers_int} workers for {num_steps_total} total episodes...")
-
-    if num_collection_workers_int <= 0:
-        print("Warning: num_collection_workers is not positive. Defaulting to 1 worker (serial collection).")
-        num_collection_workers_int = 1
-
-    steps_per_worker = [num_steps_total // num_collection_workers_int] * num_collection_workers_int
-    remainder_episodes = num_steps_total % num_collection_workers_int
-    for i in range(remainder_episodes):
-        steps_per_worker[i] += 1
-
-    worker_args_list = []
-    actual_workers_to_spawn = 0
-    for worker_id in range(num_collection_workers_int):
-        if steps_per_worker[worker_id] == 0:
-            print(f"Skipping worker {worker_id} as it has no episodes assigned.")
-            continue
-        actual_workers_to_spawn += 1
-        args = (
-            worker_id,
-            steps_per_worker[worker_id],
-            env_name_str_for_worker,
-            device_str_main,
-            max_episode_steps_collect_int
-        )
-        worker_args_list.append(args)
-
-    if not worker_args_list:
-        print("No episodes to collect or no workers to assign after distribution. Skipping parallel collection.")
-        return []
-
-    # actual_workers_to_spawn should be used for Pool size if it can be less than num_collection_workers_int
-    # due to low total episode count.
-    pool_size = min(actual_workers_to_spawn, num_collection_workers_int)
-    if pool_size == 0:  # Should be caught by "if not worker_args_list" but as a safeguard.
-        print("No workers to spawn. Returning empty list.")
-        return []
-
-    print(f"Distributing work: {steps_per_worker} episodes per worker. Spawning {pool_size} worker processes.")
-
-    # Note: mp.set_start_method should be called once in if __name__ == "__main__"
-    with mp.Pool(processes=pool_size) as pool:
-        # Results will now be filepaths or None
-        filepath_results = pool.starmap(collect_sequences_worker, worker_args_list)
-
-    all_worker_data_dicts = []
-    for worker_idx, filepath_result in enumerate(filepath_results):
-        worker_actual_id = worker_args_list[worker_idx][0]  # Get actual worker_id from args
-        if filepath_result and os.path.exists(filepath_result):
-            try:
-                print(f"Loading data from worker {worker_actual_id}'s file: {filepath_result}")
-                worker_data = torch.load(filepath_result, weights_only=False)
-                all_worker_data_dicts.append(worker_data)
-                print(
-                    f"Successfully loaded {len(worker_data)} sequences from worker {worker_actual_id} (file: {filepath_result}).")
-                # Optionally, delete the temporary file after successful loading
-                try:
-                    os.remove(filepath_result)
-                    print(f"Removed temporary file: {filepath_result}")
-                except OSError as e_remove:
-                    print(f"Warning: Could not remove temporary file {filepath_result}: {e_remove}")
-            except Exception as e_load:
-                print(f"ERROR loading data from worker {worker_actual_id}'s file {filepath_result}: {e_load}")
-        elif filepath_result:  # Filepath was returned but does not exist
-            print(f"Worker {worker_actual_id} returned filepath {filepath_result}, but file not found.")
-        else:  # Worker returned None (either general error or save error)
-            print(f"Worker {worker_actual_id} failed to produce a data file.")
-
-    if not all_worker_data_dicts:
-        print("No valid data loaded from any worker.")
-        return None
-
-    final_data_buffer = {
-        'actions': torch.cat([d['actions'] for d in all_worker_data_dicts], dim=0),
-        'rewards': torch.cat([d['rewards'] for d in all_worker_data_dicts], dim=0),
-        'dones': torch.cat([d['dones'] for d in all_worker_data_dicts], dim=0),
-        'next_tokens': torch.cat([d['next_tokens'] for d in all_worker_data_dicts], dim=0),
-    }
-
-    print(f"Finished collecting. Total transitions from all workers: {len(final_data_buffer['actions'])}.")
-    # Clean up the temporary directory if it's empty and was created
-    temp_data_dir = "./tmp_worker_data"
-    if os.path.exists(temp_data_dir) and not os.listdir(temp_data_dir):
-        try:
-            os.rmdir(temp_data_dir)
-            print(f"Removed empty temporary directory: {temp_data_dir}")
-        except OSError as e_rmdir:
-            print(f"Warning: Could not remove temporary directory {temp_data_dir}: {e_rmdir}")
-    elif os.path.exists(temp_data_dir) and os.listdir(temp_data_dir):
-        print(f"Warning: Temporary directory {temp_data_dir} is not empty. Manual cleanup might be needed.")
-
-    return final_data_buffer
-
-
 class SequenceDataset(Dataset):
     """
     A PyTorch Dataset for handling the structured dictionary of sequence data.
@@ -326,6 +119,244 @@ class SequenceDataset(Dataset):
 
 
 # --- Main Execution ---
+class GruWorldModelTrainer:
+    """Handles the training loop for the WorldModelGRU."""
+
+    def __init__(self, world_model, vq_vae_model, config, train_dataloader, val_dataloader=None):
+        self.world_model = world_model
+        self.vq_vae_model = vq_vae_model  # Needed for weight copying
+        self.config = config
+        self.device = config['device']
+        self.train_dataloader = train_dataloader
+        self.val_dataloader = val_dataloader
+
+        # Define optimizers and loss functions
+        self.optimizer = Adam(self.world_model.parameters(), lr=config['learning_rate'])
+        self.token_loss_fn = nn.CrossEntropyLoss()
+        self.reward_loss_fn = nn.MSELoss()
+        self.done_loss_fn = nn.BCEWithLogitsLoss()
+
+        # For logging and plotting
+        self.loss_history = {
+            'train_total': [], 'train_token': [], 'train_reward': [], 'train_done': [],
+            'val_total': [], 'val_token': [], 'val_reward': [], 'val_done': []
+        }
+        self.steps_history = []  # For x-axis of training plots
+        self.val_steps_history = []  # For x-axis of validation plots
+
+    def plot_losses(self):
+        """Plots the collected loss history and saves it to a file."""
+        print("Plotting training and validation losses...")
+        plt.figure(figsize=(12, 8))
+
+        if self.loss_history['train_total']:
+            plt.plot(self.steps_history, self.loss_history['train_total'], label='Train Total Loss')
+            # plt.plot(self.steps_history, self.loss_history['train_token'], label='Train Token Loss', linestyle='--')
+            # plt.plot(self.steps_history, self.loss_history['train_reward'], label='Train Reward Loss', linestyle='--')
+            # plt.plot(self.steps_history, self.loss_history['train_done'], label='Train Done Loss', linestyle='--')
+
+        if self.loss_history['val_total']:
+            plt.plot(self.val_steps_history, self.loss_history['val_total'], label='Validation Total Loss',
+                     linestyle=':')
+            # plt.plot(self.val_steps_history, self.loss_history['val_token'], label='Val Token Loss', linestyle='-.')
+            # plt.plot(self.val_steps_history, self.loss_history['val_reward'], label='Val Reward Loss', linestyle='-.')
+            # plt.plot(self.val_steps_history, self.loss_history['val_done'], label='Val Done Loss', linestyle='-.')
+
+        plt.title(f"World Model Training & Validation Loss (SeqLen {self.config['sequence_length']})")
+        plt.xlabel("Training Steps")
+        plt.ylabel("Loss")
+        if self.loss_history['train_total'] or self.loss_history['val_total']:  # only add legend if there's data
+            plt.legend()
+        plt.grid(True)
+
+        # Ensure the save directory exists
+        save_dir = self.config.get("plot_save_dir", "images")
+        os.makedirs(save_dir, exist_ok=True)
+
+        save_path = os.path.join(save_dir, "world_model_loss_plot_with_val.png")  # New filename
+        plt.savefig(save_path)
+        print(f"Saved loss plot to {save_path}")
+        plt.close()
+
+    def _evaluate(self):
+        self.world_model.eval()
+        total_val_token_loss, total_val_reward_loss, total_val_done_loss = 0, 0, 0
+        num_val_batches = 0
+
+        with torch.no_grad():
+            for batch in self.val_dataloader:
+                for key in batch:
+                    batch[key] = batch[key].to(self.device)
+
+                batch_size = batch['actions'].size(0)
+                # Correctly get initial hidden state, handling DataParallel
+                current_model_module = self.world_model.module if isinstance(self.world_model,
+                                                                             nn.DataParallel) else self.world_model
+
+                # prev_model_state is the recurrent state (e.g. GRU hidden) or None for Transformer
+                prev_model_state = current_model_module.get_initial_hidden_state(batch_size, self.device)
+
+                seq_token_loss, seq_reward_loss, seq_done_loss = 0, 0, 0
+                sequence_length = batch['actions'].size(1)
+
+                for t in range(sequence_length):
+                    action_t = batch['actions'][:, t]
+                    ground_truth_tokens_t = batch['next_tokens'][:, t]  # These are for the frame AFTER action_t
+                    ground_truth_reward_t = batch['rewards'][:, t]
+                    ground_truth_done_t = batch['dones'][:, t]
+
+                    # For Transformer, block_tf_ratio and block_size are part of its own config,
+                    # not passed dynamically by the trainer loop here.
+                    pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
+                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t
+                    )
+
+                    b, h, w, c = pred_logits.shape
+                    token_loss = self.token_loss_fn(
+                        pred_logits.reshape(b * h * w, c),
+                        ground_truth_tokens_t.reshape(b * h * w))
+                    reward_loss = self.reward_loss_fn(pred_reward, ground_truth_reward_t)
+                    done_loss = self.done_loss_fn(pred_done_logits, ground_truth_done_t)
+
+                    seq_token_loss += token_loss
+                    seq_reward_loss += reward_loss
+                    seq_done_loss += done_loss
+                    prev_model_state = next_model_state  # Update recurrent state for next step in sequence
+
+                total_val_token_loss += (seq_token_loss / sequence_length)
+                total_val_reward_loss += (seq_reward_loss / sequence_length)
+                total_val_done_loss += (seq_done_loss / sequence_length)
+                num_val_batches += 1
+
+        avg_val_token_loss = total_val_token_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
+            self.device)
+        avg_val_reward_loss = total_val_reward_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
+            self.device)
+        avg_val_done_loss = total_val_done_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
+            self.device)
+        avg_val_total_loss = avg_val_token_loss + avg_val_reward_loss + avg_val_done_loss
+
+        return {
+            'total': avg_val_total_loss.item(),
+            'token': avg_val_token_loss.item(),
+            'reward': avg_val_reward_loss.item(),
+            'done': avg_val_done_loss.item(),
+        }
+
+    def train(self, num_epochs):  # Removed dataloader argument
+        """Main training loop that iterates over a DataLoader."""
+        print("Starting world model training...")
+        if isinstance(self.world_model, nn.DataParallel):
+            self.world_model.module.token_embedding.weight.data.copy_(
+                self.vq_vae_model.vq_layer.embeddings.data
+            )
+        else:
+            self.world_model.token_embedding.weight.data.copy_(
+                self.vq_vae_model.vq_layer.embeddings.data
+            )
+        print("Copied VQ-VAE weights to world model token embedding.")
+
+        self.world_model.train()
+
+        # Initialize step counters
+        global_step = 0
+        total_train_steps = len(self.train_dataloader) * num_epochs  # Use self.train_dataloader
+        log_freq = self.config.get('log_freq', 100)
+        val_freq = self.config.get('val_freq', log_freq * 5)  # val_freq from config
+        checkpoint_freq = self.config.get('checkpoint_freq', 5000)
+
+        for epoch in range(1, num_epochs + 1):
+            for batch_idx, batch in enumerate(self.train_dataloader):  # Use self.train_dataloader
+                global_step += 1
+
+                for key in batch:
+                    batch[key] = batch[key].to(self.device)
+
+                # Initialize hidden state for the start of the sequences
+                batch_size = batch['actions'].size(0)
+                current_model_module = self.world_model.module if isinstance(self.world_model,
+                                                                             nn.DataParallel) else self.world_model
+
+                prev_model_state = current_model_module.get_initial_hidden_state(batch_size, self.device)
+
+                total_token_loss, total_reward_loss, total_done_loss = 0, 0, 0
+                sequence_length = batch['actions'].size(1)
+
+                for t in range(sequence_length):
+                    action_t = batch['actions'][:, t]
+                    ground_truth_tokens_t = batch['next_tokens'][:, t]  # Tokens for frame AFTER action_t
+                    ground_truth_reward_t = batch['rewards'][:, t]
+                    ground_truth_done_t = batch['dones'][:, t]
+
+                    # For Transformer, block_tf_ratio and block_size are part of its own config.
+                    pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
+                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t
+                    )
+
+                    b, h, w, c = pred_logits.shape
+                    token_loss = self.token_loss_fn(
+                        pred_logits.reshape(b * h * w, c),
+                        ground_truth_tokens_t.reshape(b * h * w))
+                    reward_loss = self.reward_loss_fn(pred_reward, ground_truth_reward_t)
+                    done_loss = self.done_loss_fn(pred_done_logits, ground_truth_done_t)
+
+                    total_token_loss += token_loss
+                    total_reward_loss += reward_loss
+                    total_done_loss += done_loss
+                    prev_model_state = next_model_state  # Update recurrent state
+
+                avg_token_loss = total_token_loss / sequence_length
+                avg_reward_loss = total_reward_loss / sequence_length
+                avg_done_loss = total_done_loss / sequence_length
+                total_loss = avg_token_loss + avg_reward_loss + avg_done_loss
+
+                self.optimizer.zero_grad()
+                total_loss.backward()
+                nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
+                self.optimizer.step()
+
+                # Logging
+                if global_step % log_freq == 0:
+                    print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
+                          f"Train Total Loss: {total_loss.item():.4f} | "  # Clarified Train
+                          f"Train Token Loss: {avg_token_loss.item():.4f} | "
+                          f"Train Reward Loss: {avg_reward_loss.item():.4f} | "
+                          f"Train Done Loss: {avg_done_loss.item():.4f}")
+
+                    # Store loss values for plotting
+                    self.loss_history['train_total'].append(total_loss.item())
+                    self.loss_history['train_token'].append(avg_token_loss.item())
+                    self.loss_history['train_reward'].append(avg_reward_loss.item())
+                    self.loss_history['train_done'].append(avg_done_loss.item())
+                    self.steps_history.append(global_step)  # Record step for training loss
+
+                # Validation step
+                if self.val_dataloader and global_step > 0 and global_step % val_freq == 0:
+                    val_losses = self._evaluate()
+                    self.loss_history['val_total'].append(val_losses['total'])
+                    self.loss_history['val_token'].append(val_losses['token'])
+                    self.loss_history['val_reward'].append(val_losses['reward'])
+                    self.loss_history['val_done'].append(val_losses['done'])
+                    self.val_steps_history.append(global_step)  # Record step for validation loss
+
+                    print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
+                          f"Val Total Loss: {val_losses['total']:.4f} | Val Token: {val_losses['token']:.4f} | "
+                          f"Val Reward: {val_losses['reward']:.4f} | Val Done: {val_losses['done']:.4f}")
+                    self.world_model.train()  # Set back to train mode after evaluation
+
+                # Save model checkpoint
+                if global_step > 0 and global_step % checkpoint_freq == 0:
+                    model_state_to_save = self.world_model.module.state_dict() if isinstance(self.world_model,
+                                                                                             nn.DataParallel) else self.world_model.state_dict()
+                    filename = GRU_WM_CHECKPOINTS_DIR / f"world_model_step_{global_step}.pth"
+                    torch.save(model_state_to_save, filename)
+                    print(f"Saved model checkpoint at step {global_step}.")
+
+        print("Training finished.")
+        # Plot the final losses
+        self.plot_losses()
+
+
 if __name__ == "__main__":
     # Argument Parsing: Allow selecting config from command line
     parser = argparse.ArgumentParser(description="Train GRU World Model")
@@ -462,7 +493,7 @@ if __name__ == "__main__":
 
     # Create the trainer instance
     # The trainer encapsulates the model, optimizer, and training logic.
-    trainer = WorldModelTrainer(
+    trainer = GruWorldModelTrainer(
         world_model_gru,
         vq_vae_model,
         config,
