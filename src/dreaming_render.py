@@ -98,7 +98,7 @@ def get_starting_state_from_sequence(image_paths: List[str],
                     frame_tensor = frame_tensor.permute(2, 0, 1)  # Convert HWC to CHW
                 frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dimension
 
-                reconstruction, _, _, indices = vq_vae(frame_tensor)
+                reconstruction, _, _, indices, _, _ = vq_vae(frame_tensor)
                 indices = indices.view(1, -1)
                 last_frame_reconstruction = reconstruction
 
@@ -178,7 +178,7 @@ def dream_gru(world_model: WorldModelGRU,
             logits_flat = pred_logits.reshape(b, h * w, c)
             predicted_indices = torch.distributions.Categorical(logits=logits_flat).sample()
 
-            quantized_vectors = vq_vae.vq_layer.embedding(predicted_indices)
+            quantized_vectors = vq_vae.vq_layer.embeddings[predicted_indices]
             quantized_grid = quantized_vectors.reshape(b, h, w, -1)
             quantized_grid_permuted = quantized_grid.permute(0, 3, 1, 2)
 
