@@ -29,7 +29,7 @@ NUM_STEPS = 1_000_000  # Number of steps to collect for training the world model
 WM_EPOCHS = 10  # Number of epochs to train the world model
 WM_BATCH_SIZE = 128  # Sequences per batch
 WM_LEARNING_RATE = 1e-4  # Learning rate for world model optimizer
-SEQUENCE_LENGTH = 256  # Length of sequences to train on
+SEQUENCE_LENGTH = 32  # Length of sequences to train on
 MAX_GRAD_NORM = 1.0  # Max gradient norm for clipping
 
 # Parallelism Configuration
@@ -318,7 +318,6 @@ class GruWorldModelTrainer:
                     ground_truth_reward_t = batch['rewards'][:, t]
                     ground_truth_done_t = batch['dones'][:, t]
 
-                    # For Transformer, block_tf_ratio and block_size are part of its own config.
                     pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
                         action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t
                     )
