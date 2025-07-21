@@ -84,7 +84,7 @@ def get_config(name="default"):
     })
     configs["profile"] = configs["default"].copy()
     configs["profile"].update({
-        "num_steps": 1000,
+        "num_steps": 5000,
         "epochs": 1,
     })
     return configs[name]
