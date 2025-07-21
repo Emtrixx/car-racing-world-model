@@ -421,6 +421,7 @@ if __name__ == "__main__":
     print(f"Starting GRU World Model training on device: {config['device']}")
 
     if "cuda" in str(config['device']):
+        print(f"Using float32 matmul high precision for CUDA training.")
         torch.set_float32_matmul_precision('high')
 
     # checks for checkpoint files
@@ -499,14 +500,14 @@ if __name__ == "__main__":
         batch_size=config["batch_size"],
         sampler=train_sampler,
         num_workers=config["num_loader_workers"],
-        pin_memory=True if config['device'] == 'cuda' else False  # Added pin_memory
+        pin_memory=True if "cuda" in str(config['device']) else False  # Added pin_memory
     )
     val_dataloader = DataLoader(
         full_dataset,
         batch_size=config["batch_size"],
         sampler=val_sampler,
         num_workers=config["num_loader_workers"],
-        pin_memory=True if config['device'] == 'cuda' else False  # Added pin_memory
+        pin_memory=True if "cuda" in str(config['device']) else False  # Added pin_memory
     )
     # --- End of new DataLoader code ---
 
