@@ -125,7 +125,7 @@ def dream_with_history(
 
 if __name__ == '__main__':
     # --- Configuration ---
-    DREAM_STEPS = 200
+    DREAM_STEPS = 1000
     HISTORY_LEN = 16  # Must match the history length the model was trained with
 
     # --- Load Models ---
@@ -147,6 +147,10 @@ if __name__ == '__main__':
         action_dim=ACTION_DIM,
     ).to(DEVICE)
 
+    # Compile the model to match the state_dict keys
+    print("Compiling World Model...")
+    world_model = torch.compile(world_model)
+    
     # Load your trained world model checkpoint
     if Path(WM_CHECKPOINT_FILENAME_TRANSFORMER).exists():
         world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_TRANSFORMER, map_location=DEVICE))

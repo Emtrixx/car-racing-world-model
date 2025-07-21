@@ -351,6 +351,11 @@ if __name__ == '__main__':
             codebook_size=VQVAE_NUM_EMBEDDINGS,
             action_dim=ACTION_DIM,
         ).to(DEVICE)
+
+        # Compile the model to match the state_dict keys
+        print("Compiling World Model...")
+        world_model = torch.compile(world_model)
+
         world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
         dream_function = dream_gru
         default_video_filename = "world_model_dream_gru.mp4"
@@ -363,6 +368,11 @@ if __name__ == '__main__':
             grid_size=GRID_SIZE,
             max_seq_len=(GRID_SIZE * GRID_SIZE) + 1
         ).to(DEVICE)
+
+        # Compile the model to match the state_dict keys
+        print("Compiling World Model...")
+        world_model = torch.compile(world_model)
+
         world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_TRANSFORMER, map_location=DEVICE))
         dream_function = dream_transformer
         default_video_filename = "world_model_dream_transformer.mp4"
