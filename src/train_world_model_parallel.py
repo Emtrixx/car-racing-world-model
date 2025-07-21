@@ -21,6 +21,7 @@ from src.utils_wm import collect_sequences_for_gru
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
 from src.utils import GRU_WM_CHECKPOINTS_DIR
+from utils import LOGS_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -75,6 +76,11 @@ def get_config(name="default"):
         # "gru_hidden_dim": 32,
         # "num_gru_layers": 2,
         "dropout_rate": 0.1,
+    })
+    configs["profiler"] = configs["default"].copy()
+    configs["profiler"].update({
+        "num_steps": 1000,
+        "epochs": 1,
     })
     return configs[name]
 
@@ -243,7 +249,7 @@ class GruWorldModelTrainer:
             'done': avg_val_done_loss.item(),
         }
 
-    def train(self, num_epochs):  # Removed dataloader argument
+    def train(self, num_epochs, profile=False):
         """Main training loop that iterates over a DataLoader."""
         print("Starting world model training...")
         if isinstance(self.world_model, nn.DataParallel):
@@ -264,6 +270,29 @@ class GruWorldModelTrainer:
         log_freq = self.config.get('log_freq', 100)
         val_freq = self.config.get('val_freq', log_freq * 5)  # val_freq from config
         checkpoint_freq = self.config.get('checkpoint_freq', 5000)
+
+        profiler = None
+        if profile:
+            print("Profiling enabled. The profiler will start after a few warmup steps.")
+            log_dir = LOGS_DIR / "gru_wm_logs"
+            run_name = f"run_{int(time.time())}"
+            trace_dir = Path(log_dir) / run_name / "profile"
+            trace_dir.mkdir(parents=True, exist_ok=True)
+            print(f"Profiler traces will be saved to: {trace_dir}")
+
+            activities = [torch.profiler.ProfilerActivity.CPU]
+            if 'cuda' in str(self.device):
+                activities.append(torch.profiler.ProfilerActivity.CUDA)
+
+            profiler = torch.profiler.profile(
+                activities=activities,
+                schedule=torch.profiler.schedule(wait=10, warmup=5, active=10, repeat=1),
+                on_trace_ready=torch.profiler.tensorboard_trace_handler(str(trace_dir)),
+                record_shapes=True,
+                with_stack=True,
+                profile_memory=True
+            )
+            profiler.start()
 
         for epoch in range(1, num_epochs + 1):
             for batch_idx, batch in enumerate(self.train_dataloader):  # Use self.train_dataloader
@@ -352,6 +381,13 @@ class GruWorldModelTrainer:
                     torch.save(model_state_to_save, filename)
                     print(f"Saved model checkpoint at step {global_step}.")
 
+                if profiler:
+                    profiler.step()
+
+        if profiler:
+            profiler.stop()
+            print("Profiling finished. You can view the trace with TensorBoard.")
+
         print("Training finished.")
         # Plot the final losses
         self.plot_losses()
@@ -368,6 +404,7 @@ if __name__ == "__main__":
                         help="Path to load data from, skipping collection.")
     parser.add_argument("--checkpoint-path", type=str, default=None,
                         help="Path to a model checkpoint to resume training.")
+    parser.add_argument("--profile", action="store_true", help="Enable profiling.")
     args = parser.parse_args()
 
     # Load the chosen configuration
@@ -505,7 +542,7 @@ if __name__ == "__main__":
     print("Starting GRU World Model training via WorldModelTrainer...")
     start_train_time = time.time()
     # trainer saves checkpoints automatically during training
-    trainer.train(num_epochs=config["epochs"])  # Dataloaders are now passed in constructor
+    trainer.train(num_epochs=config["epochs"], profile=args.profile)  # Dataloaders are now passed in constructor
     print(f"GRU World Model training took {time.time() - start_train_time:.2f} seconds.")
 
     # Save the final GRU World Model
