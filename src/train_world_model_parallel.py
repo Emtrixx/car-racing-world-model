@@ -3,6 +3,7 @@ import multiprocessing as mp
 import os
 import random
 import time
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -334,6 +335,8 @@ if __name__ == "__main__":
                         help="Path to save the collected data to. Data is not saved unless this is specified.")
     parser.add_argument("--load-data-from", type=str, default=None,
                         help="Path to load data from, skipping collection.")
+    parser.add_argument("--checkpoint-path", type=str, default=None,
+                        help="Path to a model checkpoint to resume training.")
     args = parser.parse_args()
 
     # Load the chosen configuration
@@ -438,6 +441,10 @@ if __name__ == "__main__":
         dropout_rate=config['dropout_rate']  # Pass dropout_rate
     )
     world_model_gru.to(config['device'])
+
+    if args.checkpoint_path and Path(args.checkpoint_path).exists():
+        print(f"Loading pre-trained model from {args.checkpoint_path}...")
+        world_model_gru.load_state_dict(torch.load(args.checkpoint_path, map_location=config['device']))
 
     # Compile the GRU model
     world_model_gru = torch.compile(world_model_gru)
