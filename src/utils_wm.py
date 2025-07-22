@@ -140,7 +140,7 @@ def collect_data_for_transformer(num_steps, device, num_workers, env_name, max_e
     for path in filepaths:
         if path and Path(path).exists():
             try:
-                all_data.append(torch.load(path))
+                all_data.append(torch.load(path, map_location='cpu'))
                 os.remove(path)
             except Exception as e:
                 print(f"Error loading or removing temp file {path}: {e}")
