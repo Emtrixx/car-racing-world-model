@@ -254,6 +254,60 @@ class WorldModelGRU(nn.Module):
         # Shape: [num_gru_layers, batch_size, hidden_dim]
         return torch.zeros(self.num_gru_layers, batch_size, self.hidden_dim, device=device)
 
+    def encode_observation(self, tokens: torch.Tensor, prev_hidden_state: torch.Tensor) -> torch.Tensor:
+        """
+        Encodes a sequence of observation tokens into a new hidden state.
+        This is used to "prime" the model with a real starting state.
+
+        Args:
+            tokens (torch.Tensor): The ground truth tokens for the observation.
+                                   Shape: [batch_size, num_tokens]
+            prev_hidden_state (torch.Tensor): The hidden state from the previous step.
+                                              Shape: [num_gru_layers, batch_size, hidden_dim]
+
+        Returns:
+            torch.Tensor: The updated hidden state after processing the tokens.
+                          Shape: [num_gru_layers, batch_size, hidden_dim]
+        """
+        batch_size = tokens.size(0)
+        # Start with a learnable token, similar to the generation process
+        current_pos_idx = 0
+        expanded_start_token = self.start_token_embed.expand(batch_size, -1, -1)
+        start_token_with_pe = self.pos_encoder(expanded_start_token, current_pos_idx)
+        prev_token_embed_projected = self.dropout(start_token_with_pe.squeeze(1))
+        current_pos_idx += 1
+
+        generation_hidden_state_stack = prev_hidden_state
+
+        for token_idx in range(self.num_tokens):
+            current_gru_input_for_stack = prev_token_embed_projected
+            next_hidden_layers = []
+
+            for l_idx in range(self.num_gru_layers):
+                h_prev_layer = generation_hidden_state_stack[l_idx]
+                h_next_layer = self.grus[l_idx](current_gru_input_for_stack, h_prev_layer)
+
+                if l_idx < self.num_gru_layers - 1:
+                    current_gru_input_for_stack = self.dropout(h_next_layer)
+                else:
+                    current_gru_input_for_stack = h_next_layer
+                next_hidden_layers.append(h_next_layer)
+
+            generation_hidden_state_stack = torch.stack(next_hidden_layers)
+
+            # Get the next token from the provided ground-truth sequence
+            next_token_indices = tokens[:, token_idx]
+            next_token_embed_raw = self.token_embedding(next_token_indices)
+            next_token_embed_projected_raw = self.token_proj(next_token_embed_raw)
+
+            # Add positional encoding for the next step
+            next_token_embed_projected_unsqueezed = next_token_embed_projected_raw.unsqueeze(1)
+            next_token_embed_with_pe = self.pos_encoder(next_token_embed_projected_unsqueezed, current_pos_idx)
+            prev_token_embed_projected = self.dropout(next_token_embed_with_pe.squeeze(1))
+            current_pos_idx += 1
+
+        return generation_hidden_state_stack
+
 
 # --- Usage Example ---
 if __name__ == '__main__':

@@ -43,16 +43,13 @@ def get_starting_state_from_image(image_path: str, world_model: WorldModelGRU,
     frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dimension
 
     with torch.no_grad():
+        zero_hidden_state = world_model.get_initial_hidden_state(batch_size=1, device=device)
         first_frame_tensor, _, _, indices, _, _ = vq_vae(frame_tensor)
         indices = indices.view(1, -1)  # Flatten to [1, 16]
+        generation_hidden_state_stack = world_model.encode_observation(tokens=indices,
+                                                                       prev_hidden_state=zero_hidden_state)
 
-    zero_hidden_state = world_model.get_initial_hidden_state(batch_size=1, device=device)
-    dummy_action = torch.zeros(1, world_model.action_embedding.in_features, device=device)
-    with torch.no_grad():
-        _, _, _, primed_hidden_state = world_model(
-            dummy_action, zero_hidden_state, ground_truth_tokens=indices
-        )
-    return primed_hidden_state, first_frame_tensor
+    return generation_hidden_state_stack, first_frame_tensor
 
 
 def get_starting_state_from_sequence(image_paths: List[str],
@@ -268,13 +265,13 @@ if __name__ == '__main__':
     image_files = sorted([os.path.join(INIT_FRAMES_DIR, f) for f in os.listdir(INIT_FRAMES_DIR)])
     priming_sequence = image_files[:10]
 
-    primed_h, initial_latent_tokens, initial_frame_tensor = get_starting_state_from_sequence(
-        priming_sequence, world_model, vq_vae, DEVICE
-    )
-    # For dreaming from a single image, use the first image in the sequence
-    # primed_h, initial_frame_tensor = get_starting_state_from_image(
-    #     priming_sequence[0], world_model, vq_vae, DEVICE
+    # primed_h, initial_latent_tokens, initial_frame_tensor = get_starting_state_from_sequence(
+    #     priming_sequence, world_model, vq_vae, DEVICE
     # )
+    # For dreaming from a single image, use the first image in the sequence
+    primed_h, initial_frame_tensor = get_starting_state_from_image(
+        priming_sequence[0], world_model, vq_vae, DEVICE
+    )
 
     initial_frame_np = initial_frame_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
 
