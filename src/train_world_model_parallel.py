@@ -15,13 +15,13 @@ from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 from src.utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     ACTION_DIM,  # Default: 3
-    DEVICE, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME
+    DEVICE, VQ_VAE_CHECKPOINT_FILENAME
 )
+from src.utils import GRU_WM_CHECKPOINTS_DIR
+from src.utils import LOGS_DIR
 from src.utils_wm import collect_sequences_for_gru
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
-from src.utils import GRU_WM_CHECKPOINTS_DIR
-from src.utils import LOGS_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -596,6 +596,10 @@ if __name__ == "__main__":
     try:
         model_state_to_save = world_model_gru.module.state_dict() if isinstance(world_model_gru,
                                                                                 nn.DataParallel) else world_model_gru.state_dict()
+
+        WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_hd{GRU_HIDDEN_DIM}_ly{GRU_NUM_LAYERS}"
+        WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX_GRU}.pth"
+
         torch.save(model_state_to_save, WM_CHECKPOINT_FILENAME_GRU)
         print(f"GRU World Model saved to {WM_CHECKPOINT_FILENAME_GRU}")
     except Exception as e:

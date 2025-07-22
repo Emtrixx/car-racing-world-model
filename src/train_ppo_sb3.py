@@ -13,12 +13,11 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 from src.impala_cnn import CustomCNN
 # Import from local modules
 from src.utils import (
-    DEVICE, ENV_NAME, NUM_STACK, _init_env_fn_sb3, CHECKPOINTS_DIR, LOGS_DIR
+    DEVICE, ENV_NAME, NUM_STACK, _init_env_fn_sb3, CHECKPOINTS_DIR, LOGS_DIR, SB3_LOG_DIR
 )
 
 print(f"Using device for main script: {DEVICE}")
 SB3_SAVE_DIR = CHECKPOINTS_DIR / "sb3_checkpoints"
-SB3_LOG_DIR = LOGS_DIR / "sb3_logs"
 SB3_SAVE_DIR.mkdir(parents=True, exist_ok=True)
 SB3_LOG_DIR.mkdir(parents=True, exist_ok=True)
 
