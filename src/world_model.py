@@ -118,7 +118,8 @@ class WorldModelGRU(nn.Module):
         # Predicts the 'done' logit.
         self.done_head = nn.Linear(hidden_dim, 1)
 
-    def forward(self, action: torch.Tensor, prev_hidden_state: torch.Tensor, ground_truth_tokens: torch.Tensor = None):
+    def forward(self, action: torch.Tensor, prev_hidden_state: torch.Tensor, ground_truth_tokens: torch.Tensor = None,
+                teacher_forcing_prob: float = 1.0):
         """
         Performs a single step of the world model prediction autoregressively.
 
@@ -129,6 +130,8 @@ class WorldModelGRU(nn.Module):
             ground_truth_tokens (torch.Tensor, optional): The ground truth tokens of the
                 next state for teacher forcing. Shape: [batch_size, 16].
                 If None, the model uses its own predictions (inference).
+            teacher_forcing_prob (float): The probability of using teacher forcing for each token.
+                                          Defaults to 1.0 (always use teacher forcing if available).
 
         Returns:
             Tuple containing:
@@ -203,9 +206,26 @@ class WorldModelGRU(nn.Module):
             current_logits = self.next_latent_head(last_layer_generation_hidden)
             all_logits.append(current_logits)
 
-            if ground_truth_tokens is not None:  # Teacher forcing
-                next_token_indices = ground_truth_tokens[:, token_idx]
-            else:  # Inference
+            # Scheduled sampling logic
+            if self.training and ground_truth_tokens is not None:
+                # --- Scheduled Sampling (Training Mode) ---
+                # This logic must be graph-compatible for torch.compile.
+
+                # Generate a random tensor for the decision.
+                # Shape: [batch_size, 1] to allow per-item decisions.
+                prob_tensor = torch.rand(batch_size, 1, device=device)
+                use_teacher_force_mask = prob_tensor < teacher_forcing_prob
+
+                # Prepare both branches of the decision.
+                teacher_tokens = ground_truth_tokens[:, token_idx]
+                sampled_tokens = torch.distributions.Categorical(logits=current_logits).sample()
+
+                # Use torch.where to select based on the mask.
+                # The mask is broadcasted to match the token tensor shapes.
+                next_token_indices = torch.where(use_teacher_force_mask.squeeze(-1), teacher_tokens, sampled_tokens)
+            else:
+                # --- Autoregressive Sampling (Inference Mode) ---
+                # Always sample from the model's own predictions.
                 next_token_indices = torch.distributions.Categorical(logits=current_logits).sample()
 
             next_token_embed_raw = self.token_embedding(next_token_indices)

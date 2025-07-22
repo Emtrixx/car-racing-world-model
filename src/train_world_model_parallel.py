@@ -61,6 +61,10 @@ def get_config(name="default"):
             "gru_hidden_dim": GRU_HIDDEN_DIM,  # GRU Hidden Dimension per layer
             "num_gru_layers": GRU_NUM_LAYERS,  # Number of GRU layers
             "dropout_rate": 0.1,  # Dropout rate
+            "ss_start_prob": 1.0,  # Scheduled sampling start probability
+            "ss_end_prob": 0.05,  # Scheduled sampling end probability
+            "ss_decay_steps_ratio": 0.5,  # Ratio of total steps for scheduled sampling decay
+            "ss_start_step_ratio": 0.4,  # Ratio of total steps before starting scheduled sampling
         }
     }
     # test configuration for quick runs
@@ -229,10 +233,10 @@ class GruWorldModelTrainer:
                     ground_truth_reward_t = batch['rewards'][:, t]
                     ground_truth_done_t = batch['dones'][:, t]
 
-                    # For Transformer, block_tf_ratio and block_size are part of its own config,
-                    # not passed dynamically by the trainer loop here.
+                    # For validation, we always use inference mode (no teacher forcing)
+                    # to get a true measure of the model's generative performance.
                     pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
-                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t
+                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t, teacher_forcing_prob=0.0
                     )
 
                     b, h, w, c = pred_logits.shape
@@ -290,6 +294,12 @@ class GruWorldModelTrainer:
         val_freq = self.config.get('val_freq', log_freq * 5)  # val_freq from config
         checkpoint_freq = self.config.get('checkpoint_freq', 5000)
 
+        # Scheduled sampling parameters
+        ss_start_prob = self.config.get('ss_start_prob', 1.0)
+        ss_end_prob = self.config.get('ss_end_prob', 0.0)
+        ss_decay_steps = int(total_train_steps * self.config.get('ss_decay_steps_ratio', 0.5))
+        ss_start_step = int(total_train_steps * self.config.get('ss_start_step_ratio', 0.4))
+
         profiler = None
         if profile:
             print("Profiling enabled. The profiler will start after a few warmup steps.")
@@ -317,6 +327,14 @@ class GruWorldModelTrainer:
             for batch_idx, batch in enumerate(self.train_dataloader):  # Use self.train_dataloader
                 global_step += 1
 
+                # --- Scheduled Sampling ---
+                if global_step < ss_start_step:
+                    teacher_forcing_prob = 1.0
+                else:
+                    # Calculate the decay factor
+                    decay_progress = min(1.0, (global_step - ss_start_step) / ss_decay_steps)
+                    teacher_forcing_prob = ss_start_prob - (ss_start_prob - ss_end_prob) * decay_progress
+
                 for key in batch:
                     batch[key] = batch[key].to(self.device)
 
@@ -337,7 +355,8 @@ class GruWorldModelTrainer:
                     ground_truth_done_t = batch['dones'][:, t]
 
                     pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
-                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t
+                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t,
+                        teacher_forcing_prob=teacher_forcing_prob
                     )
 
                     b, h, w, c = pred_logits.shape
@@ -365,7 +384,8 @@ class GruWorldModelTrainer:
                 # Logging
                 if global_step % log_freq == 0:
                     print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
-                          f"Train Total Loss: {total_loss.item():.4f} | "  # Clarified Train
+                          f"TF Prob: {teacher_forcing_prob:.3f} | "
+                          f"Train Total Loss: {total_loss.item():.4f} | "
                           f"Train Token Loss: {avg_token_loss.item():.4f} | "
                           f"Train Reward Loss: {avg_reward_loss.item():.4f} | "
                           f"Train Done Loss: {avg_done_loss.item():.4f}")
