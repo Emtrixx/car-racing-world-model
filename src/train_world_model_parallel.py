@@ -136,8 +136,6 @@ class SequenceDataset(Dataset):
         end = start + self.sequence_length
 
         # Slice each tensor to get the data for the full sequence.
-        # We don't need to return 'is_first_steps' as the training loop
-        # for the GRU resets the hidden state for each new sequence.
         return {
             'actions': self.data['actions'][start:end],
             'rewards': self.data['rewards'][start:end],

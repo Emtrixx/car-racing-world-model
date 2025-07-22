@@ -1,3 +1,4 @@
+import argparse
 import time
 from collections import deque
 from pathlib import Path
@@ -40,6 +41,7 @@ def dream_with_history(
         history_length: int,
         num_steps: int,
         num_stack: int = 4,
+        deterministic: bool = False,
         device=torch.device("cpu"),
 ):
     """
@@ -78,7 +80,7 @@ def dream_with_history(
 
             # --- Get Action ---
             # The action for the *current* step is based on the *current* agent buffer
-            current_action, _ = ppo_agent.predict(np.array(agent_frame_buffer), deterministic=True)
+            current_action, _ = ppo_agent.predict(np.array(agent_frame_buffer), deterministic=False)
             current_action_tensor = torch.tensor(current_action, device=device).float()
 
             # Add the current action to its history. This action corresponds to the last token in token_history
@@ -94,11 +96,19 @@ def dream_with_history(
                 action_history_tensor, token_history_tensor
             )
 
-            # --- Decode to a Frame ---
-            tokens_for_decoding = generated_tokens.squeeze(0)  # [num_tokens]
+            # --- Sample Tokens ---
             b, h, w, c = pred_logits.shape
-            quantized_vectors = vq_vae.vq_layer.embeddings[tokens_for_decoding]
-            quantized_grid = quantized_vectors.view(h, w, -1)
+            if deterministic:
+                generated_tokens = generated_tokens.squeeze(0)  # [num_tokens]
+            else:
+                # Reshape for sampling: from [b, h, w, num_embeddings] to [b*h*w, num_embeddings]
+                pred_probs = torch.softmax(pred_logits.view(-1, c), dim=-1)
+                # Sample one token for each position
+                generated_tokens = torch.multinomial(pred_probs, num_samples=1).squeeze(1)  # Shape: [b*h*w]
+
+            # --- Decode to a Frame ---
+            quantized_vectors = vq_vae.vq_layer.embeddings[generated_tokens].to(device)
+            quantized_grid = quantized_vectors.view(h, w, -1)  # Reshape back to a grid
             quantized_grid_permuted = quantized_grid.permute(2, 0, 1).unsqueeze(0)
             decoded_image = vq_vae.decoder(quantized_grid_permuted)
 
@@ -124,8 +134,14 @@ def dream_with_history(
 
 
 if __name__ == '__main__':
+    parser = argparse.ArgumentParser(description="Dream with a World Model using a Transformer architecture.")
+    parser.add_argument('--deterministic', action='store_true',
+                        help="Run dreaming in deterministic mode (default: False)")
+    args = parser.parse_args()
+    print(f"Running in {'deterministic' if args.deterministic else 'stochastic'} mode.")
+
     # --- Configuration ---
-    DREAM_STEPS = 1000
+    DREAM_STEPS = 300
     HISTORY_LEN = 16  # Must match the history length the model was trained with
 
     # --- Load Models ---
@@ -150,7 +166,7 @@ if __name__ == '__main__':
     # Compile the model to match the state_dict keys
     print("Compiling World Model...")
     world_model = torch.compile(world_model)
-    
+
     # Load your trained world model checkpoint
     if Path(WM_CHECKPOINT_FILENAME_TRANSFORMER).exists():
         world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_TRANSFORMER, map_location=DEVICE))
@@ -169,6 +185,7 @@ if __name__ == '__main__':
         history_length=HISTORY_LEN,
         num_steps=DREAM_STEPS,
         num_stack=NUM_STACK,
+        deterministic=args.deterministic,
         device=DEVICE,
     )
 
