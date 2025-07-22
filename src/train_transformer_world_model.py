@@ -226,9 +226,9 @@ class WorldModelTransformerTrainer:
         profiler = None
         if profile:
             print("Profiling enabled. The profiler will start after a few warmup steps.")
-            log_dir = self.logger.log_dir if self.logger else LOGS_DIR / "profiler_logs"
-            run_name = self.logger.experiment_name if self.logger and self.logger.experiment_name else f"run_{int(time.time())}"
-            trace_dir = Path(log_dir) / run_name / "profile"
+            log_dir = LOGS_DIR / "transformer_wm_profiler"
+            run_name = f"run_{int(time.time())}"
+            trace_dir = Path(log_dir) / run_name
             trace_dir.mkdir(parents=True, exist_ok=True)
             print(f"Profiler traces will be saved to: {trace_dir}")
 
