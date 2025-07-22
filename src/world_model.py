@@ -9,35 +9,62 @@ GRU_NUM_LAYERS = 3  # Default number of GRU layers
 
 
 # --- Positional Encoding ---
-class PositionalEncoding(nn.Module):
-    def __init__(self, d_model: int, max_len: int = 5000):
+class PositionalEncoding2D(nn.Module):
+    """
+    Generates 2D positional encodings for a grid.
+    It creates separate encodings for row (y) and column (x) positions
+    and concatenates them.
+    """
+
+    def __init__(self, d_model: int, grid_size: int):
         super().__init__()
+        if d_model % 2 != 0:
+            raise ValueError(f"d_model must be an even number, but got {d_model}")
+
         self.d_model = d_model
-        position = torch.arange(max_len).unsqueeze(1)
-        div_term = torch.exp(torch.arange(0, d_model, 2) * (-math.log(10000.0) / d_model))
-        pe = torch.zeros(1, max_len, d_model)
-        pe[0, :, 0::2] = torch.sin(position * div_term)
-        pe[0, :, 1::2] = torch.cos(position * div_term)
-        self.register_buffer('pe', pe)
+        self.grid_size = grid_size
+        d_model_half = d_model // 2
+
+        # 1D positional encoding logic
+        def get_1d_pe(max_len, dim):
+            position = torch.arange(max_len).unsqueeze(1)
+            div_term = torch.exp(torch.arange(0, dim, 2) * (-math.log(10000.0) / dim))
+            pe = torch.zeros(max_len, dim)
+            pe[:, 0::2] = torch.sin(position * div_term)
+            pe[:, 1::2] = torch.cos(position * div_term)
+            return pe
+
+        pe_y = get_1d_pe(grid_size, d_model_half)  # Row encodings
+        pe_x = get_1d_pe(grid_size, d_model_half)  # Column encodings
+
+        # Create the full 2D positional encoding grid
+        # Shape: [grid_size * grid_size, d_model]
+        pe_2d_grid = torch.zeros(grid_size * grid_size, d_model)
+        for r in range(grid_size):
+            for c in range(grid_size):
+                idx = r * grid_size + c
+                pe_2d_grid[idx, :] = torch.cat([pe_y[r], pe_x[c]], dim=-1)
+
+        # Add a zero-vector for the start token at position 0
+        pe = torch.cat([torch.zeros(1, d_model), pe_2d_grid], dim=0)
+
+        # Reshape to [1, max_len, d_model] for broadcasting
+        self.register_buffer('pe', pe.unsqueeze(0))
 
     def forward(self, x: torch.Tensor, position_index: int) -> torch.Tensor:
         """
         Adds positional encoding to the input tensor.
 
         Args:
-            x (torch.Tensor): Input tensor of shape [batch_size, 1, d_model]
-            position_index (int): The index of the position to add encoding for.
+            x (torch.Tensor): Input tensor of shape [batch_size, 1, d_model].
+            position_index (int): The index of the position (0 for start token, 1 to num_tokens).
 
         Returns:
-            torch.Tensor: Tensor with added positional encoding, shape [batch_size, 1, d_model]
+            torch.Tensor: Tensor with added positional encoding.
         """
-        # self.pe is [1, max_len, d_model]
-        # We need to select the encoding for the specific position_index
-        # and add it to x. x is [batch_size, 1, d_model]
-        # self.pe[:, position_index:position_index+1, :] gives [1, 1, d_model]
         if position_index >= self.pe.size(1):
             raise IndexError(f"Position index {position_index} is out of range for "
-                             f"max_len {self.pe.size(1)} in PositionalEncoding.")
+                             f"max_len {self.pe.size(1)} in PositionalEncoding2D.")
         return x + self.pe[:, position_index:position_index + 1, :]
 
 
@@ -99,9 +126,7 @@ class WorldModelGRU(nn.Module):
         self.start_token_embed = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
         # --- Positional Encoding ---
-        # +1 for the start token in the sequence
-        self.pos_encoder = PositionalEncoding(hidden_dim, self.num_tokens + 1)
-
+        self.pos_encoder = PositionalEncoding2D(hidden_dim, self.grid_size)
         # --- Recurrent Core ---
         self.grus = nn.ModuleList()
         # First GRU layer takes the projected action or token embedding as input
