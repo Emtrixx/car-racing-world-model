@@ -134,13 +134,6 @@ class WorldModelTransformer(nn.Module):
         memory = self.pos_encoder(memory)
         memory = self.dropout(memory)
 
-        # Predict reward and done from the context of the *last action* in the sequence
-        # The last action provides the most recent context for immediate outcomes.
-        # The vector for the last action is at the end of the `memory` sequence.
-        last_action_context_vector = memory[:, -1, :]  # [B, embed_dim]
-        predicted_reward = self.reward_head(last_action_context_vector)
-        predicted_done = self.done_head(last_action_context_vector)
-
         # Predict Next State Tokens in Parallel (BTF mechanism)
         # The decoder input (queries) remains the same.
         # [1, num_tokens, embed_dim] -> [B, num_tokens, embed_dim]
@@ -155,6 +148,11 @@ class WorldModelTransformer(nn.Module):
             memory=memory,
             tgt_mask=None,  # No mask needed for parallel decoding queries
         )
+
+        # The reward and done predictions are based on the last output of the decoder
+        # [B, num_tokens, embed_dim] -> [B, 1]
+        predicted_reward = self.reward_head(decoder_output[:, -1, :])  # Last token's output
+        predicted_done = self.done_head(decoder_output[:, -1, :])  # Last token's output
 
         # Get logits for all next-state tokens at once
         # [B, num_tokens, codebook_size]
