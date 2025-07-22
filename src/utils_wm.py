@@ -50,7 +50,7 @@ class TransformerWorldModelDataCollector:
 
         return encoding_indices_out.view(1, -1)  # Flatten to [1, 16]
 
-    def collect_steps(self, num_steps: int):
+    def collect_steps(self, num_steps: int, display_progress=True):
         """Runs the PPO agent in the environment for a given number of steps."""
         print(f"Collecting {num_steps} steps of experience...")
         obs, _ = self.env.reset()
@@ -59,7 +59,11 @@ class TransformerWorldModelDataCollector:
         # We need the initial state's tokens to start the buffer correctly.
         prev_tokens = self.get_vq_indices(obs[-1])
 
-        for step in tqdm(range(num_steps), desc="Collecting Steps"):
+        step_iterator = range(num_steps)
+        if display_progress:
+            step_iterator = tqdm(step_iterator, desc="Collecting Transformer Steps")
+
+        for step in step_iterator:
             action, _ = self.ppo_agent.predict(obs, deterministic=False)
             next_obs, reward, done, truncated, info = self.env.step(action)
             next_tokens = self.get_vq_indices(next_obs[-1])
@@ -93,8 +97,9 @@ def transformer_collect_sequences_worker(worker_id, num_steps_to_collect, env_na
         vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=device_str))
         vq_vae.eval()
 
+        show_progress = (worker_id == 0)
         collector = TransformerWorldModelDataCollector(env, ppo_agent, vq_vae, device_str)
-        collector.collect_steps(num_steps=num_steps_to_collect)
+        collector.collect_steps(num_steps=num_steps_to_collect, display_progress=show_progress)
         env.close()
 
         print(f"[Worker {worker_id}] Finished. Collected {len(collector.replay_buffer)} transitions.")
@@ -195,7 +200,7 @@ class GruWorldModelDataCollector:
 
         return encoding_indices_out.view(1, -1)  # Flatten to [1, 16]
 
-    def collect_steps(self, num_steps: int):
+    def collect_steps(self, num_steps: int, display_progress=True):
         """
         Runs the PPO agent in the environment for a given number of steps.
 
@@ -206,7 +211,11 @@ class GruWorldModelDataCollector:
         obs, _ = self.env.reset()
         is_first_step_in_episode = True
 
-        for step in tqdm(range(num_steps), desc="Collecting GRU Steps"):
+        step_iterator = range(num_steps)
+        if display_progress:
+            step_iterator = tqdm(step_iterator, desc="Collecting GRU Steps")
+
+        for step in step_iterator:
             # Get action from the pretrained PPO agent
             action, _ = self.ppo_agent.predict(obs, deterministic=False)
 
@@ -232,7 +241,6 @@ class GruWorldModelDataCollector:
             if done or truncated:
                 obs, _ = self.env.reset()
                 is_first_step_in_episode = True
-                tqdm.write(f"Episode finished. Buffer size: {len(self.replay_buffer)}")
 
         print(f"Collection complete. Final buffer size: {len(self.replay_buffer)}")
 
@@ -266,8 +274,9 @@ def gru_collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_
         vq_vae.eval()
 
         # --- Prepare for Data Collection ---
+        show_progress = (worker_id == 0)  # Only show progress bar for the first worker
         collector = GruWorldModelDataCollector(env, ppo_agent, vq_vae, device_str_for_worker)
-        collector.collect_steps(num_steps=num_steps_to_collect_by_worker)
+        collector.collect_steps(num_steps=num_steps_to_collect_by_worker, display_progress=show_progress)
 
         env.close()
         print(
