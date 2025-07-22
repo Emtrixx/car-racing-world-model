@@ -301,9 +301,9 @@ class GruWorldModelTrainer:
         profiler = None
         if profile:
             print("Profiling enabled. The profiler will start after a few warmup steps.")
-            log_dir = LOGS_DIR / "gru_wm_logs"
+            log_dir = LOGS_DIR / "gru_wm_profiler"
             run_name = f"run_{int(time.time())}"
-            trace_dir = Path(log_dir) / run_name / "profile"
+            trace_dir = Path(log_dir) / run_name
             trace_dir.mkdir(parents=True, exist_ok=True)
             print(f"Profiler traces will be saved to: {trace_dir}")
 
