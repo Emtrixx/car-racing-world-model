@@ -2,6 +2,7 @@ import os
 import pathlib
 
 import gymnasium as gym
+import imageio
 import numpy as np
 import torch
 from huggingface_sb3 import load_from_hub
@@ -11,6 +12,7 @@ from torch.utils.data import Dataset
 from tqdm import tqdm
 
 from src.utils import preprocess_observation, IMAGES_DIR, DATA_DIR
+from src.vq_conv_vae import VQVAE
 
 
 # --- Dataset Class ---
@@ -219,3 +221,36 @@ if __name__ == '__main__':
         random_frame_index = np.random.randint(0, len(loaded_frames))
         # Display the 100th frame from the loaded dataset
         visualize_single_frame(loaded_frames[random_frame_index], title=f"Sample Frame {random_frame_index + 1}")
+
+
+def get_first_frame(image_path: str, vq_vae: VQVAE, device) -> torch.Tensor:
+    """
+    Loads an image, encodes it, and uses it to prime the world model's state.
+
+    Args:
+        image_path (str): Path to the pre-processed sample image.
+        vq_vae (VQVAE): The trained VQ-VAE.
+        device: The torch device.
+
+    Returns:
+        first_frame_tensor (torch.Tensor): The first frame tensor after VQ-VAE encoding.
+    """
+    print(f"Initializing dream from image: {image_path}")
+    frame_np = imageio.imread(image_path)
+    frame_tensor = torch.tensor(frame_np, dtype=torch.float32, device=device) / 255.0
+
+    # Adjust for grayscale or RGB images
+    if len(frame_tensor.shape) == 2:  # Grayscale
+        frame_tensor = frame_tensor.unsqueeze(0)  # Add channel dimension
+    elif len(frame_tensor.shape) == 3 and frame_tensor.shape[-1] == 3:  # RGB
+        frame_tensor = frame_tensor.permute(2, 0, 1)  # Convert HWC to CHW
+    frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dimension
+
+    with torch.no_grad():
+        first_frame_tensor, _, _, indices, _, _ = vq_vae(frame_tensor)
+
+    first_frame_tensor = first_frame_tensor.squeeze(0)  # Remove batch dimension
+    first_frame_tensor = first_frame_tensor.permute(1, 2, 0)  # Convert back to HWC
+    first_frame_tensor = first_frame_tensor.cpu().numpy()  # Convert to numpy array
+    first_frame_tensor = first_frame_tensor.astype(np.float32)  # Ensure float32 dtype
+    return first_frame_tensor  # Return as numpy array
