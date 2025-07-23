@@ -143,7 +143,8 @@ class WorldModelGRU(nn.Module):
         # Predicts the 'done' logit.
         self.done_head = nn.Linear(hidden_dim, 1)
 
-    def forward(self, action: torch.Tensor, prev_hidden_state: torch.Tensor, ground_truth_tokens: torch.Tensor = None,
+    def forward(self, action: torch.Tensor, prev_hidden_state: torch.Tensor,
+                ground_truth_tokens: torch.Tensor = None,
                 teacher_forcing_prob: float = 1.0):
         """
         Performs a single step of the world model prediction autoregressively.
@@ -175,27 +176,20 @@ class WorldModelGRU(nn.Module):
         action_embed = self.dropout(action_embed_raw)  # Dropout after action embedding
 
         current_input = action_embed
-        next_hidden_layers_t = []
+        prior_hidden_layers = []
         for i in range(self.num_gru_layers):
             h_next_layer = self.grus[i](current_input, prev_hidden_state[i])
             if i < self.num_gru_layers - 1:  # Apply dropout between GRU layers
                 current_input = self.dropout(h_next_layer)
             else:  # No dropout after the last GRU layer's output if it goes to heads
                 current_input = h_next_layer
-            next_hidden_layers_t.append(h_next_layer)  # Store original output for hidden state stack
+            prior_hidden_layers.append(h_next_layer)  # Store original output for hidden state stack
 
-        transition_hidden_state_stack = torch.stack(next_hidden_layers_t)
-        last_layer_transition_hidden_raw = transition_hidden_state_stack[-1]
-        # Dropout before prediction heads
-        last_layer_transition_hidden = self.dropout(last_layer_transition_hidden_raw)
+        prior_hidden_state = torch.stack(prior_hidden_layers)
 
-        # --- Predict Immediate Outcomes ---
-        predicted_reward = self.reward_head(last_layer_transition_hidden)
-        predicted_done_logits = self.done_head(last_layer_transition_hidden)
-
-        # --- Autoregressive Generation Step ---
-        all_logits = []
-        generation_hidden_state_stack = transition_hidden_state_stack  # Start with hidden state from transition
+        # --- Update Step (Correction using Observation) ---
+        all_reconstruction_logits = []
+        posterior_hidden_state = prior_hidden_state
 
         # --- Autoregressive Generation with Start Token and Positional Encoding ---
         current_pos_idx = 0
@@ -210,26 +204,22 @@ class WorldModelGRU(nn.Module):
         current_pos_idx += 1
 
         for token_idx in range(self.num_tokens):  # Loop to generate self.num_tokens
-            current_gru_input_for_stack = prev_token_embed_projected  # Input to the first GRU layer
-            next_hidden_layers_g = []
+            # The input to the GRU is the previous ground-truth token from the observation
+            current_gru_input_for_stack = prev_token_embed_projected
+            next_hidden_layers = []
 
             for l_idx in range(self.num_gru_layers):
-                h_prev_layer_g = generation_hidden_state_stack[l_idx]
-                h_next_layer_g = self.grus[l_idx](current_gru_input_for_stack, h_prev_layer_g)
+                h_prev = posterior_hidden_state[l_idx]
+                h_next = self.grus[l_idx](current_gru_input_for_stack, h_prev)
+                current_gru_input_for_stack = self.dropout(h_next) if l_idx < self.num_gru_layers - 1 else h_next
+                next_hidden_layers.append(h_next)
 
-                if l_idx < self.num_gru_layers - 1:  # Apply dropout between GRU layers
-                    current_gru_input_for_stack = self.dropout(h_next_layer_g)
-                else:  # No dropout after the last GRU layer's output if it goes to heads
-                    current_gru_input_for_stack = h_next_layer_g
-                next_hidden_layers_g.append(h_next_layer_g)  # Store original output
+            posterior_hidden_state = torch.stack(next_hidden_layers)
+            last_layer_hidden_for_head = self.dropout(posterior_hidden_state[-1])
 
-            generation_hidden_state_stack = torch.stack(next_hidden_layers_g)
-            last_layer_generation_hidden_raw = generation_hidden_state_stack[-1]
-            # Dropout before the latent prediction head
-            last_layer_generation_hidden = self.dropout(last_layer_generation_hidden_raw)
-
-            current_logits = self.next_latent_head(last_layer_generation_hidden)
-            all_logits.append(current_logits)
+            # Use the updated hidden state to predict the token (for reconstruction loss)
+            logits = self.reconstruction_head(last_layer_hidden_for_head)
+            all_reconstruction_logits.append(logits)
 
             # Scheduled sampling logic
             if self.training and ground_truth_tokens is not None:
@@ -243,7 +233,7 @@ class WorldModelGRU(nn.Module):
 
                 # Prepare both branches of the decision.
                 teacher_tokens = ground_truth_tokens[:, token_idx]
-                sampled_tokens = torch.distributions.Categorical(logits=current_logits).sample()
+                sampled_tokens = torch.distributions.Categorical(logits=logits).sample()
 
                 # Use torch.where to select based on the mask.
                 # The mask is broadcasted to match the token tensor shapes.
@@ -251,7 +241,7 @@ class WorldModelGRU(nn.Module):
             else:
                 # --- Autoregressive Sampling (Inference Mode) ---
                 # Always sample from the model's own predictions.
-                next_token_indices = torch.distributions.Categorical(logits=current_logits).sample()
+                next_token_indices = torch.distributions.Categorical(logits=logits).sample()
 
             next_token_embed_raw = self.token_embedding(next_token_indices)
             # next_token_embed_projected_raw is [batch_size, hidden_dim]
@@ -265,14 +255,20 @@ class WorldModelGRU(nn.Module):
             prev_token_embed_projected = self.dropout(next_token_embed_with_pe.squeeze(1))
             current_pos_idx += 1
 
-        predicted_latent_logits_flat = torch.stack(all_logits, dim=1)
-        predicted_latent_logits = predicted_latent_logits_flat.view(
+        # --- Generate Predictions from final state ---
+        # All predictions are based on the final, corrected posterior state.
+        final_hidden_state = posterior_hidden_state
+        last_layer_final_hidden = self.dropout(final_hidden_state[-1])
+
+        predicted_reward = self.reward_head(last_layer_final_hidden)
+        predicted_done_logits = self.done_head(last_layer_final_hidden)
+
+        reconstructed_logits_flat = torch.stack(all_reconstruction_logits, dim=1)
+        reconstructed_logits = reconstructed_logits_flat.view(
             batch_size, self.grid_size, self.grid_size, self.codebook_size
         )
 
-        final_hidden_state_stack = generation_hidden_state_stack
-
-        return predicted_latent_logits, predicted_reward, predicted_done_logits, final_hidden_state_stack
+        return reconstructed_logits, predicted_reward, predicted_done_logits, final_hidden_state
 
     def get_initial_hidden_state(self, batch_size: int, device: torch.device) -> torch.Tensor:
         """Helper function to get a zero-initialized hidden state for all GRU layers."""
@@ -370,6 +366,9 @@ if __name__ == '__main__':
     hidden_state_dummy = world_model_example.get_initial_hidden_state(BATCH_SIZE, DEVICE_EXAMPLE)
     print(f"Initial hidden_state_dummy shape: {hidden_state_dummy.shape}")
 
+    # Dummy tokens for current observation
+    current_obs_tokens_dummy = torch.randint(0, CODEBOOK_SIZE_EXAMPLE,
+                                             (BATCH_SIZE, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE)).to(DEVICE_EXAMPLE)
     # For teacher forcing during training
     ground_truth_tokens_dummy = torch.randint(0, CODEBOOK_SIZE_EXAMPLE,
                                               (BATCH_SIZE, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE)).to(DEVICE_EXAMPLE)
@@ -377,7 +376,10 @@ if __name__ == '__main__':
     # --- Perform a Forward Pass (Training with Teacher Forcing) ---
     print("\n--- Running in Training Mode (Teacher Forcing) ---")
     predicted_logits, reward, done_logits, next_hidden_stack = world_model_example(
-        action_dummy, hidden_state_dummy, ground_truth_tokens=ground_truth_tokens_dummy
+        action_dummy,
+        hidden_state_dummy,
+        current_obs_tokens_dummy,
+        ground_truth_tokens=ground_truth_tokens_dummy
     )
     print(f"Predicted Logits Shape: {predicted_logits.shape}")  # Should be [B, G, G, Codebook]
     print(f"Predicted Reward Shape:  {reward.shape}")  # Should be [B, 1]
@@ -387,6 +389,9 @@ if __name__ == '__main__':
     # --- Perform a Forward Pass (Inference without Teacher Forcing) ---
     print("\n--- Running in Inference Mode ---")
     predicted_logits_inf, _, _, _ = world_model_example(
-        action_dummy, hidden_state_dummy, ground_truth_tokens=None
+        action_dummy,
+        hidden_state_dummy,
+        current_obs_tokens_dummy,
+        ground_truth_tokens=None
     )
     print(f"Predicted Logits Shape (Inference): {predicted_logits_inf.shape}")
