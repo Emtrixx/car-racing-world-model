@@ -63,8 +63,8 @@ def get_config(name="default"):
             "dropout_rate": 0.1,  # Dropout rate
             "ss_start_prob": 1.0,  # Scheduled sampling start probability
             "ss_end_prob": 0.05,  # Scheduled sampling end probability
-            "ss_decay_steps_ratio": 0.5,  # Ratio of total steps for scheduled sampling decay
-            "ss_start_step_ratio": 0.4,  # Ratio of total steps before starting scheduled sampling
+            "ss_decay_steps_ratio": 0.8,  # Ratio of total steps for scheduled sampling decay
+            "ss_start_step_ratio": 0.1,  # Ratio of total steps before starting scheduled sampling
         }
     }
     # test configuration for quick runs
