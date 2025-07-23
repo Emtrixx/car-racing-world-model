@@ -18,8 +18,9 @@ from src.utils import (
     SB3_LOG_DIR,
     VQ_VAE_CHECKPOINT_BEST_FILENAME,
     WM_CHECKPOINT_FILENAME_GRU,
-    DATA_DIR, get_first_frame, FrameStackWrapper, WM_CHECKPOINT_FILENAME_TRANSFORMER,
+    DATA_DIR, FrameStackWrapper, WM_CHECKPOINT_FILENAME_TRANSFORMER,
 )
+from utils_vae import get_first_frame
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM
 from src.world_model import WorldModelGRU
 from src.utils import NUM_STACK, ACTION_DIM

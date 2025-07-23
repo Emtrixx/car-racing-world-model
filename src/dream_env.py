@@ -46,9 +46,7 @@ class GruDreamEnv(gym.Env):
         # Flatten to [num_tokens] and add batch dim to get [1, num_tokens]
         tokens_for_encoding = self.current_latent_codes.flatten().unsqueeze(0)
 
-        self.hidden_state = self.world_model.get_initial_hidden_state(1, DEVICE)
-        self.hidden_state = self.world_model.encode_observation(tokens_for_encoding,
-                                                                self.hidden_state)
+        self.hidden_state = self.world_model.encode_observation(tokens_for_encoding)
 
         obs = self._decode_latent_to_obs(self.current_latent_codes)
         return obs, {}

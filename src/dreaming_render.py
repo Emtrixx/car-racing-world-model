@@ -93,7 +93,7 @@ def get_starting_state_from_sequence(image_paths: List[str],
 
             dummy_action = torch.zeros(1, world_model.action_embedding.in_features, device=device)
             _, _, _, hidden_state = world_model(
-                dummy_action, hidden_state, ground_truth_tokens=indices
+                dummy_action, hidden_state, ground_truth_next_tokens=indices
             )
     return hidden_state, None, last_frame_reconstruction
 
@@ -143,7 +143,7 @@ def dream_gru(world_model: WorldModelGRU,
             action_tensor = torch.tensor(action, device=device).float().unsqueeze(0)
 
             pred_logits, pred_reward, _, next_hidden_state = world_model(action_tensor, hidden_state,
-                                                                         ground_truth_tokens=None)
+                                                                         ground_truth_next_tokens=None)
 
             b, h, w, c = pred_logits.shape
             logits_flat = pred_logits.reshape(b, h * w, c)

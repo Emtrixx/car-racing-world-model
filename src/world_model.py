@@ -71,13 +71,8 @@ class PositionalEncoding2D(nn.Module):
 # --- GRU-based World Model (Autoregressive Version) ---
 class WorldModelGRU(nn.Module):
     """
-    An autoregressive GRU-based world model.
-
-    This model performs two main steps:
-    1. A 'transition' step where the action updates the hidden state, which is then
-       used to predict the immediate reward and done flag.
-    2. An 'autoregressive generation' step where it predicts the latent
-       feature map one token at a time as recurrent steps.
+    A hierarchical GRU-based world model with a probabilistic temporal state
+    and a deterministic spatial generation model.
     """
 
     def __init__(
@@ -110,7 +105,7 @@ class WorldModelGRU(nn.Module):
         self.num_gru_layers = num_gru_layers
         self.dropout_rate = dropout_rate
 
-        # --- Dropout Layer ---
+        # --- Input Processing & Embeddings ---
         self.dropout = nn.Dropout(dropout_rate)
 
         # --- Input Processing Layers ---
@@ -126,103 +121,109 @@ class WorldModelGRU(nn.Module):
         self.start_token_embed = nn.Parameter(torch.randn(1, 1, hidden_dim))
 
         # --- Positional Encoding ---
-        self.pos_encoder = PositionalEncoding2D(hidden_dim, self.grid_size)
-        # --- Recurrent Core ---
-        self.grus = nn.ModuleList()
-        # First GRU layer takes the projected action or token embedding as input
-        self.grus.append(nn.GRUCell(hidden_dim, hidden_dim))
-        # Subsequent GRU layers take the output of the previous GRU layer as input
-        for _ in range(1, num_gru_layers):
-            self.grus.append(nn.GRUCell(hidden_dim, hidden_dim))
+        self.pos_encoder = PositionalEncoding2D(hidden_dim, grid_size)
 
-        # --- Output Prediction Heads ---
-        # Prediction heads operate on the output of the last GRU layer.
-        self.next_latent_head = nn.Linear(hidden_dim, codebook_size)
-        # Predicts the scalar reward.
+        # --- Hierarchical Recurrent Core ---
+        self.temporal_grus = nn.ModuleList()
+        self.temporal_grus.append(nn.GRUCell(hidden_dim, hidden_dim))
+        for _ in range(1, num_gru_layers):
+            self.temporal_grus.append(nn.GRUCell(hidden_dim, hidden_dim))
+
+        self.spatial_grus = nn.ModuleList()
+        self.spatial_grus.append(nn.GRUCell(hidden_dim, hidden_dim))
+        for _ in range(1, num_gru_layers):
+            self.spatial_grus.append(nn.GRUCell(hidden_dim, hidden_dim))
+
+        # --- Prediction Heads ---
+        # This head predicts the parameters for the temporal state's distribution
+        self.temporal_dist_head = nn.Linear(hidden_dim, hidden_dim * 2)
+
+        self.token_prediction_head = nn.Linear(hidden_dim, codebook_size)
         self.reward_head = nn.Linear(hidden_dim, 1)
-        # Predicts the 'done' logit.
         self.done_head = nn.Linear(hidden_dim, 1)
 
-    def forward(self, action: torch.Tensor, prev_hidden_state: torch.Tensor,
-                ground_truth_tokens: torch.Tensor = None,
+    def forward(self,
+                action: torch.Tensor,
+                prev_temporal_hidden: torch.Tensor,
+                ground_truth_next_tokens: torch.Tensor = None,
                 teacher_forcing_prob: float = 1.0):
         """
-        Performs a single step of the world model prediction autoregressively.
+        Predicts the next state using a hierarchical and probabilistic GRU structure.
 
         Args:
-            action (torch.Tensor): The action taken. Shape: [batch_size, action_dim]
-            prev_hidden_state (torch.Tensor): The previous hidden states of the GRUs.
-                                              Shape: [num_gru_layers, batch_size, hidden_dim]
-            ground_truth_tokens (torch.Tensor, optional): The ground truth tokens of the
-                next state for teacher forcing. Shape: [batch_size, 16].
-                If None, the model uses its own predictions (inference).
-            teacher_forcing_prob (float): The probability of using teacher forcing for each token.
-                                          Defaults to 1.0 (always use teacher forcing if available).
+            action (torch.Tensor): Action taken, a_t.
+            prev_temporal_hidden (torch.Tensor): High-level hidden state from the previous step, h_{t-1}.
+            ground_truth_next_tokens (torch.Tensor, optional): Ground truth tokens for s_{t+1}.
+            teacher_forcing_prob (float): Probability for scheduled sampling.
 
         Returns:
-            Tuple containing:
-            - predicted_latent_logits (torch.Tensor): Logits for the next latent grid.
-              Shape: [batch_size, grid_size, grid_size, codebook_size]
-            - predicted_reward (torch.Tensor): The predicted scalar reward.
-            - predicted_done_logits (torch.Tensor): The predicted done logit.
-            - final_hidden_state (torch.Tensor): The final GRU hidden state after generation.
+            Tuple of (predicted_logits, predicted_reward, predicted_done_logits, final_temporal_hidden)
         """
         batch_size = action.size(0)
         device = action.device
 
-        # --- Transition Step ---
-        # Use the action to update the hidden state. This new state summarizes the transition.
-        action_embed_raw = self.action_embedding(action)
-        action_embed = self.dropout(action_embed_raw)  # Dropout after action embedding
+        # --- Deterministic Temporal Update (Outer GRU) ---
+        # Update the high-level state based on the action.
+        action_embed = self.dropout(self.action_embedding(action))
 
-        current_input = action_embed
-        prior_hidden_layers = []
+        current_temporal_input = action_embed
+        next_temporal_hidden_layers = []
         for i in range(self.num_gru_layers):
-            h_next_layer = self.grus[i](current_input, prev_hidden_state[i])
-            if i < self.num_gru_layers - 1:  # Apply dropout between GRU layers
-                current_input = self.dropout(h_next_layer)
-            else:  # No dropout after the last GRU layer's output if it goes to heads
-                current_input = h_next_layer
-            prior_hidden_layers.append(h_next_layer)  # Store original output for hidden state stack
+            h_next = self.temporal_grus[i](current_temporal_input, prev_temporal_hidden[i])
+            current_temporal_input = self.dropout(h_next) if i < self.num_gru_layers - 1 else h_next
+            next_temporal_hidden_layers.append(h_next)
 
-        prior_hidden_state = torch.stack(prior_hidden_layers)
+        # The output of the last GRU layer is used to parameterize the distribution
+        last_layer_deterministic_hidden = next_temporal_hidden_layers[-1]
 
-        # --- Update Step (Correction using Observation) ---
-        all_reconstruction_logits = []
-        posterior_hidden_state = prior_hidden_state
+        # --- 2. Stochastic Temporal State Sampling ---
+        mean, log_var = self.temporal_dist_head(last_layer_deterministic_hidden).chunk(2, dim=-1)
+        log_var = torch.tanh(log_var)  # Constrain variance for stability
+        temporal_distribution = torch.distributions.Normal(mean, torch.exp(0.5 * log_var))
+        stochastic_temporal_sample = temporal_distribution.rsample()
 
-        # --- Autoregressive Generation with Start Token and Positional Encoding ---
-        current_pos_idx = 0
+        # The full hidden state for the spatial model is built from this sample
+        stochastic_temporal_hidden = stochastic_temporal_sample.unsqueeze(0).expand(self.num_gru_layers, -1, -1)
+        # current_temporal_hidden = torch.stack(next_temporal_hidden_layers)
 
-        # Prepare the start token: expand to batch size, add positional encoding, apply dropout
-        # self.start_token_embed is [1, 1, hidden_dim]
-        # expanded_start_token is [batch_size, 1, hidden_dim]
-        expanded_start_token = self.start_token_embed.expand(batch_size, -1, -1)
-        start_token_with_pe = self.pos_encoder(expanded_start_token, current_pos_idx)
-        # Input to GRU should be [batch_size, hidden_dim]
-        prev_token_embed_projected = self.dropout(start_token_with_pe.squeeze(1))
-        current_pos_idx += 1
+        # --- Predict Immediate Outcomes ---
+        # Reward and done are functions of the high-level abstract state.
+        predicted_reward = self.reward_head(stochastic_temporal_sample)
+        predicted_done_logits = self.done_head(stochastic_temporal_sample)
 
-        for token_idx in range(self.num_tokens):  # Loop to generate self.num_tokens
-            # The input to the GRU is the previous ground-truth token from the observation
-            current_gru_input_for_stack = prev_token_embed_projected
-            next_hidden_layers = []
+        # --- Spatial Generation (Inner GRU) ---
+        # Autoregressively generate the 16 tokens for the next state.
+        all_token_logits = []
 
+        # Initialize the spatial GRU's hidden state with the temporal state.
+        # This conditions the generation on the high-level prediction.
+        spatial_hidden_state = stochastic_temporal_hidden
+
+        # Start generation with the learnable start token
+        current_token_embed = self.dropout(self.start_token_embed.expand(batch_size, -1, -1).squeeze(1))
+
+        for token_idx in range(self.num_tokens):
+            # Add positional encoding to the current token embedding
+            current_token_embed_unsqueezed = current_token_embed.unsqueeze(1)
+            input_with_pe = self.pos_encoder(current_token_embed_unsqueezed, token_idx)
+            current_spatial_input = self.dropout(input_with_pe.squeeze(1))
+
+            next_spatial_hidden_layers = []
             for l_idx in range(self.num_gru_layers):
-                h_prev = posterior_hidden_state[l_idx]
-                h_next = self.grus[l_idx](current_gru_input_for_stack, h_prev)
-                current_gru_input_for_stack = self.dropout(h_next) if l_idx < self.num_gru_layers - 1 else h_next
-                next_hidden_layers.append(h_next)
+                h_prev = spatial_hidden_state[l_idx]
+                h_next = self.spatial_grus[l_idx](current_spatial_input, h_prev)
+                current_spatial_input = self.dropout(h_next) if l_idx < self.num_gru_layers - 1 else h_next
+                next_spatial_hidden_layers.append(h_next)
 
-            posterior_hidden_state = torch.stack(next_hidden_layers)
-            last_layer_hidden_for_head = self.dropout(posterior_hidden_state[-1])
+            spatial_hidden_state = torch.stack(next_spatial_hidden_layers)
 
-            # Use the updated hidden state to predict the token (for reconstruction loss)
-            logits = self.reconstruction_head(last_layer_hidden_for_head)
-            all_reconstruction_logits.append(logits)
+            # Predict the token from the spatial GRU's state
+            last_layer_spatial_hidden = self.dropout(spatial_hidden_state[-1])
+            current_logits = self.token_prediction_head(last_layer_spatial_hidden)
+            all_token_logits.append(current_logits)
 
             # Scheduled sampling logic
-            if self.training and ground_truth_tokens is not None:
+            if self.training and ground_truth_next_tokens is not None:
                 # --- Scheduled Sampling (Training Mode) ---
                 # This logic must be graph-compatible for torch.compile.
 
@@ -232,8 +233,8 @@ class WorldModelGRU(nn.Module):
                 use_teacher_force_mask = prob_tensor < teacher_forcing_prob
 
                 # Prepare both branches of the decision.
-                teacher_tokens = ground_truth_tokens[:, token_idx]
-                sampled_tokens = torch.distributions.Categorical(logits=logits).sample()
+                teacher_tokens = ground_truth_next_tokens[:, token_idx]
+                sampled_tokens = torch.distributions.Categorical(logits=current_logits).sample()
 
                 # Use torch.where to select based on the mask.
                 # The mask is broadcasted to match the token tensor shapes.
@@ -241,93 +242,55 @@ class WorldModelGRU(nn.Module):
             else:
                 # --- Autoregressive Sampling (Inference Mode) ---
                 # Always sample from the model's own predictions.
-                next_token_indices = torch.distributions.Categorical(logits=logits).sample()
+                next_token_indices = torch.distributions.Categorical(logits=current_logits).sample()
 
-            next_token_embed_raw = self.token_embedding(next_token_indices)
-            # next_token_embed_projected_raw is [batch_size, hidden_dim]
-            next_token_embed_projected_raw = self.token_proj(next_token_embed_raw)
+            # Prepare the next input for the spatial GRU
+            current_token_embed = self.dropout(self.token_proj(self.token_embedding(next_token_indices)))
+            # Optional: Add positional encoding to current_token_embed here
 
-            # Add positional encoding to the current token's embedding for the next step's input
-            # Unsqueeze to [batch_size, 1, hidden_dim] for pos_encoder
-            next_token_embed_projected_unsqueezed = next_token_embed_projected_raw.unsqueeze(1)
-            next_token_embed_with_pe = self.pos_encoder(next_token_embed_projected_unsqueezed, current_pos_idx)
-            # Squeeze back to [batch_size, hidden_dim] and apply dropout
-            prev_token_embed_projected = self.dropout(next_token_embed_with_pe.squeeze(1))
-            current_pos_idx += 1
-
-        # --- Generate Predictions from final state ---
-        # All predictions are based on the final, corrected posterior state.
-        final_hidden_state = posterior_hidden_state
-        last_layer_final_hidden = self.dropout(final_hidden_state[-1])
-
-        predicted_reward = self.reward_head(last_layer_final_hidden)
-        predicted_done_logits = self.done_head(last_layer_final_hidden)
-
-        reconstructed_logits_flat = torch.stack(all_reconstruction_logits, dim=1)
-        reconstructed_logits = reconstructed_logits_flat.view(
-            batch_size, self.grid_size, self.grid_size, self.codebook_size
+        predicted_latent_logits = torch.stack(all_token_logits, dim=1).view(
+            batch_size, self.grid_size, self.grid_size, -1
         )
 
-        return reconstructed_logits, predicted_reward, predicted_done_logits, final_hidden_state
+        # The final hidden state that matters for the next *time step* is the temporal one.
+        final_temporal_hidden = stochastic_temporal_hidden
+
+        return predicted_latent_logits, predicted_reward, predicted_done_logits, final_temporal_hidden
 
     def get_initial_hidden_state(self, batch_size: int, device: torch.device) -> torch.Tensor:
-        """Helper function to get a zero-initialized hidden state for all GRU layers."""
-        # Shape: [num_gru_layers, batch_size, hidden_dim]
+        """Helper function to get a zero-initialized hidden state for the temporal GRU."""
         return torch.zeros(self.num_gru_layers, batch_size, self.hidden_dim, device=device)
 
-    def encode_observation(self, tokens: torch.Tensor, prev_hidden_state: torch.Tensor) -> torch.Tensor:
+    def encode_observation(self, observation_tokens: torch.Tensor) -> torch.Tensor:
         """
-        Encodes a sequence of observation tokens into a new hidden state.
-        This is used to "prime" the model with a real starting state.
-
-        Args:
-            tokens (torch.Tensor): The ground truth tokens for the observation.
-                                   Shape: [batch_size, num_tokens]
-            prev_hidden_state (torch.Tensor): The hidden state from the previous step.
-                                              Shape: [num_gru_layers, batch_size, hidden_dim]
-
-        Returns:
-            torch.Tensor: The updated hidden state after processing the tokens.
-                          Shape: [num_gru_layers, batch_size, hidden_dim]
+        Encodes a sequence of real observation tokens into a deterministic hidden state representation.
+        This representation is then used as the input to the temporal model to produce a distribution.
         """
-        batch_size = tokens.size(0)
-        # Start with a learnable token, similar to the generation process
-        current_pos_idx = 0
-        expanded_start_token = self.start_token_embed.expand(batch_size, -1, -1)
-        start_token_with_pe = self.pos_encoder(expanded_start_token, current_pos_idx)
-        prev_token_embed_projected = self.dropout(start_token_with_pe.squeeze(1))
-        current_pos_idx += 1
+        batch_size = observation_tokens.size(0)
+        device = observation_tokens.device
 
-        generation_hidden_state_stack = prev_hidden_state
+        spatial_hidden_state = self.get_initial_hidden_state(batch_size, device)
+        current_token_embed = self.start_token_embed.expand(batch_size, -1, -1).squeeze(1)
 
         for token_idx in range(self.num_tokens):
-            current_gru_input_for_stack = prev_token_embed_projected
-            next_hidden_layers = []
+            current_token_embed_unsqueezed = current_token_embed.unsqueeze(1)
+            input_with_pe = self.pos_encoder(current_token_embed_unsqueezed, token_idx)
+            current_spatial_input = self.dropout(input_with_pe.squeeze(1))
 
+            next_spatial_hidden_layers = []
             for l_idx in range(self.num_gru_layers):
-                h_prev_layer = generation_hidden_state_stack[l_idx]
-                h_next_layer = self.grus[l_idx](current_gru_input_for_stack, h_prev_layer)
+                h_prev = spatial_hidden_state[l_idx]
+                h_next = self.spatial_grus[l_idx](current_spatial_input, h_prev)
+                current_spatial_input = self.dropout(h_next) if l_idx < self.num_gru_layers - 1 else h_next
+                next_spatial_hidden_layers.append(h_next)
 
-                if l_idx < self.num_gru_layers - 1:
-                    current_gru_input_for_stack = self.dropout(h_next_layer)
-                else:
-                    current_gru_input_for_stack = h_next_layer
-                next_hidden_layers.append(h_next_layer)
+            spatial_hidden_state = torch.stack(next_spatial_hidden_layers)
 
-            generation_hidden_state_stack = torch.stack(next_hidden_layers)
+            if token_idx < self.num_tokens - 1:
+                next_token_indices = observation_tokens[:, token_idx + 1]
+                current_token_embed = self.token_proj(self.token_embedding(next_token_indices))
 
-            # Get the next token from the provided ground-truth sequence
-            next_token_indices = tokens[:, token_idx]
-            next_token_embed_raw = self.token_embedding(next_token_indices)
-            next_token_embed_projected_raw = self.token_proj(next_token_embed_raw)
-
-            # Add positional encoding for the next step
-            next_token_embed_projected_unsqueezed = next_token_embed_projected_raw.unsqueeze(1)
-            next_token_embed_with_pe = self.pos_encoder(next_token_embed_projected_unsqueezed, current_pos_idx)
-            prev_token_embed_projected = self.dropout(next_token_embed_with_pe.squeeze(1))
-            current_pos_idx += 1
-
-        return generation_hidden_state_stack
+        return spatial_hidden_state
 
 
 # --- Usage Example ---
@@ -338,9 +301,9 @@ if __name__ == '__main__':
     ACTION_DIM_EXAMPLE = 3
     GRU_HIDDEN_DIM_EXAMPLE = 256  # Per layer
     NUM_GRU_LAYERS_EXAMPLE = 2
-    DROPOUT_RATE_EXAMPLE = 0.1  # Example dropout rate
-    CODEBOOK_SIZE_EXAMPLE = 512
-    GRID_SIZE_EXAMPLE = 4
+    DROPOUT_RATE_EXAMPLE = 0.1
+    CODEBOOK_SIZE_EXAMPLE = VQVAE_NUM_EMBEDDINGS
+    GRID_SIZE_EXAMPLE = GRID_SIZE
     DEVICE_EXAMPLE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     print(
@@ -354,7 +317,7 @@ if __name__ == '__main__':
         codebook_size=CODEBOOK_SIZE_EXAMPLE,
         grid_size=GRID_SIZE_EXAMPLE,
         num_gru_layers=NUM_GRU_LAYERS_EXAMPLE,
-        dropout_rate=DROPOUT_RATE_EXAMPLE  # New parameter
+        dropout_rate=DROPOUT_RATE_EXAMPLE
     ).to(DEVICE_EXAMPLE)
 
     print(f"World Model created on device: {DEVICE_EXAMPLE}")
@@ -362,36 +325,47 @@ if __name__ == '__main__':
 
     # --- Create Dummy Input Data ---
     action_dummy = torch.randn(BATCH_SIZE, ACTION_DIM_EXAMPLE).to(DEVICE_EXAMPLE)
-    # Initial hidden state now has shape [num_layers, batch_size, hidden_dim]
-    hidden_state_dummy = world_model_example.get_initial_hidden_state(BATCH_SIZE, DEVICE_EXAMPLE)
-    print(f"Initial hidden_state_dummy shape: {hidden_state_dummy.shape}")
+    # Initial hidden state for the temporal GRU (e.g., at the start of an episode)
+    initial_hidden_state = world_model_example.get_initial_hidden_state(BATCH_SIZE, DEVICE_EXAMPLE)
+    print(f"Initial hidden_state shape: {initial_hidden_state.shape}")
 
-    # Dummy tokens for current observation
+    # Dummy tokens for a real observation s_t
     current_obs_tokens_dummy = torch.randint(0, CODEBOOK_SIZE_EXAMPLE,
                                              (BATCH_SIZE, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE)).to(DEVICE_EXAMPLE)
-    # For teacher forcing during training
-    ground_truth_tokens_dummy = torch.randint(0, CODEBOOK_SIZE_EXAMPLE,
-                                              (BATCH_SIZE, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE)).to(DEVICE_EXAMPLE)
+    # Ground truth tokens for the next observation s_{t+1} (for teacher forcing)
+    ground_truth_next_tokens_dummy = torch.randint(0, CODEBOOK_SIZE_EXAMPLE,
+                                                   (BATCH_SIZE, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE)).to(
+        DEVICE_EXAMPLE)
+
+    # --- Encode a real observation to get its hidden state representation ---
+    print("\n--- Encoding Observation ---")
+    # This would be used to get the hidden state h_t from observation s_t
+    # which then becomes prev_temporal_hidden for predicting s_{t+1}
+    encoded_hidden_state = world_model_example.encode_observation(current_obs_tokens_dummy)
+    print(f"Encoded hidden state shape: {encoded_hidden_state.shape}")
 
     # --- Perform a Forward Pass (Training with Teacher Forcing) ---
     print("\n--- Running in Training Mode (Teacher Forcing) ---")
-    predicted_logits, reward, done_logits, next_hidden_stack = world_model_example(
-        action_dummy,
-        hidden_state_dummy,
-        current_obs_tokens_dummy,
-        ground_truth_tokens=ground_truth_tokens_dummy
+    # We use the encoded_hidden_state (h_t) and an action (a_t) to predict the next state (s_{t+1})
+    predicted_logits, reward, done_logits, next_hidden_state = world_model_example(
+        action=action_dummy,
+        prev_temporal_hidden=encoded_hidden_state,
+        ground_truth_next_tokens=ground_truth_next_tokens_dummy,
+        teacher_forcing_prob=0.75  # Example probability
     )
     print(f"Predicted Logits Shape: {predicted_logits.shape}")  # Should be [B, G, G, Codebook]
     print(f"Predicted Reward Shape:  {reward.shape}")  # Should be [B, 1]
     print(f"Predicted Done Shape:    {done_logits.shape}")  # Should be [B, 1]
-    print(f"Next Hidden State Stack Shape: {next_hidden_stack.shape}")  # Should be [NumLayers, B, HiddenDim]
+    print(f"Next Hidden State Shape: {next_hidden_state.shape}")  # Should be [NumLayers, B, HiddenDim]
 
     # --- Perform a Forward Pass (Inference without Teacher Forcing) ---
     print("\n--- Running in Inference Mode ---")
-    predicted_logits_inf, _, _, _ = world_model_example(
-        action_dummy,
-        hidden_state_dummy,
-        current_obs_tokens_dummy,
-        ground_truth_tokens=None
-    )
+    world_model_example.eval()  # Set model to evaluation mode
+    with torch.no_grad():
+        predicted_logits_inf, _, _, _ = world_model_example(
+            action=action_dummy,
+            prev_temporal_hidden=encoded_hidden_state,
+            ground_truth_next_tokens=None  # No ground truth provided
+        )
     print(f"Predicted Logits Shape (Inference): {predicted_logits_inf.shape}")
+    world_model_example.train()  # Set model back to training mode

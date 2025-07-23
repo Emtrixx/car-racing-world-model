@@ -144,7 +144,6 @@ class SequenceDataset(Dataset):
         }
 
 
-# --- Main Execution ---
 class GruWorldModelTrainer:
     """Handles the training loop for the WorldModelGRU."""
 
@@ -234,7 +233,8 @@ class GruWorldModelTrainer:
                     # For validation, we always use inference mode (no teacher forcing)
                     # to get a true measure of the model's generative performance.
                     pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
-                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t, teacher_forcing_prob=0.0
+                        action_t, prev_model_state, ground_truth_next_tokens=ground_truth_tokens_t,
+                        teacher_forcing_prob=0.0
                     )
 
                     b, h, w, c = pred_logits.shape
@@ -353,7 +353,7 @@ class GruWorldModelTrainer:
                     ground_truth_done_t = batch['dones'][:, t]
 
                     pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
-                        action_t, prev_model_state, ground_truth_tokens=ground_truth_tokens_t,
+                        action_t, prev_model_state, ground_truth_next_tokens=ground_truth_tokens_t,
                         teacher_forcing_prob=teacher_forcing_prob
                     )
 
@@ -429,6 +429,7 @@ class GruWorldModelTrainer:
         self.plot_losses()
 
 
+# --- Main Execution ---
 if __name__ == "__main__":
     # Argument Parsing: Allow selecting config from command line
     parser = argparse.ArgumentParser(description="Train GRU World Model")
@@ -545,7 +546,6 @@ if __name__ == "__main__":
         num_workers=config["num_loader_workers"],
         pin_memory=True if "cuda" in str(config['device']) else False  # Added pin_memory
     )
-    # --- End of new DataLoader code ---
 
     # Initialize GRU World Model
     world_model_gru = WorldModelGRU(
