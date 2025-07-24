@@ -1,3 +1,4 @@
+import argparse
 import os
 import pygame
 import torch
@@ -6,8 +7,12 @@ import cv2
 from collections import deque
 from pathlib import Path
 
+from stable_baselines3 import PPO
+
+from dreaming_render_transformer import get_initial_obs_and_tokens
+from play_game_sb3 import SB3_MODEL_PATH
 from src.utils import (
-    WM_CHECKPOINT_FILENAME_TRANSFORMER, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM
+    WM_CHECKPOINT_FILENAME_TRANSFORMER, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM, make_env_sb3, ENV_NAME, NUM_STACK
 )
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM
 from src.transformer_world_model import WorldModelTransformer
@@ -59,14 +64,15 @@ def get_initial_tokens_from_image(image_path, vq_vae, device):
     return initial_tokens.view(-1), processed_frame
 
 
-def play_dream_transformer():
+def play_dream_transformer(autoplay=False, deterministic=False):
     """
     Main function to run the interactive dream environment with the Transformer World Model.
     """
+
     # --- Configuration ---
     SCREEN_WIDTH = 1024
     SCREEN_HEIGHT = 1024
-    FPS = 30  # Transformer can be a bit slower
+    FPS = 8  # Transformer can be a bit slower
     HISTORY_LEN = 16  # Must match the history length the model was trained with
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -76,6 +82,10 @@ def play_dream_transformer():
     vq_vae = VQVAE().to(DEVICE)
     vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=DEVICE))
     vq_vae.eval()
+
+    # PPO Agent (optional, if you want to use it for actions)
+    env = make_env_sb3(env_id=ENV_NAME, frame_stack_num=NUM_STACK)
+    ppo_agent = PPO.load(SB3_MODEL_PATH, device=DEVICE, env=env)
 
     # Transformer World Model
     world_model = WorldModelTransformer(
@@ -102,12 +112,14 @@ def play_dream_transformer():
 
     zero_action = torch.zeros(ACTION_DIM, device=DEVICE)
 
+    # Pre-fill the history deques
     for _ in range(HISTORY_LEN):
         action_history.append(zero_action)
         token_history.append(initial_tokens)
 
-    token_history[-1] = initial_tokens.to(DEVICE)
-
+    agent_frame_buffer = deque(current_frame_np, maxlen=NUM_STACK)
+    for _ in range(NUM_STACK):
+        agent_frame_buffer.append(current_frame_np)
     # --- Pygame Initialization ---
     pygame.init()
     screen = pygame.display.set_mode((SCREEN_WIDTH, SCREEN_HEIGHT))
@@ -140,13 +152,25 @@ def play_dream_transformer():
                 if event.key == pygame.K_RIGHT: keys_pressed["right"] = False
 
         # --- Create Action Tensor ---
-        steer, gas, brake = 0.0, 0.0, 0.0
-        if keys_pressed["up"]: gas = 1.0
-        if keys_pressed["down"]: brake = 0.8
+        steer, gas, brake = 0.0, -1.0, -1.0
+        if keys_pressed["up"]: gas = 0.8
+        if keys_pressed["down"]: brake = 0.2
         if keys_pressed["left"]: steer = -1.0
         if keys_pressed["right"]: steer = 1.0
         action_np = np.array([steer, gas, brake], dtype=np.float32)
         current_action_tensor = torch.tensor(action_np, device=DEVICE)
+
+        if autoplay and not keys_pressed["up"] and not keys_pressed["down"] and not keys_pressed["left"] and not \
+                keys_pressed[
+                    "right"]:
+            stacked_frames = np.stack([np.array(frame) for frame in agent_frame_buffer], axis=0)
+            current_action, _ = ppo_agent.predict(stacked_frames, deterministic=False)
+            current_action_tensor = torch.tensor(current_action, device=DEVICE).float()
+
+        # Print the current action for debugging (fancy)
+        print(f"Gas: {current_action_tensor[1]:.2f}, "
+              f"Brake: {current_action_tensor[2]:.2f}, "
+              f"Steer: {current_action_tensor[0]:.2f}")
 
         # Update action history
         action_history.append(current_action_tensor)
@@ -160,13 +184,21 @@ def play_dream_transformer():
                 action_history_tensor, token_history_tensor
             )
 
-            # Decode the generated tokens into an image
-            tokens_for_decoding = generated_tokens.squeeze(0)
             b, h, w, c = pred_logits.shape  # Get grid shape from logits
+            # Decode the generated tokens into an image
+            if deterministic:
+                tokens_for_decoding = generated_tokens.squeeze(0)
+            else:
+                # Reshape for sampling: from [b, h, w, num_embeddings] to [b*h*w, num_embeddings]
+                pred_probs = torch.softmax(pred_logits.view(-1, c), dim=-1)
+                # Sample one token for each position
+                tokens_for_decoding = torch.multinomial(pred_probs, num_samples=1).squeeze(1)
+
             quantized_vectors = vq_vae.vq_layer.embeddings[tokens_for_decoding]
             quantized_grid = quantized_vectors.view(h, w, -1)
             quantized_grid_permuted = quantized_grid.permute(2, 0, 1).unsqueeze(0)
             decoded_image = vq_vae.decoder(quantized_grid_permuted)
+            agent_frame_buffer.append(decoded_image.squeeze(0).permute(1, 2, 0).cpu().numpy())
 
             # Update state for the next loop
             token_history.append(generated_tokens.squeeze(0))
@@ -204,4 +236,8 @@ def play_dream_transformer():
 
 
 if __name__ == "__main__":
-    play_dream_transformer()
+    arg_parser = argparse.ArgumentParser(description="Play in the Transformer Dream")
+    arg_parser.add_argument("--autoplay", action="store_true", help="Enable autoplay mode")
+    args = arg_parser.parse_args()
+
+    play_dream_transformer(autoplay=args.autoplay)
