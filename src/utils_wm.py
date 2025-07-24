@@ -211,6 +211,9 @@ class GruWorldModelDataCollector:
         obs, _ = self.env.reset()
         is_first_step_in_episode = True
 
+        # Get tokens for the initial observation s_0
+        prev_tokens = self.get_vq_indices(obs[-1])
+
         step_iterator = range(num_steps)
         if display_progress:
             step_iterator = tqdm(step_iterator, desc="Collecting GRU Steps")
@@ -226,21 +229,25 @@ class GruWorldModelDataCollector:
             next_state_tokens = self.get_vq_indices(next_obs[-1])  # access last frame in the stack
 
             # Store the relevant data tuple for world model training
-            # We store the action, reward, done flag, and the tokenized *next* state.
             self.replay_buffer.append({
+                "prev_tokens": prev_tokens.squeeze(0).to(torch.int64),  # Tokens for s_t
                 "action": torch.tensor(action, dtype=torch.float32),
                 "reward": torch.tensor([reward], dtype=torch.float32),
                 "done": torch.tensor([done or truncated], dtype=torch.float32),
-                "next_tokens": next_state_tokens.squeeze(0).to(torch.int64),  # Store as [16]
+                "next_tokens": next_state_tokens.squeeze(0).to(torch.int64),  # Tokens for s_{t+1}
                 "is_first_step": torch.tensor([is_first_step_in_episode], dtype=torch.bool)
             })
             is_first_step_in_episode = False
 
             # Update observation and reset if the episode is over
             obs = next_obs
+            prev_tokens = next_state_tokens  # The next state becomes the prev state for the next iteration
+
             if done or truncated:
                 obs, _ = self.env.reset()
                 is_first_step_in_episode = True
+                # Get tokens for the new initial observation
+                prev_tokens = self.get_vq_indices(obs[-1])
 
         print(f"Collection complete. Final buffer size: {len(self.replay_buffer)}")
 
@@ -288,6 +295,7 @@ def gru_collect_sequences_worker(worker_id, num_steps_to_collect_by_worker, env_
             return None
 
         data_to_save = {
+            'prev_tokens': torch.stack([s['prev_tokens'] for s in collector.replay_buffer]),
             'actions': torch.stack([s['action'] for s in collector.replay_buffer]),
             'rewards': torch.stack([s['reward'] for s in collector.replay_buffer]),
             'dones': torch.stack([s['done'] for s in collector.replay_buffer]),

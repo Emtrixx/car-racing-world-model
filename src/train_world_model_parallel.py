@@ -27,7 +27,7 @@ from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
 # --- Configuration ---
 # Training Hyperparameters
 NUM_STEPS = 1_000_000  # Number of steps to collect for training the world model
-WM_EPOCHS = 20  # Number of epochs to train the world model
+WM_EPOCHS = 16  # Number of epochs to train the world model
 WM_BATCH_SIZE = 256  # Sequences per batch
 WM_LEARNING_RATE = 1e-4  # Learning rate for world model optimizer
 SEQUENCE_LENGTH = 32  # Length of sequences to train on
@@ -138,6 +138,7 @@ class SequenceDataset(Dataset):
 
         # Slice each tensor to get the data for the full sequence.
         return {
+            'prev_tokens': self.data['prev_tokens'][start],  # Only need the first one
             'actions': self.data['actions'][start:end],
             'rewards': self.data['rewards'][start:end],
             'dones': self.data['dones'][start:end],
@@ -173,28 +174,25 @@ class GruWorldModelTrainer:
                 for key in batch:
                     batch[key] = batch[key].to(self.device)
 
-                batch_size = batch['actions'].size(0)
                 # Correctly get initial hidden state, handling DataParallel
                 current_model_module = self.world_model.module if isinstance(self.world_model,
                                                                              nn.DataParallel) else self.world_model
 
-                # prev_model_state is the recurrent state (e.g. GRU hidden) or None for Transformer
-                prev_model_state = current_model_module.get_initial_hidden_state(batch_size, self.device)
+                # Encode the first observation of the sequence to get the initial hidden state h_0
+                prev_model_state = current_model_module.encode_observation(batch['prev_tokens'])
 
                 seq_token_loss, seq_reward_loss, seq_done_loss = 0, 0, 0
                 sequence_length = batch['actions'].size(1)
 
                 for t in range(sequence_length):
                     action_t = batch['actions'][:, t]
-                    ground_truth_tokens_t = batch['next_tokens'][:, t]  # These are for the frame AFTER action_t
+                    ground_truth_tokens_t = batch['next_tokens'][:, t]
                     ground_truth_reward_t = batch['rewards'][:, t]
                     ground_truth_done_t = batch['dones'][:, t]
 
-                    # For validation, we always use inference mode (no teacher forcing)
-                    # to get a true measure of the model's generative performance.
+                    # For validation, always use inference mode (no teacher forcing)
                     pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
-                        action_t, prev_model_state, ground_truth_next_tokens=ground_truth_tokens_t,
-                        teacher_forcing_prob=0.0
+                        action_t, prev_model_state, ground_truth_next_tokens=None, teacher_forcing_prob=0.0
                     )
 
                     b, h, w, c = pred_logits.shape
@@ -207,7 +205,7 @@ class GruWorldModelTrainer:
                     seq_token_loss += token_loss
                     seq_reward_loss += reward_loss
                     seq_done_loss += done_loss
-                    prev_model_state = next_model_state  # Update recurrent state for next step in sequence
+                    prev_model_state = next_model_state  # Update recurrent state for next step
 
                 total_val_token_loss += (seq_token_loss / sequence_length)
                 total_val_reward_loss += (seq_reward_loss / sequence_length)
@@ -247,9 +245,9 @@ class GruWorldModelTrainer:
 
         # Initialize step counters
         global_step = 0
-        total_train_steps = len(self.train_dataloader) * num_epochs  # Use self.train_dataloader
+        total_train_steps = len(self.train_dataloader) * num_epochs
         log_freq = self.config.get('log_freq', 100)
-        val_freq = self.config.get('val_freq', log_freq * 5)  # val_freq from config
+        val_freq = self.config.get('val_freq', log_freq * 5)
         checkpoint_freq = self.config.get('checkpoint_freq', 5000)
 
         # Scheduled sampling parameters
@@ -283,7 +281,7 @@ class GruWorldModelTrainer:
 
         for epoch in range(1, num_epochs + 1):
             epoch_progress = tqdm(self.train_dataloader, desc=f"Epoch {epoch}/{num_epochs}", leave=False)
-            for batch_idx, batch in enumerate(epoch_progress):  # Use self.train_dataloader
+            for batch_idx, batch in enumerate(epoch_progress):
                 global_step += 1
 
                 # --- Scheduled Sampling ---
@@ -297,19 +295,18 @@ class GruWorldModelTrainer:
                 for key in batch:
                     batch[key] = batch[key].to(self.device)
 
-                # Initialize hidden state for the start of the sequences
-                batch_size = batch['actions'].size(0)
                 current_model_module = self.world_model.module if isinstance(self.world_model,
                                                                              nn.DataParallel) else self.world_model
 
-                prev_model_state = current_model_module.get_initial_hidden_state(batch_size, self.device)
+                # Encode the first observation of the sequence to get the initial hidden state h_0
+                prev_model_state = current_model_module.encode_observation(batch['prev_tokens'])
 
                 total_token_loss, total_reward_loss, total_done_loss = 0, 0, 0
                 sequence_length = batch['actions'].size(1)
 
                 for t in range(sequence_length):
                     action_t = batch['actions'][:, t]
-                    ground_truth_tokens_t = batch['next_tokens'][:, t]  # Tokens for frame AFTER action_t
+                    ground_truth_tokens_t = batch['next_tokens'][:, t]
                     ground_truth_reward_t = batch['rewards'][:, t]
                     ground_truth_done_t = batch['dones'][:, t]
 
@@ -340,7 +337,7 @@ class GruWorldModelTrainer:
                 grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
                 self.optimizer.step()
 
-                if self.logger:
+                if self.logger and global_step % log_freq == 0:
                     self.logger.log_metrics({
                         'train/total_loss': total_loss.item(),
                         'train/token_loss': avg_token_loss.item(),
@@ -399,7 +396,7 @@ class GruWorldModelTrainer:
 
         if profiler:
             profiler.stop()
-            print("Profiling finished. You can view the trace with TensorBoard.")
+            print("Profiling finished")
 
         print("Training finished.")
 
