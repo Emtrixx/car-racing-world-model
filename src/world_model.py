@@ -167,37 +167,41 @@ class WorldModelGRU(nn.Module):
         action_embed = self.dropout(self.action_embedding(action))
 
         current_temporal_input = action_embed
-        next_temporal_hidden_layers = []
+        next_deterministic_hidden_layers = []
         for i in range(self.num_gru_layers):
             h_next = self.temporal_grus[i](current_temporal_input, prev_temporal_hidden[i])
             current_temporal_input = self.dropout(h_next) if i < self.num_gru_layers - 1 else h_next
-            next_temporal_hidden_layers.append(h_next)
+            next_deterministic_hidden_layers.append(h_next)
 
-        # The output of the last GRU layer is used to parameterize the distribution
-        last_layer_deterministic_hidden = next_temporal_hidden_layers[-1]
+        # Stack the layers to form the full deterministic hidden state h_t
+        deterministic_temporal_hidden = torch.stack(next_deterministic_hidden_layers)
+        last_layer_deterministic_hidden = deterministic_temporal_hidden[-1]
 
-        # --- 2. Stochastic Temporal State Sampling ---
+        # --- Stochastic Temporal State Sampling ---
+        # Predict distribution parameters from the deterministic state
         mean, log_var = self.temporal_dist_head(last_layer_deterministic_hidden).chunk(2, dim=-1)
         log_var = torch.tanh(log_var)  # Constrain variance for stability
         temporal_distribution = torch.distributions.Normal(mean, torch.exp(0.5 * log_var))
         stochastic_temporal_sample = temporal_distribution.rsample()
 
-        # The full hidden state for the spatial model is built from this sample
-        stochastic_temporal_hidden = stochastic_temporal_sample.unsqueeze(0).expand(self.num_gru_layers, -1, -1)
-        # current_temporal_hidden = torch.stack(next_temporal_hidden_layers)
+        # --- Combine States for Prediction ---
+        # The state used for prediction combines deterministic and stochastic parts.
+        # This is a crucial step for stable generation.
+        prediction_state = self.dropout(stochastic_temporal_sample + last_layer_deterministic_hidden)
 
         # --- Predict Immediate Outcomes ---
-        # Reward and done are functions of the high-level abstract state.
-        predicted_reward = self.reward_head(stochastic_temporal_sample)
-        predicted_done_logits = self.done_head(stochastic_temporal_sample)
+        # Reward and done are functions of this combined abstract state.
+        predicted_reward = self.reward_head(prediction_state)
+        predicted_done_logits = self.done_head(prediction_state)
 
         # --- Spatial Generation (Inner GRU) ---
         # Autoregressively generate the 16 tokens for the next state.
         all_token_logits = []
 
-        # Initialize the spatial GRU's hidden state with the temporal state.
-        # This conditions the generation on the high-level prediction.
-        spatial_hidden_state = stochastic_temporal_hidden
+        # Initialize the spatial GRU's hidden state.
+        # Condition the generation on both the deterministic and stochastic states.
+        spatial_hidden_state = deterministic_temporal_hidden.clone()
+        spatial_hidden_state[-1] = prediction_state  # Inject combined state into the last layer
 
         # Start generation with the learnable start token
         current_token_embed = self.dropout(self.start_token_embed.expand(batch_size, -1, -1).squeeze(1))
@@ -246,14 +250,14 @@ class WorldModelGRU(nn.Module):
 
             # Prepare the next input for the spatial GRU
             current_token_embed = self.dropout(self.token_proj(self.token_embedding(next_token_indices)))
-            # Optional: Add positional encoding to current_token_embed here
 
         predicted_latent_logits = torch.stack(all_token_logits, dim=1).view(
             batch_size, self.grid_size, self.grid_size, -1
         )
 
-        # The final hidden state that matters for the next *time step* is the temporal one.
-        final_temporal_hidden = stochastic_temporal_hidden
+        # --- Return the hidden state for the next timestep ---
+        # The final hidden state that matters for the next time step is the deterministic one.
+        final_temporal_hidden = deterministic_temporal_hidden
 
         return predicted_latent_logits, predicted_reward, predicted_done_logits, final_temporal_hidden
 
