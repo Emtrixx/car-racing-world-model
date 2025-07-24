@@ -10,6 +10,7 @@ import torch
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
+from tqdm import tqdm
 
 from src.logger import ExperimentLogger
 from src.utils import (
@@ -281,7 +282,8 @@ class GruWorldModelTrainer:
             profiler.start()
 
         for epoch in range(1, num_epochs + 1):
-            for batch_idx, batch in enumerate(self.train_dataloader):  # Use self.train_dataloader
+            epoch_progress = tqdm(self.train_dataloader, desc=f"Epoch {epoch}/{num_epochs}", leave=False)
+            for batch_idx, batch in enumerate(epoch_progress):  # Use self.train_dataloader
                 global_step += 1
 
                 # --- Scheduled Sampling ---
@@ -364,7 +366,7 @@ class GruWorldModelTrainer:
                         f"  | TF Prob         | {teacher_forcing_prob:<8.3f} |\n"
                         f"  +-----------------+----------+\n"
                     )
-                    print(log_str)
+                    epoch_progress.write(log_str)
 
                 if self.val_dataloader and global_step % val_freq == 0:
                     val_losses = self._evaluate()
@@ -382,7 +384,7 @@ class GruWorldModelTrainer:
                         f"  | Avg Done Loss   | {val_losses['done']:<8.4f} |\n"
                         f"  +-----------------+----------+\n"
                     )
-                    print(val_log_str)
+                    epoch_progress.write(val_log_str)
                     self.world_model.train()
 
                 if global_step > 0 and global_step % checkpoint_freq == 0:
@@ -390,7 +392,7 @@ class GruWorldModelTrainer:
                                                                                              nn.DataParallel) else self.world_model.state_dict()
                     filename = GRU_WM_CHECKPOINTS_DIR / f"world_model_step_{global_step}.pth"
                     torch.save(model_state_to_save, filename)
-                    print(f"Saved model checkpoint at step {global_step}.")
+                    epoch_progress.write(f"Saved model checkpoint at step {global_step}.")
 
                 if profiler:
                     profiler.step()
