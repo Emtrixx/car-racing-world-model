@@ -7,11 +7,11 @@ from pathlib import Path
 
 import numpy as np
 import torch
-from matplotlib import pyplot as plt
 from torch import nn
 from torch.optim import Adam
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 
+from src.logger import ExperimentLogger
 from src.utils import (
     ENV_NAME,  # Default: "CarRacing-v3"
     ACTION_DIM,  # Default: 3
@@ -147,61 +147,20 @@ class SequenceDataset(Dataset):
 class GruWorldModelTrainer:
     """Handles the training loop for the WorldModelGRU."""
 
-    def __init__(self, world_model, vq_vae_model, config, train_dataloader, val_dataloader=None):
+    def __init__(self, world_model, vq_vae_model, config, train_dataloader, val_dataloader=None, logger=None):
         self.world_model = world_model
         self.vq_vae_model = vq_vae_model  # Needed for weight copying
         self.config = config
         self.device = config['device']
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
+        self.logger = logger
 
         # Define optimizers and loss functions
         self.optimizer = Adam(self.world_model.parameters(), lr=config['learning_rate'])
         self.token_loss_fn = nn.CrossEntropyLoss()
         self.reward_loss_fn = nn.MSELoss()
         self.done_loss_fn = nn.BCEWithLogitsLoss()
-
-        # For logging and plotting
-        self.loss_history = {
-            'train_total': [], 'train_token': [], 'train_reward': [], 'train_done': [],
-            'val_total': [], 'val_token': [], 'val_reward': [], 'val_done': []
-        }
-        self.steps_history = []  # For x-axis of training plots
-        self.val_steps_history = []  # For x-axis of validation plots
-
-    def plot_losses(self):
-        """Plots the collected loss history and saves it to a file."""
-        print("Plotting training and validation losses...")
-        plt.figure(figsize=(12, 8))
-
-        if self.loss_history['train_total']:
-            plt.plot(self.steps_history, self.loss_history['train_total'], label='Train Total Loss')
-            # plt.plot(self.steps_history, self.loss_history['train_token'], label='Train Token Loss', linestyle='--')
-            # plt.plot(self.steps_history, self.loss_history['train_reward'], label='Train Reward Loss', linestyle='--')
-            # plt.plot(self.steps_history, self.loss_history['train_done'], label='Train Done Loss', linestyle='--')
-
-        if self.loss_history['val_total']:
-            plt.plot(self.val_steps_history, self.loss_history['val_total'], label='Validation Total Loss',
-                     linestyle=':')
-            # plt.plot(self.val_steps_history, self.loss_history['val_token'], label='Val Token Loss', linestyle='-.')
-            # plt.plot(self.val_steps_history, self.loss_history['val_reward'], label='Val Reward Loss', linestyle='-.')
-            # plt.plot(self.val_steps_history, self.loss_history['val_done'], label='Val Done Loss', linestyle='-.')
-
-        plt.title(f"World Model Training & Validation Loss (SeqLen {self.config['sequence_length']})")
-        plt.xlabel("Training Steps")
-        plt.ylabel("Loss")
-        if self.loss_history['train_total'] or self.loss_history['val_total']:  # only add legend if there's data
-            plt.legend()
-        plt.grid(True)
-
-        # Ensure the save directory exists
-        save_dir = self.config.get("plot_save_dir", "images")
-        os.makedirs(save_dir, exist_ok=True)
-
-        save_path = os.path.join(save_dir, "world_model_loss_plot_with_val.png")  # New filename
-        plt.savefig(save_path)
-        print(f"Saved loss plot to {save_path}")
-        plt.close()
 
     def _evaluate(self):
         self.world_model.eval()
@@ -376,40 +335,56 @@ class GruWorldModelTrainer:
 
                 self.optimizer.zero_grad()
                 total_loss.backward()
-                nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
+                grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
                 self.optimizer.step()
 
-                # Logging
+                if self.logger:
+                    self.logger.log_metrics({
+                        'train/total_loss': total_loss.item(),
+                        'train/token_loss': avg_token_loss.item(),
+                        'train/reward_loss': avg_reward_loss.item(),
+                        'train/done_loss': avg_done_loss.item(),
+                        'train/grad_norm': grad_norm.item(),
+                        'learning_rate': self.optimizer.param_groups[0]['lr'],
+                        'teacher_forcing_prob': teacher_forcing_prob
+                    }, step=global_step)
+
                 if global_step % log_freq == 0:
-                    print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
-                          f"TF Prob: {teacher_forcing_prob:.3f} | "
-                          f"Train Total Loss: {total_loss.item():.4f} | "
-                          f"Train Token Loss: {avg_token_loss.item():.4f} | "
-                          f"Train Reward Loss: {avg_reward_loss.item():.4f} | "
-                          f"Train Done Loss: {avg_done_loss.item():.4f}")
+                    log_str = (
+                        f"\n  +-----------------+----------+\n"
+                        f"  |   Training      |  Value   |\n"
+                        f"  +-----------------+----------+\n"
+                        f"  | Step            | {global_step:<8} |\n"
+                        f"  | Epoch           | {epoch:<8} |\n"
+                        f"  | Total Loss      | {total_loss.item():<8.4f} |\n"
+                        f"  | Token Loss      | {avg_token_loss.item():<8.4f} |\n"
+                        f"  | Reward Loss     | {avg_reward_loss.item():<8.4f} |\n"
+                        f"  | Done Loss       | {avg_done_loss.item():<8.4f} |\n"
+                        f"  | Grad Norm       | {grad_norm.item():<8.4f} |\n"
+                        f"  | TF Prob         | {teacher_forcing_prob:<8.3f} |\n"
+                        f"  +-----------------+----------+\n"
+                    )
+                    print(log_str)
 
-                    # Store loss values for plotting
-                    self.loss_history['train_total'].append(total_loss.item())
-                    self.loss_history['train_token'].append(avg_token_loss.item())
-                    self.loss_history['train_reward'].append(avg_reward_loss.item())
-                    self.loss_history['train_done'].append(avg_done_loss.item())
-                    self.steps_history.append(global_step)  # Record step for training loss
-
-                # Validation step
-                if self.val_dataloader and global_step > 0 and global_step % val_freq == 0:
+                if self.val_dataloader and global_step % val_freq == 0:
                     val_losses = self._evaluate()
-                    self.loss_history['val_total'].append(val_losses['total'])
-                    self.loss_history['val_token'].append(val_losses['token'])
-                    self.loss_history['val_reward'].append(val_losses['reward'])
-                    self.loss_history['val_done'].append(val_losses['done'])
-                    self.val_steps_history.append(global_step)  # Record step for validation loss
+                    if self.logger:
+                        self.logger.log_metrics({f'val/{k}_loss': v for k, v in val_losses.items()}, step=global_step)
 
-                    print(f"Epoch {epoch}/{num_epochs} | Step {global_step}/{total_train_steps} | "
-                          f"Val Total Loss: {val_losses['total']:.4f} | Val Token: {val_losses['token']:.4f} | "
-                          f"Val Reward: {val_losses['reward']:.4f} | Val Done: {val_losses['done']:.4f}")
-                    self.world_model.train()  # Set back to train mode after evaluation
+                    val_log_str = (
+                        f"\n  +-----------------+----------+\n"
+                        f"  |   Validation    |  Value   |\n"
+                        f"  +-----------------+----------+\n"
+                        f"  | Step            | {global_step:<8} |\n"
+                        f"  | Avg Total Loss  | {val_losses['total']:<8.4f} |\n"
+                        f"  | Avg Token Loss  | {val_losses['token']:<8.4f} |\n"
+                        f"  | Avg Reward Loss | {val_losses['reward']:<8.4f} |\n"
+                        f"  | Avg Done Loss   | {val_losses['done']:<8.4f} |\n"
+                        f"  +-----------------+----------+\n"
+                    )
+                    print(val_log_str)
+                    self.world_model.train()
 
-                # Save model checkpoint
                 if global_step > 0 and global_step % checkpoint_freq == 0:
                     model_state_to_save = self.world_model.module.state_dict() if isinstance(self.world_model,
                                                                                              nn.DataParallel) else self.world_model.state_dict()
@@ -425,8 +400,6 @@ class GruWorldModelTrainer:
             print("Profiling finished. You can view the trace with TensorBoard.")
 
         print("Training finished.")
-        # Plot the final losses
-        self.plot_losses()
 
 
 # --- Main Execution ---
@@ -442,6 +415,7 @@ if __name__ == "__main__":
     parser.add_argument("--checkpoint-path", type=str, default=None,
                         help="Path to a model checkpoint to resume training.")
     parser.add_argument("--profile", action="store_true", help="Enable profiling.")
+    parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
     args = parser.parse_args()
 
     # Load the chosen configuration
@@ -573,6 +547,10 @@ if __name__ == "__main__":
         print(f"Using nn.DataParallel for GRU model training across {torch.cuda.device_count()} GPUs.")
         world_model_gru = nn.DataParallel(world_model_gru)
 
+    logger = ExperimentLogger(log_dir="logs/gru_wm_logs", experiment_name="gru_wm_training")
+    run_name = args.run_name if args.run_name else f"{args.config}_{int(time.time())}"
+    logger.start_run(run_name=run_name, config=config)
+
     # Create the trainer instance
     # The trainer encapsulates the model, optimizer, and training logic.
     trainer = GruWorldModelTrainer(
@@ -580,7 +558,8 @@ if __name__ == "__main__":
         vq_vae_model,
         config,
         train_dataloader,  # Pass train_dataloader
-        val_dataloader  # Pass val_dataloader
+        val_dataloader,  # Pass val_dataloader
+        logger=logger
     )
 
     # Run the training loop
@@ -591,6 +570,7 @@ if __name__ == "__main__":
                   copy_vq_weights=args.checkpoint_path is None,
                   profile=args.profile)
     print(f"GRU World Model training took {time.time() - start_train_time:.2f} seconds.")
+    logger.end_run()
 
     # Save the final GRU World Model
     try:
