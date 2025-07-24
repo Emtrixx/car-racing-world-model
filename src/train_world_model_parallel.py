@@ -26,7 +26,7 @@ from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
 # --- Configuration ---
 # Training Hyperparameters
 NUM_STEPS = 1_000_000  # Number of steps to collect for training the world model
-WM_EPOCHS = 10  # Number of epochs to train the world model
+WM_EPOCHS = 20  # Number of epochs to train the world model
 WM_BATCH_SIZE = 256  # Sequences per batch
 WM_LEARNING_RATE = 1e-4  # Learning rate for world model optimizer
 SEQUENCE_LENGTH = 32  # Length of sequences to train on
@@ -62,9 +62,9 @@ def get_config(name="default"):
             "num_gru_layers": GRU_NUM_LAYERS,  # Number of GRU layers
             "dropout_rate": 0.1,  # Dropout rate
             "ss_start_prob": 1.0,  # Scheduled sampling start probability
-            "ss_end_prob": 0.05,  # Scheduled sampling end probability
-            "ss_decay_steps_ratio": 0.8,  # Ratio of total steps for scheduled sampling decay
-            "ss_start_step_ratio": 0.1,  # Ratio of total steps before starting scheduled sampling
+            "ss_end_prob": 0.1,  # Scheduled sampling end probability
+            "ss_decay_steps_ratio": 0.7,  # Ratio of total steps for scheduled sampling decay
+            "ss_start_step_ratio": 0.2,  # Ratio of total steps before starting scheduled sampling
         }
     }
     # test configuration for quick runs
