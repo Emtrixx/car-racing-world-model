@@ -69,6 +69,7 @@ def play_dream():
         latent_dim=VQVAE_EMBEDDING_DIM,
         action_dim=ACTION_DIM,
     ).to(DEVICE)
+    world_model = torch.compile(world_model)  # Compile for performance
     world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
     world_model.eval()
 
@@ -137,7 +138,7 @@ def play_dream():
             b, h, w, c = pred_logits.shape
             logits_flat = pred_logits.reshape(b, h * w, c)
             predicted_indices = torch.distributions.Categorical(logits=logits_flat).sample()
-            quantized_vectors = vq_vae.vq_layer.embedding(predicted_indices)
+            quantized_vectors = vq_vae.vq_layer.embeddings[predicted_indices]
             quantized_grid = quantized_vectors.reshape(b, h, w, -1).permute(0, 3, 1, 2)
             decoded_image = vq_vae.decoder(quantized_grid)
 
@@ -152,7 +153,8 @@ def play_dream():
                                       interpolation=cv2.INTER_NEAREST)
 
         # Convert to RGB for Pygame
-        frame_large_rgb = cv2.cvtColor(frame_large_gray, cv2.COLOR_GRAY2RGB)
+        # frame_large_rgb = cv2.cvtColor(frame_large_gray, cv2.COLOR_GRAY2RGB)
+        frame_large_rgb = frame_large_gray
 
         # Draw the predicted reward text on the RGB frame
         reward_text = f"Reward: {pred_reward.item():.2f}"

@@ -46,8 +46,7 @@ def get_starting_state_from_image(image_path: str, world_model: WorldModelGRU,
         zero_hidden_state = world_model.get_initial_hidden_state(batch_size=1, device=device)
         first_frame_tensor, _, _, indices, _, _ = vq_vae(frame_tensor)
         indices = indices.view(1, -1)  # Flatten to [1, 16]
-        generation_hidden_state_stack = world_model.encode_observation(tokens=indices,
-                                                                       prev_hidden_state=zero_hidden_state)
+        generation_hidden_state_stack = world_model.encode_observation(observation_tokens=indices)
 
     return generation_hidden_state_stack, first_frame_tensor
 

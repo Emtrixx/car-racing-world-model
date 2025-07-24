@@ -66,7 +66,7 @@ def play_dream_transformer():
     # --- Configuration ---
     SCREEN_WIDTH = 1024
     SCREEN_HEIGHT = 1024
-    FPS = 7  # Transformer can be a bit slower
+    FPS = 30  # Transformer can be a bit slower
     HISTORY_LEN = 16  # Must match the history length the model was trained with
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
@@ -82,6 +82,7 @@ def play_dream_transformer():
         vqvae_embed_dim=VQVAE_EMBEDDING_DIM,
         action_dim=ACTION_DIM,
     ).to(DEVICE)
+    world_model = torch.compile(world_model)  # Compile for performance
     if Path(WM_CHECKPOINT_FILENAME_TRANSFORMER).exists():
         world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_TRANSFORMER, map_location=DEVICE))
     else:
