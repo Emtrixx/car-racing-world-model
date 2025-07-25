@@ -479,6 +479,12 @@ if __name__ == "__main__":
         print("ERROR: No sequence data collected. Exiting.")
         exit()
 
+    # Ensure all collected data is on the CPU before creating the Dataset
+    print("Moving collected data to CPU...")
+    for key in sequence_data_buffer:
+        if isinstance(sequence_data_buffer[key], torch.Tensor):
+            sequence_data_buffer[key] = sequence_data_buffer[key].cpu()
+
     # Prepare DataLoader with train/validation split
     print("Splitting data into training and validation sets...")
     full_dataset = SequenceDataset(sequence_data_buffer, config["sequence_length"])
