@@ -121,8 +121,8 @@ def play_dream():
 
         # --- Create Action Tensor from Keyboard State ---
         steer, gas, brake = 0.0, 0.0, 0.0
-        if keys_pressed["up"]: gas = 1.0
-        if keys_pressed["down"]: brake = 0.8  # Brakes are usually strong
+        if keys_pressed["up"]: gas = 0.8
+        if keys_pressed["down"]: brake = 0.2
         if keys_pressed["left"]: steer = -1.0
         if keys_pressed["right"]: steer = 1.0
 

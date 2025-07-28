@@ -167,10 +167,10 @@ def play_dream_transformer(autoplay=False, deterministic=False):
             current_action, _ = ppo_agent.predict(stacked_frames, deterministic=False)
             current_action_tensor = torch.tensor(current_action, device=DEVICE).float()
 
-        # Print the current action for debugging (fancy)
-        print(f"Gas: {current_action_tensor[1]:.2f}, "
-              f"Brake: {current_action_tensor[2]:.2f}, "
-              f"Steer: {current_action_tensor[0]:.2f}")
+        # Print the current action for debugging
+        # print(f"Gas: {current_action_tensor[1]:.2f}, "
+        #       f"Brake: {current_action_tensor[2]:.2f}, "
+        #       f"Steer: {current_action_tensor[0]:.2f}")
 
         # Update action history
         action_history.append(current_action_tensor)
