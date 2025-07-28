@@ -125,14 +125,16 @@ class WorldModelGRU(nn.Module):
 
         # --- Hierarchical Recurrent Core ---
         self.temporal_grus = nn.ModuleList()
-        self.temporal_grus.append(nn.GRUCell(hidden_dim, hidden_dim))
-        for _ in range(1, num_gru_layers):
+        self.temporal_layer_norms = nn.ModuleList()
+        for _ in range(num_gru_layers):
             self.temporal_grus.append(nn.GRUCell(hidden_dim, hidden_dim))
+            self.temporal_layer_norms.append(nn.LayerNorm(hidden_dim))
 
         self.spatial_grus = nn.ModuleList()
-        self.spatial_grus.append(nn.GRUCell(hidden_dim, hidden_dim))
-        for _ in range(1, num_gru_layers):
+        self.spatial_layer_norms = nn.ModuleList()
+        for _ in range(num_gru_layers):
             self.spatial_grus.append(nn.GRUCell(hidden_dim, hidden_dim))
+            self.spatial_layer_norms.append(nn.LayerNorm(hidden_dim))
 
         # --- Prediction Heads ---
         # This head predicts the parameters for the temporal state's distribution
@@ -169,9 +171,23 @@ class WorldModelGRU(nn.Module):
         current_temporal_input = action_embed
         next_deterministic_hidden_layers = []
         for i in range(self.num_gru_layers):
-            h_next = self.temporal_grus[i](current_temporal_input, prev_temporal_hidden[i])
-            current_temporal_input = self.dropout(h_next) if i < self.num_gru_layers - 1 else h_next
+            residual = current_temporal_input
+            h_prev = prev_temporal_hidden[i]
+
+            # GRU update, followed by LayerNorm
+            h_next = self.temporal_grus[i](current_temporal_input, h_prev)
+            h_next = self.temporal_layer_norms[i](h_next)
+
+            # The hidden state for the next time step is the normalized GRU output.
             next_deterministic_hidden_layers.append(h_next)
+
+            # Prepare input for the next layer in the stack.
+            if i < self.num_gru_layers - 1:
+                # Add skip connection: output of this layer + input to this layer.
+                current_temporal_input = self.dropout(h_next) + residual
+            else:
+                # The final output of the stack is just the processed hidden state.
+                current_temporal_input = h_next
 
         # Stack the layers to form the full deterministic hidden state h_t
         deterministic_temporal_hidden = torch.stack(next_deterministic_hidden_layers)
@@ -214,10 +230,17 @@ class WorldModelGRU(nn.Module):
 
             next_spatial_hidden_layers = []
             for l_idx in range(self.num_gru_layers):
+                residual = current_spatial_input
                 h_prev = spatial_hidden_state[l_idx]
+
                 h_next = self.spatial_grus[l_idx](current_spatial_input, h_prev)
-                current_spatial_input = self.dropout(h_next) if l_idx < self.num_gru_layers - 1 else h_next
+                h_next = self.spatial_layer_norms[l_idx](h_next)
                 next_spatial_hidden_layers.append(h_next)
+
+                if l_idx < self.num_gru_layers - 1:
+                    current_spatial_input = self.dropout(h_next) + residual
+                else:
+                    current_spatial_input = h_next
 
             spatial_hidden_state = torch.stack(next_spatial_hidden_layers)
 
@@ -283,10 +306,17 @@ class WorldModelGRU(nn.Module):
 
             next_spatial_hidden_layers = []
             for l_idx in range(self.num_gru_layers):
+                residual = current_spatial_input
                 h_prev = spatial_hidden_state[l_idx]
+
                 h_next = self.spatial_grus[l_idx](current_spatial_input, h_prev)
-                current_spatial_input = self.dropout(h_next) if l_idx < self.num_gru_layers - 1 else h_next
+                h_next = self.spatial_layer_norms[l_idx](h_next)
                 next_spatial_hidden_layers.append(h_next)
+
+                if l_idx < self.num_gru_layers - 1:
+                    current_spatial_input = self.dropout(h_next) + residual
+                else:
+                    current_spatial_input = h_next
 
             spatial_hidden_state = torch.stack(next_spatial_hidden_layers)
 
