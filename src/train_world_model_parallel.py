@@ -168,7 +168,8 @@ class GruWorldModelTrainer:
         total_val_token_loss, total_val_reward_loss, total_val_done_loss, total_val_kl_loss = 0, 0, 0, 0
         num_val_batches = 0
 
-        with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=self.scaler is not None):
+        with torch.no_grad(), torch.amp.autocast(device_type=str(self.device), dtype=torch.bfloat16,
+                                                 enabled=self.scaler is not None):
             for batch in self.val_dataloader:
                 for key in batch:
                     batch[key] = batch[key].to(self.device)
@@ -193,7 +194,7 @@ class GruWorldModelTrainer:
 
                 # KL Divergence Loss
                 prior_dist = torch.distributions.Normal(torch.zeros_like(stochastic_dist.mean),
-                                                    torch.ones_like(stochastic_dist.stddev))
+                                                        torch.ones_like(stochastic_dist.stddev))
                 kl_loss = self._compute_kl_loss(stochastic_dist, prior_dist)
 
                 total_val_token_loss += token_loss
@@ -278,7 +279,8 @@ class GruWorldModelTrainer:
                 batch_size = batch['actions'].size(0)
                 h = current_model_module.get_initial_hidden_state(batch_size, self.device)
 
-                with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=self.scaler is not None):
+                with torch.amp.autocast(device_type=str(self.device), dtype=torch.bfloat16,
+                                        enabled=self.scaler is not None):
                     pred_logits, pred_reward, pred_done_logits, _, stochastic_dist = self.world_model(
                         batch['prev_tokens'], batch['actions'], h
                     )
@@ -293,7 +295,7 @@ class GruWorldModelTrainer:
 
                     # KL Divergence Loss
                     prior_dist = torch.distributions.Normal(torch.zeros_like(stochastic_dist.mean),
-                                                        torch.ones_like(stochastic_dist.stddev))
+                                                            torch.ones_like(stochastic_dist.stddev))
                     kl_loss = self._compute_kl_loss(stochastic_dist, prior_dist)
 
                     total_loss = token_loss + reward_loss + done_loss + kl_loss
