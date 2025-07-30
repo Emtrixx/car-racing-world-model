@@ -8,6 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
+from torch.cuda.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from src.logger import ExperimentLogger
@@ -19,10 +20,10 @@ from src.utils import (
     DEVICE, VQ_VAE_CHECKPOINT_FILENAME,
     TRANSFORMER_WM_CHECKPOINTS_DIR
 )
+from src.utils import LOGS_DIR
+from src.utils_wm import collect_data_for_transformer
 from src.vq_conv_vae import GRID_SIZE
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
-from src.utils_wm import collect_data_for_transformer
-from src.utils import LOGS_DIR
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -107,13 +108,20 @@ class TransformerHistoryDataset(Dataset):
         if is_first_steps.ndim > 1:
             is_first_steps = is_first_steps.squeeze(1)
 
-        self.valid_indices = []
-        for i in range(self.total_steps - self.history_length):
-            # A sequence is valid if it does not contain any episode starts
-            # after the first element. The first element (i) can be a start.
-            window = is_first_steps[i + 1: i + self.history_length + 1]
-            if not torch.any(window):
-                self.valid_indices.append(i)
+        # Vectorized approach to find valid start indices.
+        # A sequence is valid if it doesn't contain an episode start after the first step.
+        if self.total_steps > self.history_length:
+            # Check for any 'True' values in all possible subsequent windows of size history_length
+            # unfold creates sliding windows. The i-th window of is_first_steps[1:] corresponds to the
+            # sequence parts for a sample starting at index i.
+            starts_in_window = is_first_steps[1:].unfold(0, self.history_length, 1).any(dim=1)
+
+            # Valid indices are those where no episode start occurs in the sequence window.
+            # The number of windows is total_steps - history_length, matching potential start indices.
+            valid_mask = ~starts_in_window
+            self.valid_indices = torch.where(valid_mask)[0]
+        else:
+            self.valid_indices = torch.tensor([], dtype=torch.long)
 
     def __len__(self):
         return len(self.valid_indices)
@@ -152,11 +160,18 @@ class WorldModelTransformerTrainer:
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
         self.logger = logger
+        self.use_amp = "cuda" in str(self.device)
 
-        self.optimizer = torch.optim.Adam(self.world_model.parameters(), lr=config['learning_rate'])
+        # Use fused Adam optimizer for performance on CUDA
+        self.optimizer = torch.optim.Adam(
+            self.world_model.parameters(),
+            lr=config['learning_rate'],
+            fused=self.use_amp
+        )
         self.token_loss_fn = nn.CrossEntropyLoss()
         self.reward_loss_fn = nn.MSELoss()
         self.done_loss_fn = nn.BCEWithLogitsLoss()
+        self.scaler = GradScaler(enabled=self.use_amp)
 
     def _run_batch(self, batch, is_train=True):
         """Runs a single batch through the model and computes loss."""
@@ -169,19 +184,21 @@ class WorldModelTransformerTrainer:
         target_reward = batch['target_reward']
         target_done = batch['target_done']
 
-        pred_logits, pred_reward, pred_done_logits, _ = self.world_model(action_hist, token_hist)
-
-        b, h, w, c = pred_logits.shape
-        token_loss = self.token_loss_fn(pred_logits.view(b * h * w, c), target_tokens.view(b * h * w))
-        reward_loss = self.reward_loss_fn(pred_reward, target_reward)
-        done_loss = self.done_loss_fn(pred_done_logits, target_done)
-        total_loss = token_loss + reward_loss + done_loss
+        with autocast(enabled=self.use_amp):
+            pred_logits, pred_reward, pred_done_logits, _ = self.world_model(action_hist, token_hist)
+            b, h, w, c = pred_logits.shape
+            token_loss = self.token_loss_fn(pred_logits.view(b * h * w, c), target_tokens.view(b * h * w))
+            reward_loss = self.reward_loss_fn(pred_reward, target_reward)
+            done_loss = self.done_loss_fn(pred_done_logits, target_done)
+            total_loss = token_loss + reward_loss + done_loss
 
         if is_train:
-            self.optimizer.zero_grad()
-            total_loss.backward()
+            self.optimizer.zero_grad(set_to_none=True)
+            self.scaler.scale(total_loss).backward()
+            self.scaler.unscale_(self.optimizer)
             grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
-            self.optimizer.step()
+            self.scaler.step(self.optimizer)
+            self.scaler.update()
             return total_loss.item(), token_loss.item(), reward_loss.item(), done_loss.item(), grad_norm.item()
         else:
             return total_loss.item(), token_loss.item(), reward_loss.item(), done_loss.item()
@@ -194,6 +211,7 @@ class WorldModelTransformerTrainer:
 
         with torch.no_grad():
             for batch in self.val_dataloader:
+                # Note: _run_batch handles autocast internally now
                 t_loss, tk_loss, r_loss, d_loss = self._run_batch(batch, is_train=False)
                 total_loss += t_loss
                 token_loss += tk_loss

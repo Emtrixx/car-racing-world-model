@@ -13,7 +13,7 @@ TRANSFORMER_FF_DIM = 2048  # Typically 4 * embed_dim
 TRANSFORMER_DROPOUT_RATE = 0.1
 
 
-# --- Positional Encoding --- todo: remove duplicate
+# --- Positional Encoding ---
 class PositionalEncoding(nn.Module):
     def __init__(self, d_model: int, max_len: int = 5000):
         super().__init__()
