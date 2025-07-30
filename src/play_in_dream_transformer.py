@@ -238,6 +238,8 @@ def play_dream_transformer(autoplay=False, deterministic=False):
 if __name__ == "__main__":
     arg_parser = argparse.ArgumentParser(description="Play in the Transformer Dream")
     arg_parser.add_argument("--autoplay", action="store_true", help="Enable autoplay mode")
+    arg_parser.add_argument("--deterministic", action="store_true", help="Use deterministic actions (no randomness)"
+                            )
     args = arg_parser.parse_args()
 
-    play_dream_transformer(autoplay=args.autoplay)
+    play_dream_transformer(autoplay=args.autoplay, deterministic=args.deterministic)
