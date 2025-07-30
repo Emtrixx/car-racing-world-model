@@ -21,8 +21,8 @@ from src.utils import (
 from src.utils import GRU_WM_CHECKPOINTS_DIR
 from src.utils import LOGS_DIR
 from src.utils_wm import collect_sequences_for_gru
-from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
-from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS, WorldModelGRU
+from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE, GRID_SIZE
+from src.world_model import D_MODEL, GRU_NUM_LAYERS, WorldModelGRU
 
 # --- Configuration ---
 # Training Hyperparameters
@@ -59,13 +59,8 @@ def get_config(name="default"):
             "validation_split": 0.1,
             "random_seed": random.randint(0, 2 ** 31 - 1),
             "val_freq": 200,
-            "gru_hidden_dim": GRU_HIDDEN_DIM,  # GRU Hidden Dimension per layer
-            "num_gru_layers": GRU_NUM_LAYERS,  # Number of GRU layers
-            "dropout_rate": 0.1,  # Dropout rate
-            "ss_start_prob": 1.0,  # Scheduled sampling start probability
-            "ss_end_prob": 0.1,  # Scheduled sampling end probability
-            "ss_decay_steps_ratio": 0.7,  # Ratio of total steps for scheduled sampling decay
-            "ss_start_step_ratio": 0.2,  # Ratio of total steps before starting scheduled sampling
+            "d_model": D_MODEL,
+            "num_gru_layers": GRU_NUM_LAYERS,
         }
     }
     # test configuration for quick runs
@@ -78,9 +73,8 @@ def get_config(name="default"):
         "num_collection_workers": 2,
         "num_loader_workers": 2,
         "max_episode_steps_collect": 100,
-        # "gru_hidden_dim": 32,
+        # "d_model": 256,
         # "num_gru_layers": 2,
-        "dropout_rate": 0.1,
     })
     configs["profile"] = configs["default"].copy()
     configs["profile"].update({
@@ -174,38 +168,41 @@ class GruWorldModelTrainer:
                 for key in batch:
                     batch[key] = batch[key].to(self.device)
 
-                # Correctly get initial hidden state, handling DataParallel
+                # Get initial hidden state, handling DataParallel
                 current_model_module = self.world_model.module if isinstance(self.world_model,
                                                                              nn.DataParallel) else self.world_model
+                batch_size = batch['actions'].size(0)
+                h = current_model_module.get_initial_hidden_state(batch_size, self.device)
 
-                # Encode the first observation of the sequence to get the initial hidden state h_0
-                prev_model_state = current_model_module.encode_observation(batch['prev_tokens'])
+                prev_s = batch['prev_tokens']
+                prev_a = torch.zeros(batch_size, self.config['action_dim'], device=self.device)
 
                 seq_token_loss, seq_reward_loss, seq_done_loss = 0, 0, 0
                 sequence_length = batch['actions'].size(1)
 
                 for t in range(sequence_length):
-                    action_t = batch['actions'][:, t]
                     ground_truth_tokens_t = batch['next_tokens'][:, t]
                     ground_truth_reward_t = batch['rewards'][:, t]
                     ground_truth_done_t = batch['dones'][:, t]
 
-                    # For validation, always use inference mode (no teacher forcing)
-                    pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
-                        action_t, prev_model_state, ground_truth_next_tokens=None, teacher_forcing_prob=0.0
+                    pred_logits, pred_reward, pred_done_logits, h, _ = self.world_model(
+                        prev_s, prev_a, h
                     )
 
-                    b, h, w, c = pred_logits.shape
+                    b, num_tokens, codebook_size = pred_logits.shape
                     token_loss = self.token_loss_fn(
-                        pred_logits.reshape(b * h * w, c),
-                        ground_truth_tokens_t.reshape(b * h * w))
+                        pred_logits.reshape(b * num_tokens, codebook_size),
+                        ground_truth_tokens_t.reshape(b * num_tokens)
+                    )
                     reward_loss = self.reward_loss_fn(pred_reward, ground_truth_reward_t)
                     done_loss = self.done_loss_fn(pred_done_logits, ground_truth_done_t)
 
                     seq_token_loss += token_loss
                     seq_reward_loss += reward_loss
                     seq_done_loss += done_loss
-                    prev_model_state = next_model_state  # Update recurrent state for next step
+
+                    prev_s = ground_truth_tokens_t
+                    prev_a = batch['actions'][:, t]
 
                 total_val_token_loss += (seq_token_loss / sequence_length)
                 total_val_reward_loss += (seq_reward_loss / sequence_length)
@@ -245,16 +242,9 @@ class GruWorldModelTrainer:
 
         # Initialize step counters
         global_step = 0
-        total_train_steps = len(self.train_dataloader) * num_epochs
         log_freq = self.config.get('log_freq', 100)
         val_freq = self.config.get('val_freq', log_freq * 5)
         checkpoint_freq = self.config.get('checkpoint_freq', 5000)
-
-        # Scheduled sampling parameters
-        ss_start_prob = self.config.get('ss_start_prob', 1.0)
-        ss_end_prob = self.config.get('ss_end_prob', 0.0)
-        ss_decay_steps = int(total_train_steps * self.config.get('ss_decay_steps_ratio', 0.5))
-        ss_start_step = int(total_train_steps * self.config.get('ss_start_step_ratio', 0.4))
 
         profiler = None
         if profile:
@@ -284,22 +274,16 @@ class GruWorldModelTrainer:
             for batch_idx, batch in enumerate(epoch_progress):
                 global_step += 1
 
-                # --- Scheduled Sampling ---
-                if global_step < ss_start_step:
-                    teacher_forcing_prob = 1.0
-                else:
-                    # Calculate the decay factor
-                    decay_progress = min(1.0, (global_step - ss_start_step) / ss_decay_steps)
-                    teacher_forcing_prob = ss_start_prob - (ss_start_prob - ss_end_prob) * decay_progress
-
                 for key in batch:
                     batch[key] = batch[key].to(self.device)
 
                 current_model_module = self.world_model.module if isinstance(self.world_model,
                                                                              nn.DataParallel) else self.world_model
+                batch_size = batch['actions'].size(0)
+                h = current_model_module.get_initial_hidden_state(batch_size, self.device)
 
-                # Encode the first observation of the sequence to get the initial hidden state h_0
-                prev_model_state = current_model_module.encode_observation(batch['prev_tokens'])
+                prev_s = batch['prev_tokens']
+                prev_a = torch.zeros(batch_size, self.config['action_dim'], device=self.device)
 
                 total_token_loss, total_reward_loss, total_done_loss = 0, 0, 0
                 sequence_length = batch['actions'].size(1)
@@ -310,22 +294,25 @@ class GruWorldModelTrainer:
                     ground_truth_reward_t = batch['rewards'][:, t]
                     ground_truth_done_t = batch['dones'][:, t]
 
-                    pred_logits, pred_reward, pred_done_logits, next_model_state = self.world_model(
-                        action_t, prev_model_state, ground_truth_next_tokens=ground_truth_tokens_t,
-                        teacher_forcing_prob=teacher_forcing_prob
+                    pred_logits, pred_reward, pred_done_logits, h, _ = self.world_model(
+                        prev_s, prev_a, h
                     )
 
-                    b, h, w, c = pred_logits.shape
+                    b, num_tokens, codebook_size = pred_logits.shape
                     token_loss = self.token_loss_fn(
-                        pred_logits.reshape(b * h * w, c),
-                        ground_truth_tokens_t.reshape(b * h * w))
+                        pred_logits.reshape(b * num_tokens, codebook_size),
+                        ground_truth_tokens_t.reshape(b * num_tokens)
+                    )
                     reward_loss = self.reward_loss_fn(pred_reward, ground_truth_reward_t)
                     done_loss = self.done_loss_fn(pred_done_logits, ground_truth_done_t)
 
                     total_token_loss += token_loss
                     total_reward_loss += reward_loss
                     total_done_loss += done_loss
-                    prev_model_state = next_model_state  # Update recurrent state
+
+                    # Teacher forcing
+                    prev_s = ground_truth_tokens_t
+                    prev_a = action_t
 
                 avg_token_loss = total_token_loss / sequence_length
                 avg_reward_loss = total_reward_loss / sequence_length
@@ -345,7 +332,6 @@ class GruWorldModelTrainer:
                         'train/done_loss': avg_done_loss.item(),
                         'train/grad_norm': grad_norm.item(),
                         'learning_rate': self.optimizer.param_groups[0]['lr'],
-                        'teacher_forcing_prob': teacher_forcing_prob
                     }, step=global_step)
 
                 if global_step % log_freq == 0:
@@ -360,7 +346,6 @@ class GruWorldModelTrainer:
                         f"  | Reward Loss     | {avg_reward_loss.item():<8.4f} |\n"
                         f"  | Done Loss       | {avg_done_loss.item():<8.4f} |\n"
                         f"  | Grad Norm       | {grad_norm.item():<8.4f} |\n"
-                        f"  | TF Prob         | {teacher_forcing_prob:<8.3f} |\n"
                         f"  +-----------------+----------+\n"
                     )
                     epoch_progress.write(log_str)
@@ -529,8 +514,11 @@ if __name__ == "__main__":
     # Initialize GRU World Model
     world_model_gru = WorldModelGRU(
         latent_dim=VQVAE_EMBEDDING_DIM,
+        codebook_size=VQVAE_NUM_EMBEDDINGS,
         action_dim=ACTION_DIM,
-        dropout_rate=config['dropout_rate']  # Pass dropout_rate
+        d_model=config['d_model'],
+        gru_num_layers=config['num_gru_layers'],
+        grid_size=GRID_SIZE
     )
     world_model_gru.to(config['device'])
 
@@ -582,7 +570,7 @@ if __name__ == "__main__":
         model_state_to_save = world_model_gru.module.state_dict() if isinstance(world_model_gru,
                                                                                 nn.DataParallel) else world_model_gru.state_dict()
 
-        WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_hd{GRU_HIDDEN_DIM}_ly{GRU_NUM_LAYERS}"
+        WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_dm{config['d_model']}_ly{config['num_gru_layers']}"
         WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX_GRU}.pth"
 
         torch.save(model_state_to_save, WM_CHECKPOINT_FILENAME_GRU)
