@@ -132,7 +132,7 @@ class SequenceDataset(Dataset):
 
         # Slice each tensor to get the data for the full sequence.
         return {
-            'prev_tokens': self.data['prev_tokens'][start],  # Only need the first one
+            'prev_tokens': self.data['prev_tokens'][start:end],
             'actions': self.data['actions'][start:end],
             'rewards': self.data['rewards'][start:end],
             'dones': self.data['dones'][start:end],
@@ -157,13 +157,18 @@ class GruWorldModelTrainer:
         self.token_loss_fn = nn.CrossEntropyLoss()
         self.reward_loss_fn = nn.MSELoss()
         self.done_loss_fn = nn.BCEWithLogitsLoss()
+        self.scaler = torch.cuda.amp.GradScaler() if "cuda" in str(self.device) else None
+
+    def _compute_kl_loss(self, prior_dist, posterior_dist):
+        kl_div = torch.distributions.kl.kl_divergence(posterior_dist, prior_dist).mean()
+        return kl_div
 
     def _evaluate(self):
         self.world_model.eval()
-        total_val_token_loss, total_val_reward_loss, total_val_done_loss = 0, 0, 0
+        total_val_token_loss, total_val_reward_loss, total_val_done_loss, total_val_kl_loss = 0, 0, 0, 0
         num_val_batches = 0
 
-        with torch.no_grad():
+        with torch.no_grad(), torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=self.scaler is not None):
             for batch in self.val_dataloader:
                 for key in batch:
                     batch[key] = batch[key].to(self.device)
@@ -174,39 +179,27 @@ class GruWorldModelTrainer:
                 batch_size = batch['actions'].size(0)
                 h = current_model_module.get_initial_hidden_state(batch_size, self.device)
 
-                prev_s = batch['prev_tokens']
-                prev_a = torch.zeros(batch_size, self.config['action_dim'], device=self.device)
+                pred_logits, pred_reward, pred_done_logits, _, stochastic_dist = self.world_model(
+                    batch['prev_tokens'], batch['actions'], h
+                )
 
-                seq_token_loss, seq_reward_loss, seq_done_loss = 0, 0, 0
-                sequence_length = batch['actions'].size(1)
+                b, t, num_tokens, codebook_size = pred_logits.shape
+                token_loss = self.token_loss_fn(
+                    pred_logits.reshape(b * t, num_tokens, codebook_size).permute(0, 2, 1),
+                    batch['next_tokens'].reshape(b * t, num_tokens)
+                )
+                reward_loss = self.reward_loss_fn(pred_reward, batch['rewards'])
+                done_loss = self.done_loss_fn(pred_done_logits, batch['dones'])
 
-                for t in range(sequence_length):
-                    ground_truth_tokens_t = batch['next_tokens'][:, t]
-                    ground_truth_reward_t = batch['rewards'][:, t]
-                    ground_truth_done_t = batch['dones'][:, t]
+                # KL Divergence Loss
+                prior_dist = torch.distributions.Normal(torch.zeros_like(stochastic_dist.mean),
+                                                    torch.ones_like(stochastic_dist.stddev))
+                kl_loss = self._compute_kl_loss(stochastic_dist, prior_dist)
 
-                    pred_logits, pred_reward, pred_done_logits, h, _ = self.world_model(
-                        prev_s, prev_a, h
-                    )
-
-                    b, num_tokens, codebook_size = pred_logits.shape
-                    token_loss = self.token_loss_fn(
-                        pred_logits.reshape(b * num_tokens, codebook_size),
-                        ground_truth_tokens_t.reshape(b * num_tokens)
-                    )
-                    reward_loss = self.reward_loss_fn(pred_reward, ground_truth_reward_t)
-                    done_loss = self.done_loss_fn(pred_done_logits, ground_truth_done_t)
-
-                    seq_token_loss += token_loss
-                    seq_reward_loss += reward_loss
-                    seq_done_loss += done_loss
-
-                    prev_s = ground_truth_tokens_t
-                    prev_a = batch['actions'][:, t]
-
-                total_val_token_loss += (seq_token_loss / sequence_length)
-                total_val_reward_loss += (seq_reward_loss / sequence_length)
-                total_val_done_loss += (seq_done_loss / sequence_length)
+                total_val_token_loss += token_loss
+                total_val_reward_loss += reward_loss
+                total_val_done_loss += done_loss
+                total_val_kl_loss += kl_loss
                 num_val_batches += 1
 
         avg_val_token_loss = total_val_token_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
@@ -215,13 +208,16 @@ class GruWorldModelTrainer:
             self.device)
         avg_val_done_loss = total_val_done_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
             self.device)
-        avg_val_total_loss = avg_val_token_loss + avg_val_reward_loss + avg_val_done_loss
+        avg_val_kl_loss = total_val_kl_loss / num_val_batches if num_val_batches > 0 else torch.tensor(0.0).to(
+            self.device)
+        avg_val_total_loss = avg_val_token_loss + avg_val_reward_loss + avg_val_done_loss + avg_val_kl_loss
 
         return {
             'total': avg_val_total_loss.item(),
             'token': avg_val_token_loss.item(),
             'reward': avg_val_reward_loss.item(),
             'done': avg_val_done_loss.item(),
+            'kl': avg_val_kl_loss.item(),
         }
 
     def train(self, num_epochs, copy_vq_weights=True, profile=False):
@@ -282,54 +278,45 @@ class GruWorldModelTrainer:
                 batch_size = batch['actions'].size(0)
                 h = current_model_module.get_initial_hidden_state(batch_size, self.device)
 
-                prev_s = batch['prev_tokens']
-                prev_a = torch.zeros(batch_size, self.config['action_dim'], device=self.device)
-
-                total_token_loss, total_reward_loss, total_done_loss = 0, 0, 0
-                sequence_length = batch['actions'].size(1)
-
-                for t in range(sequence_length):
-                    action_t = batch['actions'][:, t]
-                    ground_truth_tokens_t = batch['next_tokens'][:, t]
-                    ground_truth_reward_t = batch['rewards'][:, t]
-                    ground_truth_done_t = batch['dones'][:, t]
-
-                    pred_logits, pred_reward, pred_done_logits, h, _ = self.world_model(
-                        prev_s, prev_a, h
+                with torch.cuda.amp.autocast(dtype=torch.bfloat16, enabled=self.scaler is not None):
+                    pred_logits, pred_reward, pred_done_logits, _, stochastic_dist = self.world_model(
+                        batch['prev_tokens'], batch['actions'], h
                     )
 
-                    b, num_tokens, codebook_size = pred_logits.shape
+                    b, t, num_tokens, codebook_size = pred_logits.shape
                     token_loss = self.token_loss_fn(
-                        pred_logits.reshape(b * num_tokens, codebook_size),
-                        ground_truth_tokens_t.reshape(b * num_tokens)
+                        pred_logits.reshape(b * t, num_tokens, codebook_size).permute(0, 2, 1),
+                        batch['next_tokens'].reshape(b * t, num_tokens)
                     )
-                    reward_loss = self.reward_loss_fn(pred_reward, ground_truth_reward_t)
-                    done_loss = self.done_loss_fn(pred_done_logits, ground_truth_done_t)
+                    reward_loss = self.reward_loss_fn(pred_reward, batch['rewards'])
+                    done_loss = self.done_loss_fn(pred_done_logits, batch['dones'])
 
-                    total_token_loss += token_loss
-                    total_reward_loss += reward_loss
-                    total_done_loss += done_loss
+                    # KL Divergence Loss
+                    prior_dist = torch.distributions.Normal(torch.zeros_like(stochastic_dist.mean),
+                                                        torch.ones_like(stochastic_dist.stddev))
+                    kl_loss = self._compute_kl_loss(stochastic_dist, prior_dist)
 
-                    # Teacher forcing
-                    prev_s = ground_truth_tokens_t
-                    prev_a = action_t
-
-                avg_token_loss = total_token_loss / sequence_length
-                avg_reward_loss = total_reward_loss / sequence_length
-                avg_done_loss = total_done_loss / sequence_length
-                total_loss = avg_token_loss + avg_reward_loss + avg_done_loss
+                    total_loss = token_loss + reward_loss + done_loss + kl_loss
 
                 self.optimizer.zero_grad()
-                total_loss.backward()
-                grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
-                self.optimizer.step()
+                if self.scaler:
+                    self.scaler.scale(total_loss).backward()
+                    self.scaler.unscale_(self.optimizer)
+                    grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
+                    self.scaler.step(self.optimizer)
+                    self.scaler.update()
+                else:
+                    total_loss.backward()
+                    grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
+                    self.optimizer.step()
 
                 if self.logger and global_step % log_freq == 0:
                     self.logger.log_metrics({
                         'train/total_loss': total_loss.item(),
-                        'train/token_loss': avg_token_loss.item(),
-                        'train/reward_loss': avg_reward_loss.item(),
-                        'train/done_loss': avg_done_loss.item(),
+                        'train/token_loss': token_loss.item(),
+                        'train/reward_loss': reward_loss.item(),
+                        'train/done_loss': done_loss.item(),
+                        'train/kl_loss': kl_loss.item(),
                         'train/grad_norm': grad_norm.item(),
                         'learning_rate': self.optimizer.param_groups[0]['lr'],
                     }, step=global_step)
@@ -342,9 +329,10 @@ class GruWorldModelTrainer:
                         f"  | Step            | {global_step:<8} |\n"
                         f"  | Epoch           | {epoch:<8} |\n"
                         f"  | Total Loss      | {total_loss.item():<8.4f} |\n"
-                        f"  | Token Loss      | {avg_token_loss.item():<8.4f} |\n"
-                        f"  | Reward Loss     | {avg_reward_loss.item():<8.4f} |\n"
-                        f"  | Done Loss       | {avg_done_loss.item():<8.4f} |\n"
+                        f"  | Token Loss      | {token_loss.item():<8.4f} |\n"
+                        f"  | Reward Loss     | {reward_loss.item():<8.4f} |\n"
+                        f"  | Done Loss       | {done_loss.item():<8.4f} |\n"
+                        f"  | KL Loss         | {kl_loss.item():<8.4f} |\n"
                         f"  | Grad Norm       | {grad_norm.item():<8.4f} |\n"
                         f"  +-----------------+----------+\n"
                     )
@@ -364,6 +352,7 @@ class GruWorldModelTrainer:
                         f"  | Avg Token Loss  | {val_losses['token']:<8.4f} |\n"
                         f"  | Avg Reward Loss | {val_losses['reward']:<8.4f} |\n"
                         f"  | Avg Done Loss   | {val_losses['done']:<8.4f} |\n"
+                        f"  | Avg KL Loss     | {val_losses['kl']:<8.4f} |\n"
                         f"  +-----------------+----------+\n"
                     )
                     epoch_progress.write(val_log_str)

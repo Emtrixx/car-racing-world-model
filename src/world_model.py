@@ -4,6 +4,7 @@ import torch
 from torch import nn as nn
 
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, GRID_SIZE
+from src.vq_conv_vae import VQVAE_EMBEDDING_DIM
 
 GRU_NUM_LAYERS = 3  # Default number of GRU layers
 D_MODEL = 1024
@@ -12,7 +13,7 @@ D_MODEL = 1024
 # --- GRU-based World Model (Autoregressive Version) ---
 class WorldModelGRU(nn.Module):
     """
-   A GRU-based world model inspired by Dreamer-family architectures,
+    A GRU-based world model inspired by Dreamer-family architectures,
     adapted for a discrete, tokenized observation space. It uses a recurrent
     state to predict the next latent image, reward, and termination signal.
     """
@@ -56,6 +57,7 @@ class WorldModelGRU(nn.Module):
         # Predicts the next latent state distribution from the recurrent hidden state.
         self.stochastic_predictor = nn.Sequential(
             nn.Linear(d_model, d_model),
+            nn.LayerNorm(d_model),
             nn.ReLU(),
             nn.Linear(d_model, d_model * 2)  # mu and log_var for the stochastic state
         )
@@ -64,6 +66,7 @@ class WorldModelGRU(nn.Module):
         # Decodes the (deterministic + stochastic) state into predictions.
         self.decoder_head = nn.Sequential(
             nn.Linear(d_model + d_model, d_model),  # deterministic + stochastic state
+            nn.LayerNorm(d_model),
             nn.ReLU(),
             nn.Linear(d_model, self.num_tokens * codebook_size)
         )
@@ -71,73 +74,57 @@ class WorldModelGRU(nn.Module):
         self.done_head = nn.Linear(d_model + d_model, 1)
 
     def encode_observation(self, obs_tokens: torch.Tensor) -> torch.Tensor:
-        """Encodes a grid of tokens into a single embedding vector."""
-        batch_size = obs_tokens.size(0)
-        # Embed and flatten all tokens
-        embedded_tokens = self.token_embedding(obs_tokens)  # [B, num_tokens, d_model]
-        flat_embedded_tokens = embedded_tokens.view(batch_size, -1)  # [B, num_tokens * d_model]
-        # Encode into a single vector
-        obs_embedding = self.encoder(flat_embedded_tokens)
-        return obs_embedding
+        """Encodes a batch of token grids into embedding vectors."""
+        batch_size, seq_len, num_tokens = obs_tokens.shape
+        obs_tokens = obs_tokens.view(batch_size * seq_len, num_tokens)
+        embedded_tokens = self.token_embedding(obs_tokens)
+        flat_embedded = embedded_tokens.view(batch_size * seq_len, -1)
+        obs_embedding = self.encoder(flat_embedded)
+        return obs_embedding.view(batch_size, seq_len, self.d_model)
 
     def forward(
             self,
-            prev_obs_tokens: torch.Tensor,
-            prev_action: torch.Tensor,
-            prev_hidden_state: torch.Tensor
-    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor]:
+            obs_tokens: torch.Tensor,
+            actions: torch.Tensor,
+            initial_hidden_state: torch.Tensor
+    ) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor, torch.Tensor, "torch.distributions.Distribution"]:
         """
-        Performs a single-step rollout (imagine one timestep).
+        Processes a sequence of observations and actions.
 
         Args:
-            prev_obs_tokens (torch.Tensor): Previous observation tokens, s_{t-1}.
-            prev_action (torch.Tensor): Previous action, a_{t-1}.
-            prev_hidden_state (torch.Tensor): Previous GRU hidden state.
+            obs_tokens (torch.Tensor): Sequence of observation tokens [B, T, N].
+            actions (torch.Tensor): Sequence of actions [B, T, A].
+            initial_hidden_state (torch.Tensor): Initial GRU hidden state.
 
         Returns:
-            A tuple containing:
-            - Predicted next token logits.
-            - Predicted reward.
-            - Predicted done logits.
-            - The new deterministic hidden state for the next step.
-            - The sampled stochastic state used for prediction.
+            Tuple of predicted sequences and final states.
         """
-        # Encode the previous observation tokens into a fixed-size embedding
-        obs_embedding = self.encode_observation(prev_obs_tokens)
+        obs_embeddings = self.encode_observation(obs_tokens)
+        action_embeddings = self.action_embedding(actions)
 
-        # Embed the action
-        action_embedding = self.action_embedding(prev_action)
+        gru_input = torch.cat([obs_embeddings, action_embeddings], dim=-1)
+        deterministic_states, final_hidden_state = self.recurrent_core(gru_input, initial_hidden_state)
 
-        # Update the deterministic hidden state
-        gru_input = torch.cat([obs_embedding, action_embedding], dim=1).unsqueeze(1)
-        deterministic_state, new_hidden_state = self.recurrent_core(gru_input, prev_hidden_state)
-        deterministic_state = deterministic_state.squeeze(1)  # [B, d_model]
-
-        # Predict the stochastic state from the deterministic one
-        mean, log_var = self.stochastic_predictor(deterministic_state).chunk(2, dim=-1)
+        mean, log_var = self.stochastic_predictor(deterministic_states).chunk(2, dim=-1)
         std = torch.exp(0.5 * log_var)
-        stochastic_distribution = torch.distributions.Normal(mean, std)
-        stochastic_state = stochastic_distribution.rsample()
+        stochastic_dist = torch.distributions.Normal(mean, std)
+        stochastic_states = stochastic_dist.rsample()
 
-        # Make predictions using the combined state
-        combined_state = torch.cat([deterministic_state, stochastic_state], dim=1)
+        combined_states = torch.cat([deterministic_states, stochastic_states], dim=-1)
 
-        # Predict token logits
-        predicted_token_logits_flat = self.decoder_head(combined_state)
-        predicted_token_logits = predicted_token_logits_flat.view(
-            -1, self.num_tokens, self.codebook_size
+        predicted_logits_flat = self.decoder_head(combined_states)
+        predicted_token_logits = predicted_logits_flat.view(
+            obs_tokens.size(0), obs_tokens.size(1), self.num_tokens, self.codebook_size
         )
-
-        # Predict reward and done
-        predicted_reward = self.reward_head(combined_state)
-        predicted_done = self.done_head(combined_state)
+        predicted_rewards = self.reward_head(combined_states)
+        predicted_dones = self.done_head(combined_states)
 
         return (
             predicted_token_logits,
-            predicted_reward,
-            predicted_done,
-            new_hidden_state,
-            stochastic_state
+            predicted_rewards,
+            predicted_dones,
+            final_hidden_state,
+            stochastic_dist
         )
 
     def get_initial_hidden_state(self, batch_size: int, device: torch.device) -> torch.Tensor:
@@ -147,20 +134,17 @@ class WorldModelGRU(nn.Module):
 
 # --- Usage Example ---
 if __name__ == '__main__':
-    # --- Model Hyperparameters ---
     BATCH_SIZE = 32
+    SEQ_LENGTH = 10
     ACTION_DIM_EXAMPLE = 3
-    D_MODEL_EXAMPLE = 256  # d_model for the model
+    D_MODEL_EXAMPLE = 256
     NUM_GRU_LAYERS_EXAMPLE = 2
     CODEBOOK_SIZE_EXAMPLE = VQVAE_NUM_EMBEDDINGS
     GRID_SIZE_EXAMPLE = GRID_SIZE
     DEVICE_EXAMPLE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    print(
-        f"--- Running WorldModelGRU Example with {NUM_GRU_LAYERS_EXAMPLE} GRU layers and d_model {D_MODEL_EXAMPLE} ---")
-
-    # --- Instantiate the Model ---
-    world_model_example = WorldModelGRU(
+    world_model = WorldModelGRU(
+        latent_dim=VQVAE_EMBEDDING_DIM,
         action_dim=ACTION_DIM_EXAMPLE,
         d_model=D_MODEL_EXAMPLE,
         gru_num_layers=NUM_GRU_LAYERS_EXAMPLE,
@@ -168,64 +152,15 @@ if __name__ == '__main__':
         grid_size=GRID_SIZE_EXAMPLE,
     ).to(DEVICE_EXAMPLE)
 
-    print(f"World Model created on device: {DEVICE_EXAMPLE}")
-    print(f"Number of parameters: {sum(p.numel() for p in world_model_example.parameters()):,}")
-
-    # --- Create Dummy Input Data ---
-    # Previous action a_{t-1}
-    prev_action_dummy = torch.randn(BATCH_SIZE, ACTION_DIM_EXAMPLE).to(DEVICE_EXAMPLE)
-    # Previous observation s_{t-1}
-    prev_obs_tokens_dummy = torch.randint(
+    obs_tokens_dummy = torch.randint(
         0, CODEBOOK_SIZE_EXAMPLE,
-        (BATCH_SIZE, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE)
+        (BATCH_SIZE, SEQ_LENGTH, GRID_SIZE_EXAMPLE * GRID_SIZE_EXAMPLE)
     ).to(DEVICE_EXAMPLE)
-    # Initial hidden state for the GRU h_{t-1}
-    initial_hidden_state = world_model_example.get_initial_hidden_state(BATCH_SIZE, DEVICE_EXAMPLE)
+    actions_dummy = torch.randn(BATCH_SIZE, SEQ_LENGTH, ACTION_DIM_EXAMPLE).to(DEVICE_EXAMPLE)
+    initial_hidden_state = world_model.get_initial_hidden_state(BATCH_SIZE, DEVICE_EXAMPLE)
 
-    print(f"\n--- Input Shapes ---")
-    print(f"Previous Action Shape:      {prev_action_dummy.shape}")
-    print(f"Previous Obs Tokens Shape:  {prev_obs_tokens_dummy.shape}")
-    print(f"Initial GRU Hidden Shape:   {initial_hidden_state.shape}")
+    logits, rewards, dones, _, _ = world_model(obs_tokens_dummy, actions_dummy, initial_hidden_state)
 
-    # --- Test encode_observation separately ---
-    print("\n--- Testing Observation Encoding ---")
-    obs_embedding = world_model_example.encode_observation(prev_obs_tokens_dummy)
-    print(f"Encoded observation embedding shape: {obs_embedding.shape}")  # Should be [B, d_model]
-
-    # --- Perform a Forward Pass (a single rollout step) ---
-    print("\n--- Running a single forward pass ---")
-    # From s_{t-1}, a_{t-1}, h_{t-1}, predict s_t, r_t, d_t and get new state h_t
-    (
-        predicted_token_logits,
-        predicted_reward,
-        predicted_done,
-        new_hidden_state,
-        stochastic_state
-    ) = world_model_example(
-        prev_obs_tokens=prev_obs_tokens_dummy,
-        prev_action=prev_action_dummy,
-        prev_hidden_state=initial_hidden_state
-    )
-    print(f"Predicted Token Logits Shape: {predicted_token_logits.shape}")  # Should be [B, num_tokens, Codebook]
-    print(f"Predicted Reward Shape:       {predicted_reward.shape}")  # Should be [B, 1]
-    print(f"Predicted Done Shape:         {predicted_done.shape}")  # Should be [B, 1]
-    print(f"New GRU Hidden State Shape:   {new_hidden_state.shape}")  # Should be [NumLayers, B, d_model]
-    print(f"Sampled Stochastic State Shape: {stochastic_state.shape}")  # Should be [B, d_model]
-
-    # --- Perform a Forward Pass in Eval Mode ---
-    print("\n--- Running in Eval Mode ---")
-    world_model_example.eval()
-    with torch.no_grad():
-        (
-            predicted_token_logits_inf,
-            predicted_reward_inf,
-            predicted_done_inf,
-            new_hidden_state_inf,
-            stochastic_state_inf
-        ) = world_model_example(
-            prev_obs_tokens=prev_obs_tokens_dummy,
-            prev_action=prev_action_dummy,
-            prev_hidden_state=initial_hidden_state
-        )
-    print(f"Predicted Token Logits Shape (Inference): {predicted_token_logits_inf.shape}")
-    world_model_example.train()  # Set back to train mode
+    print(f"Logits shape: {logits.shape}")
+    print(f"Rewards shape: {rewards.shape}")
+    print(f"Dones shape: {dones.shape}")
