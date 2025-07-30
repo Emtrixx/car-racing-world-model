@@ -8,7 +8,7 @@ import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
-from torch.cuda.amp import GradScaler, autocast
+from torch.amp import GradScaler, autocast
 from tqdm import tqdm
 
 from src.logger import ExperimentLogger
@@ -432,7 +432,7 @@ if __name__ == "__main__":
     vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=config['device']))
     vq_vae_model.eval()
 
-    logger = ExperimentLogger(log_dir="logs/transformer_wm_logs", experiment_name="transformer_wm_training")
+    logger = ExperimentLogger(log_dir="logs", experiment_name="transformer_wm_training")
     run_name = args.run_name if args.run_name else f"{args.config}_{int(time.time())}"
     logger.start_run(run_name=run_name, config=config)
 

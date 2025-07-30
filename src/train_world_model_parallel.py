@@ -533,7 +533,7 @@ if __name__ == "__main__":
         print(f"Using nn.DataParallel for GRU model training across {torch.cuda.device_count()} GPUs.")
         world_model_gru = nn.DataParallel(world_model_gru)
 
-    logger = ExperimentLogger(log_dir="logs/gru_wm_logs", experiment_name="gru_wm_training")
+    logger = ExperimentLogger(log_dir="logs", experiment_name="gru_wm_training")
     run_name = args.run_name if args.run_name else f"{args.config}_{int(time.time())}"
     logger.start_run(run_name=run_name, config=config)
 

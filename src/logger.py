@@ -6,7 +6,7 @@ import mlflow
 class ExperimentLogger:
     def __init__(self, log_dir="logs", experiment_name="default_experiment"):
         # Create a dedicated 'mlruns' subdirectory for MLflow data
-        self.mlflow_log_dir = Path(log_dir) / "mlruns"
+        self.mlflow_log_dir = Path(log_dir) / "wm_mlflow"
         self.experiment_name = experiment_name
         self.mlflow_log_dir.mkdir(parents=True, exist_ok=True)
 
