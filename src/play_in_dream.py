@@ -5,7 +5,7 @@ import numpy as np
 import cv2
 
 from src.utils import (
-    WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM
+    WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM, DATA_DIR
 )
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
 from src.world_model import WorldModelGRU
@@ -59,8 +59,9 @@ def play_dream():
     # --- Configuration ---
     SCREEN_WIDTH = 1024
     SCREEN_HEIGHT = 1024
-    FPS = 5
+    FPS = 8  # Increased FPS for smoother interaction
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    INIT_FRAMES_DIR = DATA_DIR / "init_frames"
 
     # --- Load Models ---
     print("Loading models...")
@@ -79,10 +80,21 @@ def play_dream():
     vq_vae.eval()
 
     # --- Prime the Initial State ---
-    image_files = sorted([os.path.join("../data/init_frames", f) for f in os.listdir("../data/init_frames")])
+    if not INIT_FRAMES_DIR.exists():
+        print(f"ERROR: Initial frames directory not found at {INIT_FRAMES_DIR}")
+        print("Please run `python -m src.helper.generate_sample_images` to create initial frames.")
+        return
+
+    image_files = sorted([os.path.join(INIT_FRAMES_DIR, f) for f in os.listdir(INIT_FRAMES_DIR)])
+    if not image_files:
+        print(f"ERROR: No images found in {INIT_FRAMES_DIR}")
+        return
+
     priming_sequence = image_files[:10]
-    hidden_state, _, initial_frame_tensor = get_starting_state_from_sequence(priming_sequence, world_model, vq_vae,
-                                                                             DEVICE)
+    hidden_state, initial_frame_tensor, current_tokens = get_starting_state_from_sequence(
+        priming_sequence, world_model, vq_vae, DEVICE
+    )
+    current_tokens = current_tokens.to(DEVICE)
 
     # The first frame for display, as a NumPy array [H, W, C]
     current_frame_np = initial_frame_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
@@ -120,27 +132,39 @@ def play_dream():
                 if event.key == pygame.K_RIGHT: keys_pressed["right"] = False
 
         # --- Create Action Tensor from Keyboard State ---
-        steer, gas, brake = 0.0, 0.0, 0.0
+        steer, gas, brake = 0.0, -1.0, -1.0
         if keys_pressed["up"]: gas = 0.8
         if keys_pressed["down"]: brake = 0.2
         if keys_pressed["left"]: steer = -1.0
         if keys_pressed["right"]: steer = 1.0
 
         action_np = np.array([steer, gas, brake], dtype=np.float32)
-        action_tensor = torch.tensor(action_np, device=DEVICE).unsqueeze(0)
+        # Reshape for sequence model: [B, T, A]
+        action_tensor = torch.tensor(action_np, device=DEVICE).unsqueeze(0).unsqueeze(0)
 
         # --- World Model Step ---
         with torch.no_grad():
             # Get next frame prediction and reward from the world model
-            pred_logits, pred_reward, _, next_hidden_state = world_model(action_tensor, hidden_state)
+            pred_logits, pred_reward, _, next_hidden_state, _ = world_model(
+                obs_tokens=current_tokens,
+                actions=action_tensor,
+                initial_hidden_state=hidden_state
+            )
 
             # Decode the predicted latents into an image
-            b, h, w, c = pred_logits.shape
-            logits_flat = pred_logits.reshape(b, h * w, c)
-            predicted_indices = torch.distributions.Categorical(logits=logits_flat).sample()
-            quantized_vectors = vq_vae.vq_layer.embeddings[predicted_indices]
-            quantized_grid = quantized_vectors.reshape(b, h, w, -1).permute(0, 3, 1, 2)
-            decoded_image = vq_vae.decoder(quantized_grid)
+            # Process logits: [B, T, N, C] -> [B, N, C]
+            pred_logits = pred_logits.squeeze(1)
+            predicted_indices = torch.distributions.Categorical(logits=pred_logits).sample()
+
+            # Update current_tokens for the next step [B, N] -> [B, T, N]
+            current_tokens = predicted_indices.unsqueeze(1)
+
+            # Decode the predicted tokens to an image
+            b, h, w = 1, world_model.grid_size, world_model.grid_size
+            quantized_vectors = vq_vae.vq_layer.embeddings.data[predicted_indices]
+            quantized_grid = quantized_vectors.view(b, h, w, -1)
+            quantized_grid_permuted = quantized_grid.permute(0, 3, 1, 2)
+            decoded_image = vq_vae.decoder(quantized_grid_permuted)
 
             # Update the current frame and hidden state
             current_frame_np = (decoded_image.squeeze(0).permute(1, 2, 0) * 255).clamp(0, 255).to(
@@ -149,12 +173,11 @@ def play_dream():
 
         # --- Prepare Frame for Display ---
         # Upscale the frame
-        frame_large_gray = cv2.resize(current_frame_np, (SCREEN_WIDTH, SCREEN_HEIGHT),
-                                      interpolation=cv2.INTER_NEAREST)
+        frame_large_rgb = cv2.resize(current_frame_np, (SCREEN_WIDTH, SCREEN_HEIGHT),
+                                     interpolation=cv2.INTER_NEAREST)
 
         # Convert to RGB for Pygame
         # frame_large_rgb = cv2.cvtColor(frame_large_gray, cv2.COLOR_GRAY2RGB)
-        frame_large_rgb = frame_large_gray
 
         # Draw the predicted reward text on the RGB frame
         reward_text = f"Reward: {pred_reward.item():.2f}"

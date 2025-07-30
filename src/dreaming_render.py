@@ -1,7 +1,7 @@
 import argparse
 import os
 from collections import deque
-from typing import List, Tuple, Union
+from typing import List, Tuple
 
 import cv2
 import imageio
@@ -10,7 +10,6 @@ import torch
 from stable_baselines3 import PPO
 
 from src.play_game_sb3 import SB3_MODEL_PATH
-from src.transformer_world_model import WorldModelTransformer
 from src.utils import VIDEO_DIR, ASSETS_DIR, DATA_DIR, WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, \
     ACTION_DIM
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
@@ -18,18 +17,18 @@ from src.world_model import WorldModelGRU
 
 
 def get_starting_state_from_image(image_path: str, world_model: WorldModelGRU,
-                                  vq_vae: VQVAE, device) -> Tuple[torch.Tensor, torch.Tensor]:
+                                  vq_vae: VQVAE, device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Loads an image, encodes it, and uses it to prime the world model's state.
 
     Args:
         image_path (str): Path to the pre-processed sample image.
-        world_model WorldModelGRU: The trained world model.
+        world_model (WorldModelGRU): The trained world model.
         vq_vae (VQVAE): The trained VQ-VAE.
         device: The torch device.
 
     Returns:
-        tuple: A tuple containing (primed_hidden_state, first_frame_tensor).
+        tuple: A tuple containing (primed_hidden_state, first_frame_reconstruction, first_frame_tokens).
     """
     print(f"Initializing dream from image: {image_path}")
     frame_np = imageio.imread(image_path)
@@ -43,31 +42,38 @@ def get_starting_state_from_image(image_path: str, world_model: WorldModelGRU,
     frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dimension
 
     with torch.no_grad():
-        zero_hidden_state = world_model.get_initial_hidden_state(batch_size=1, device=device)
-        first_frame_tensor, _, _, indices, _, _ = vq_vae(frame_tensor)
-        indices = indices.view(1, -1)  # Flatten to [1, 16]
-        generation_hidden_state_stack = world_model.encode_observation(observation_tokens=indices)
+        reconstruction, _, _, indices, _, _ = vq_vae(frame_tensor)
+        # Reshape for model: [batch_size, sequence_length, num_tokens]
+        indices = indices.view(1, 1, -1)
 
-    return generation_hidden_state_stack, first_frame_tensor
+        # Prime the hidden state by processing the initial frame
+        initial_hidden_state = world_model.get_initial_hidden_state(batch_size=1, device=device)
+        dummy_action = torch.zeros(1, 1, world_model.action_embedding.in_features, device=device)
+
+        _, _, _, primed_hidden_state, _ = world_model(
+            obs_tokens=indices,
+            actions=dummy_action,
+            initial_hidden_state=initial_hidden_state
+        )
+
+    return primed_hidden_state, reconstruction, indices
 
 
 def get_starting_state_from_sequence(image_paths: List[str],
-                                     world_model: Union[WorldModelGRU, WorldModelTransformer],
-                                     vq_vae: VQVAE, device) -> Tuple[
-    Union[torch.Tensor, None], Union[torch.Tensor, None], torch.Tensor]:
+                                     world_model: WorldModelGRU,
+                                     vq_vae: VQVAE, device) -> Tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
     """
     Loads a sequence of images, encodes them, and processes them sequentially
     to prime the world model's state.
 
     Args:
         image_paths (List[str]): A list of paths to the pre-processed sample images, in order.
-        world_model (Union[WorldModelGRU, WorldModelTransformer]): The trained world model.
+        world_model (WorldModelGRU): The trained world model.
         vq_vae (VQVAE): The trained VQ-VAE.
         device: The torch device.
 
     Returns:
-        tuple: A tuple containing (final_primed_hidden_state, final_latent_tokens, last_frame_reconstruction).
-               One of final_primed_hidden_state or final_latent_tokens will be None depending on model type.
+        tuple: A tuple containing (final_primed_hidden_state, last_frame_reconstruction, last_tokens).
     """
     print(f"Initializing dream from a sequence of {len(image_paths)} images...")
 
@@ -87,14 +93,17 @@ def get_starting_state_from_sequence(image_paths: List[str],
             frame_tensor = frame_tensor.unsqueeze(0)  # Add batch dimension
 
             reconstruction, _, _, indices, _, _ = vq_vae(frame_tensor)
-            indices = indices.view(1, -1)
+            indices = indices.view(1, 1, -1)  # Reshape for model [B, T, N]
             last_frame_reconstruction = reconstruction
+            last_tokens = indices
 
-            dummy_action = torch.zeros(1, world_model.action_embedding.in_features, device=device)
-            _, _, _, hidden_state = world_model(
-                dummy_action, hidden_state, ground_truth_next_tokens=indices
+            dummy_action = torch.zeros(1, 1, world_model.action_embedding.in_features, device=device)
+            _, _, _, hidden_state, _ = world_model(
+                obs_tokens=indices,
+                actions=dummy_action,
+                initial_hidden_state=hidden_state
             )
-    return hidden_state, None, last_frame_reconstruction
+    return hidden_state, last_frame_reconstruction, last_tokens
 
 
 def dream_gru(world_model: WorldModelGRU,
@@ -102,6 +111,7 @@ def dream_gru(world_model: WorldModelGRU,
               ppo_agent,
               initial_hidden_state: torch.Tensor,
               initial_frame: np.ndarray,
+              initial_tokens: torch.Tensor,
               num_steps: int,
               num_stack: int = 4,
               device=torch.device("cpu"),
@@ -115,6 +125,7 @@ def dream_gru(world_model: WorldModelGRU,
         ppo_agent: The trained PPO agent (e.g., from Stable Baselines 3).
         initial_hidden_state: The starting hidden state for the world model.
         initial_frame (np.ndarray): The first single frame (H, W) to seed the dream.
+        initial_tokens (torch.Tensor): The tokenized representation of the initial frame.
         num_steps (int): The number of steps to dream for.
         num_stack (int): The number of frames to stack for the agent's observation.
         device: The torch device to run the models on.
@@ -130,6 +141,7 @@ def dream_gru(world_model: WorldModelGRU,
 
     dreamed_frames = []
     hidden_state = initial_hidden_state.to(device)
+    current_tokens = initial_tokens.to(device)
     frame_buffer = deque([initial_frame] * num_stack, maxlen=num_stack)
 
     with torch.no_grad():
@@ -139,17 +151,26 @@ def dream_gru(world_model: WorldModelGRU,
 
             agent_obs = np.array(frame_buffer)
             action, _ = ppo_agent.predict(agent_obs, deterministic=False)
-            action_tensor = torch.tensor(action, device=device).float().unsqueeze(0)
+            # Reshape action for sequence model [B, T, A]
+            action_tensor = torch.tensor(action, device=device).float().unsqueeze(0).unsqueeze(0)
 
-            pred_logits, pred_reward, _, next_hidden_state = world_model(action_tensor, hidden_state,
-                                                                         ground_truth_next_tokens=None)
+            pred_logits, pred_reward, _, next_hidden_state, _ = world_model(
+                obs_tokens=current_tokens,
+                actions=action_tensor,
+                initial_hidden_state=hidden_state
+            )
 
-            b, h, w, c = pred_logits.shape
-            logits_flat = pred_logits.reshape(b, h * w, c)
-            predicted_indices = torch.distributions.Categorical(logits=logits_flat).sample()
+            # Process logits: [B, T, N, C] -> [B, N, C]
+            pred_logits = pred_logits.squeeze(1)
+            predicted_indices = torch.distributions.Categorical(logits=pred_logits).sample()
 
-            quantized_vectors = vq_vae.vq_layer.embeddings[predicted_indices]
-            quantized_grid = quantized_vectors.reshape(b, h, w, -1)
+            # Update current_tokens for the next step [B, N] -> [B, T, N]
+            current_tokens = predicted_indices.unsqueeze(1)
+
+            # Decode the predicted tokens to an image
+            b, h, w = 1, world_model.grid_size, world_model.grid_size
+            quantized_vectors = vq_vae.vq_layer.embeddings.data[predicted_indices]
+            quantized_grid = quantized_vectors.view(b, h, w, -1)
             quantized_grid_permuted = quantized_grid.permute(0, 3, 1, 2)
 
             decoded_image = vq_vae.decoder(quantized_grid_permuted)
@@ -268,7 +289,7 @@ if __name__ == '__main__':
     #     priming_sequence, world_model, vq_vae, DEVICE
     # )
     # For dreaming from a single image, use the first image in the sequence
-    primed_h, initial_frame_tensor = get_starting_state_from_image(
+    primed_h, initial_frame_tensor, initial_tokens = get_starting_state_from_image(
         priming_sequence[0], world_model, vq_vae, DEVICE
     )
 
@@ -280,6 +301,7 @@ if __name__ == '__main__':
         vq_vae=vq_vae,
         ppo_agent=ppo_agent,
         initial_frame=initial_frame_np,
+        initial_tokens=initial_tokens,
         num_steps=DREAM_STEPS,
         initial_hidden_state=primed_h,
         device=DEVICE
