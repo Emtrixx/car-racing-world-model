@@ -1,138 +1,92 @@
-import collections
-
+# src/dream_env_transformer.py
+import random
 import gymnasium as gym
 import numpy as np
 import torch
 from gymnasium import spaces
+from collections import deque
 
-from src.transformer_world_model import WorldModelTransformer, HISTORY_LEN
-from src.utils import DEVICE
+from src.transformer_world_model import WorldModelTransformer
 from src.vq_conv_vae import VQVAE
 
 
-class TransformerDreamEnv(gym.Env):
+class DreamEnvTransformer(gym.Env):
     """
-    A Gym environment that simulates the CarRacing-v3 environment using a trained
-    Transformer-based World Model. The agent interacts with the world model's "dream".
+    A Gym environment that simulates the CarRacing-v3 environment using a trained Transformer World Model.
+    The agent interacts with the world model's "dream" instead of the real environment.
     """
 
-    def __init__(
-            self,
-            world_model: WorldModelTransformer,
-            vq_vae: VQVAE,
-            initial_frame: np.ndarray,
-            history_len: int = HISTORY_LEN
-    ):
-        super(TransformerDreamEnv, self).__init__()
+    def __init__(self, agent, world_model: WorldModelTransformer, vq_vae: VQVAE, device, seed, history_length, horizon, real_buffer):
+        super(DreamEnvTransformer, self).__init__()
 
+        self.agent = agent
         self.world_model = world_model
         self.vq_vae = vq_vae
-        self.initial_frame = initial_frame
-        self.history_len = history_len
+        self.device = device
+        self.seed = seed
+        self.history_length = history_length
+        self.horizon = horizon
+        self.real_buffer = real_buffer
 
-        # Define action and observation spaces
-        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(world_model.action_dim,), dtype=np.float32)
-        # Observation is a 64x64 RGB image
-        self.observation_space = spaces.Box(low=0, high=255, shape=(64, 64, 3), dtype=np.uint8)
+        self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
+        self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(64, 64, 3), dtype=np.float32)
 
-        # Buffers for storing the history of latent codes and actions
-        self.latent_history = collections.deque(maxlen=self.history_len)
-        self.action_history = collections.deque(maxlen=self.history_len)
-
-        # The current latent state (most recent)
-        self.current_latent_codes = None
+        self.action_history = deque(maxlen=self.history_length)
+        self.token_history = deque(maxlen=self.history_length)
+        self.current_step = 0
 
     def reset(self, seed=None, options=None):
-        super().reset(seed=seed)
+        super().reset(seed=seed if seed is not None else self.seed)
 
-        # Preprocess the initial frame and encode it to get the first latent codes
-        # preprocessed_frame = preprocess_observation(self.initial_frame)
-        preprocessed_frame = self.initial_frame  # initial_frame is already preprocessed
-        obs_tensor = torch.from_numpy(preprocessed_frame).permute(2, 0, 1).unsqueeze(0).to(DEVICE)
-
-        with torch.no_grad():
-            # Encode the initial frame to get latent codes
-            _, _, _, encoding_indices, _, _ = self.vq_vae(obs_tensor)
-            # Shape: [1, grid_size, grid_size] -> [grid_size * grid_size]
-            initial_latent_codes = encoding_indices.view(-1)
-
-        # Clear and populate the history buffers
-        self.latent_history.clear()
+        # Sample a starting sequence from the real replay buffer
+        start_idx = random.randint(0, len(self.real_buffer) - self.history_length - 1)
+        
         self.action_history.clear()
+        self.token_history.clear()
 
-        # Define a zero action for padding the history
-        zero_action = torch.zeros(self.action_space.shape, device=DEVICE)
+        for i in range(self.history_length):
+            data_point = self.real_buffer[start_idx + i]
+            self.action_history.append(data_point['action'])
+            self.token_history.append(data_point['prev_tokens'])
 
-        # Populate the history by repeating the initial state and a zero action
-        for _ in range(self.history_len):
-            self.latent_history.append(initial_latent_codes)
-            self.action_history.append(zero_action)
-
-        # Set the most recent latent state
-        self.current_latent_codes = initial_latent_codes
-
-        # Decode the initial latent state to get the first observation
-        obs = self._decode_latent_to_obs(self.current_latent_codes)
+        initial_obs_tokens = self.real_buffer[start_idx + self.history_length]['prev_tokens']
+        obs = self._decode_latent_to_obs(initial_obs_tokens.view(self.world_model.grid_size, self.world_model.grid_size))
+        self.current_step = 0
+        
         return obs, {}
 
-    def step(self, action: np.ndarray):
-        # Convert numpy action to a tensor
-        action_tensor = torch.from_numpy(action).to(DEVICE)
-
-        # Prepare the history tensors for the model
-        # Stack the deques to create tensors of shape [1, history_len, ...]
-        latent_hist_tensor = torch.stack(list(self.latent_history), dim=0).unsqueeze(0)
-        action_hist_tensor = torch.stack(list(self.action_history), dim=0).unsqueeze(0)
+    def step(self, action):
+        action_tensor = torch.from_numpy(action).float().to(self.device).unsqueeze(0)
+        self.action_history.append(action_tensor.squeeze(0).cpu())
 
         with torch.no_grad():
-            # The transformer predicts the next state based on the entire history
-            (
-                _,  # predicted_latent_logits (not needed for stepping)
-                predicted_reward_tensor,
-                predicted_done_logits,
-                generated_tokens_indices,  # The predicted next latent state
-            ) = self.world_model(action_hist_tensor, latent_hist_tensor)
+            action_hist_tensor = torch.stack(list(self.action_history)).to(self.device).unsqueeze(0)
+            token_hist_tensor = torch.stack(list(self.token_history)).to(self.device).unsqueeze(0)
 
-        # Update the current latent state with the prediction
-        # Shape: [1, num_tokens] -> [num_tokens]
-        self.current_latent_codes = generated_tokens_indices.squeeze(0)
+            pred_logits, pred_reward, pred_done_logits, _ = self.world_model(action_hist_tensor, token_hist_tensor)
 
-        # Update the history buffers with the new action and the predicted state
-        self.action_history.append(action_tensor)
-        self.latent_history.append(self.current_latent_codes)
+            # Sample the next latent state from the predicted logits
+            pred_probs = torch.softmax(pred_logits.view(-1, self.world_model.codebook_size), dim=-1)
+            next_tokens_flat = torch.multinomial(pred_probs, 1).squeeze()
+            self.token_history.append(next_tokens_flat.cpu())
 
-        # Decode the new latent state to get the next observation
-        obs = self._decode_latent_to_obs(self.current_latent_codes)
-
-        # Get the scalar reward and done values
-        reward = predicted_reward_tensor.item()
-        # Apply sigmoid to done logits and check against a threshold
-        done = torch.sigmoid(predicted_done_logits).item() > 0.5
-        truncated = False  # This environment does not have a fixed time limit
+        obs = self._decode_latent_to_obs(next_tokens_flat.view(self.world_model.grid_size, self.world_model.grid_size))
+        reward = pred_reward.item()
+        done = torch.sigmoid(pred_done_logits).item() > 0.5
+        
+        self.current_step += 1
+        truncated = self.current_step >= self.horizon
 
         return obs, reward, done, truncated, {}
 
-    def _decode_latent_to_obs(self, latent_codes: torch.Tensor) -> np.ndarray:
-        """
-        Decodes a tensor of latent codes into a NumPy image observation.
-        """
+    def _decode_latent_to_obs(self, latent_codes):
         with torch.no_grad():
-            # Get the corresponding embeddings from the codebook
-            # latent_codes shape: [num_tokens] -> quantized shape: [num_tokens, embed_dim]
             quantized = self.vq_vae.vq_layer.embeddings.data[latent_codes.long()]
+            quantized = quantized.permute(2, 0, 1).unsqueeze(0)
+            decoded_obs = self.vq_vae.decoder(quantized)
 
-            # Reshape to the grid structure expected by the decoder
-            # [H*W, C] -> [1, H, W, C] -> [1, C, H, W]
-            grid_size = self.world_model.grid_size
-            quantized = quantized.view(1, grid_size, grid_size, -1).permute(0, 3, 1, 2)
-
-            # Decode the quantized latents to an image
-            decoded_obs_tensor = self.vq_vae.decoder(quantized)
-
-        # Convert the tensor to a NumPy array in the correct format for Gym (H, W, C)
-        obs_numpy = decoded_obs_tensor.squeeze(0).permute(1, 2, 0).cpu().numpy()
-        # Convert from [0, 1] float to [0, 255] uint8
-        return (obs_numpy * 255).astype(np.uint8)
+        obs_numpy = decoded_obs.squeeze(0).permute(1, 2, 0).cpu().numpy()
+        return obs_numpy.astype(np.float32)
 
     def render(self, mode='human'):
         pass
