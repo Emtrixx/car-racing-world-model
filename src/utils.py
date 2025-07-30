@@ -12,7 +12,7 @@ from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 
 from src.vq_conv_vae import VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
-from src.world_model import GRU_HIDDEN_DIM, GRU_NUM_LAYERS
+from src.world_model import D_MODEL, GRU_NUM_LAYERS
 
 # --- Configuration Constants ---
 ENV_NAME = "CarRacing-v3"
