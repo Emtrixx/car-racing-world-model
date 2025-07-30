@@ -168,7 +168,8 @@ class GruWorldModelTrainer:
         total_val_token_loss, total_val_reward_loss, total_val_done_loss, total_val_kl_loss = 0, 0, 0, 0
         num_val_batches = 0
 
-        with torch.no_grad(), torch.amp.autocast(device_type=str(self.device), dtype=torch.bfloat16,
+        device_type = str(self.device).split(':')[0]  # Extract device type (e.g., 'cuda', 'cpu')
+        with torch.no_grad(), torch.amp.autocast(device_type=device_type, dtype=torch.bfloat16,
                                                  enabled=self.scaler is not None):
             for batch in self.val_dataloader:
                 for key in batch:
@@ -279,7 +280,8 @@ class GruWorldModelTrainer:
                 batch_size = batch['actions'].size(0)
                 h = current_model_module.get_initial_hidden_state(batch_size, self.device)
 
-                with torch.amp.autocast(device_type=str(self.device), dtype=torch.bfloat16,
+                device_type = str(self.device).split(':')[0]  # Extract device type (e.g., 'cuda', 'cpu')
+                with torch.amp.autocast(device_type=device_type, dtype=torch.bfloat16,
                                         enabled=self.scaler is not None):
                     pred_logits, pred_reward, pred_done_logits, _, stochastic_dist = self.world_model(
                         batch['prev_tokens'], batch['actions'], h
