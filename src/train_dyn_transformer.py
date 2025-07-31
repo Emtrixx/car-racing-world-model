@@ -14,7 +14,7 @@ from tqdm import tqdm
 # Local imports
 from src.dream_env_transformer import DreamEnvTransformer
 from src.impala_cnn import CustomCNN
-from src.train_transformer_world_model import TransformerHistoryDataset
+from src.train_transformer_world_model import TransformerHistoryDataset, NUM_LOADER_WORKERS
 from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED_DIM, TRANSFORMER_NUM_HEADS, \
     TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE
 from src.utils import (
@@ -33,20 +33,37 @@ def get_combined_config(name="default"):
     """
     # --- World Model Config ---
     wm_config = {
-        "wm_epochs": 5, "wm_batch_size": 128, "wm_learning_rate": 1e-4,
-        "history_length": 32, "max_grad_norm": 1.0, "validation_split": 0.1,
-        "embed_dim": TRANSFORMER_EMBED_DIM, "num_heads": TRANSFORMER_NUM_HEADS,
-        "num_layers": TRANSFORMER_NUM_LAYERS, "ff_dim": TRANSFORMER_FF_DIM,
-        "grid_size": GRID_SIZE, "dropout_rate": TRANSFORMER_DROPOUT_RATE,
-        "max_seq_len": 4096, "codebook_size": VQVAE_NUM_EMBEDDINGS,
+        "wm_epochs": 5,
+        "wm_batch_size": 128,
+        "wm_learning_rate": 1e-4,
+        "history_length": 32,
+        "max_grad_norm": 1.0,
+        "validation_split": 0.1,
+        "embed_dim": TRANSFORMER_EMBED_DIM,
+        "num_heads": TRANSFORMER_NUM_HEADS,
+        "num_layers": TRANSFORMER_NUM_LAYERS,
+        "ff_dim": TRANSFORMER_FF_DIM,
+        "grid_size": GRID_SIZE,
+        "dropout_rate": TRANSFORMER_DROPOUT_RATE,
+        "max_seq_len": 4096,
+        "codebook_size": VQVAE_NUM_EMBEDDINGS,
         "vqvae_embed_dim": VQVAE_EMBEDDING_DIM,
+        'num_loader_workers': NUM_LOADER_WORKERS,
     }
 
     # --- PPO Config ---
     ppo_config = {
-        "policy": "CnnPolicy", "ppo_learning_rate": 3e-5, "n_steps": 1024,
-        "ppo_batch_size": 64, "n_epochs": 10, "gamma": 0.99, "gae_lambda": 0.95,
-        "clip_range": 0.2, "ent_coef": 0.02, "vf_coef": 0.5, "ppo_max_grad_norm": 0.5,
+        "policy": "CnnPolicy",
+        "ppo_learning_rate": 3e-5,
+        "n_steps": 1024,
+        "ppo_batch_size": 64,
+        "n_epochs": 10,
+        "gamma": 0.99,
+        "gae_lambda": 0.95,
+        "clip_range": 0.2,
+        "ent_coef": 0.02,
+        "vf_coef": 0.5,
+        "ppo_max_grad_norm": 0.5,
         "target_kl": 0.015,
         "policy_kwargs": dict(
             features_extractor_class=CustomCNN,
@@ -58,20 +75,34 @@ def get_combined_config(name="default"):
 
     # --- Dyna-style Training Loop Config ---
     dyna_config = {
-        "total_real_steps": 1_000_000, "warmup_real_steps": 200_000,
-        "wm_train_interval": 25_000, "dream_horizon": 15,
-        "dream_steps_per_real_step": 1, "num_envs": 8,
-        "max_episode_steps_collect": 1000, "seed": random.randint(0, 2 ** 31 - 1),
-        "device": DEVICE, "action_dim": ACTION_DIM, "env_name": ENV_NAME,
+        "total_real_steps": 1_000_000,
+        "warmup_real_steps": 200_000,
+        "wm_train_interval": 25_000,
+        "dream_horizon": 15,
+        "dream_steps_per_real_step": 1,
+        "num_envs": 8,
+        "max_episode_steps_collect": 1000,
+        "seed": random.randint(0, 2 ** 31 - 1),
+        "device": DEVICE,
+        "action_dim": ACTION_DIM,
+        "env_name": ENV_NAME,
     }
 
     combined = {**wm_config, **ppo_config, **dyna_config}
 
     test_config = combined.copy()
     test_config.update({
-        "total_real_steps": 2_000, "warmup_real_steps": 1000, "wm_train_interval": 500,
-        "wm_epochs": 2, "wm_batch_size": 4, "history_length": 4, "dream_horizon": 5,
-        "num_envs": 1, "n_steps": 128, "ppo_batch_size": 32,
+        "total_real_steps": 2_000,
+        "warmup_real_steps": 1000,
+        "wm_train_interval": 500,
+        "wm_epochs": 2,
+        "wm_batch_size": 4,
+        "num_loader_workers": 0,
+        "history_length": 4,
+        "dream_horizon": 5,
+        "num_envs": 1,
+        "n_steps": 128,
+        "ppo_batch_size": 32,
         "policy_kwargs": dict(
             features_extractor_class=CustomCNN,
             features_extractor_kwargs=dict(features_dim=256),
@@ -126,8 +157,6 @@ class DynaCallback(BaseCallback):
     def __init__(self, trainer, verbose=0):
         super(DynaCallback, self).__init__(verbose)
         self.trainer = trainer
-        self.config = trainer.config
-        self.last_wm_train_step = 0
 
     def _on_step(self) -> bool:
         # This method is called after each step in the real environment
@@ -140,8 +169,6 @@ class DynaCallback(BaseCallback):
             info = self.locals['infos'][i]
 
             # Get tokens for prev and next states
-            # Note: `self.model._last_obs` is the observation *before* the step
-            # Extract only the last frame from the stacked observation (shape: [4, H, W, C] -> [H, W, C])
             prev_tokens = get_vq_indices(self.trainer.vq_vae, self.model._last_obs[i][-1], self.trainer.device)
             next_tokens = get_vq_indices(self.trainer.vq_vae, obs[-1], self.trainer.device)
 
@@ -149,35 +176,13 @@ class DynaCallback(BaseCallback):
             is_done_val = bool(done or info.get("TimeLimit.truncated", False))
 
             self.trainer.replay_buffer.append({
-                "prev_tokens": prev_tokens.squeeze(0).to(torch.int64),  # Keep as flat tensor (N_tokens,)
+                "prev_tokens": prev_tokens.squeeze(0).to(torch.int64),
                 "action": torch.tensor(action, dtype=torch.float32),
                 "reward": torch.tensor([reward], dtype=torch.float32),
                 "done": torch.tensor([is_done_val], dtype=torch.float32),
-                "next_tokens": next_tokens.squeeze(0).to(torch.int64),  # Keep as flat tensor (N_tokens,)
+                "next_tokens": next_tokens.squeeze(0).to(torch.int64),
                 "is_first_step": torch.tensor([is_first_step_val], dtype=torch.bool)
             })
-
-        # Check if it's time to train the world model and dream
-        if self.num_timesteps - self.last_wm_train_step >= self.config['wm_train_interval']:
-            self.last_wm_train_step = self.num_timesteps
-
-            # Train the World Model
-            self.trainer.train_wm()
-
-            # Train the Agent in Dream (only after warmup)
-            if self.num_timesteps >= self.config['warmup_real_steps']:
-                self.trainer.train_agent_in_dream()
-            else:
-                print(
-                    f"Warmup phase: Skipping dream training. ({self.num_timesteps}/{self.config['warmup_real_steps']})")
-
-            # Save models
-            wm_path = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_{self.trainer.config_name}_wm_step_{self.num_timesteps}.pth"
-            ppo_path = CHECKPOINTS_DIR / "sb3_checkpoints" / f"dyn_{self.trainer.config_name}_ppo_step_{self.num_timesteps}.zip"
-            torch.save(self.trainer.world_model.state_dict(), wm_path)
-            self.model.save(ppo_path)
-            print(f"Saved models at step {self.num_timesteps}")
-
         return True
 
 
@@ -197,24 +202,32 @@ class DynaTrainer:
         self.vq_vae.eval()
 
         self.world_model = WorldModelTransformer(
-            embed_dim=config['embed_dim'], num_heads=config['num_heads'],
-            num_layers=config['num_layers'], ff_dim=config['ff_dim'],
-            grid_size=config['grid_size'], dropout_rate=config['dropout_rate'],
-            max_seq_len=config['max_seq_len'], action_dim=config['action_dim'],
-            codebook_size=config['codebook_size'], vqvae_embed_dim=config['vqvae_embed_dim']
+            embed_dim=config['embed_dim'],
+            num_heads=config['num_heads'],
+            num_layers=config['num_layers'],
+            ff_dim=config['ff_dim'],
+            grid_size=config['grid_size'],
+            dropout_rate=config['dropout_rate'],
+            max_seq_len=config['max_seq_len'],
+            action_dim=config['action_dim'],
+            codebook_size=config['codebook_size'],
+            vqvae_embed_dim=config['vqvae_embed_dim']
         ).to(self.device)
-        if wm_checkpoint_path:
-            print(f"Loading World Model from {wm_checkpoint_path}")
-            self.world_model.load_state_dict(torch.load(wm_checkpoint_path, map_location=self.device))
 
         if config_name != "test":
             print("Compiling World Model for performance...")
             self.world_model = torch.compile(self.world_model)
 
+        if wm_checkpoint_path:
+            print(f"Loading World Model from {wm_checkpoint_path}")
+            self.world_model.load_state_dict(torch.load(wm_checkpoint_path, map_location=self.device))
+
         print("Initializing environments...")
         env_params = {
-            "env_name_config": config["env_name"], "num_stack_config": NUM_STACK,
-            "gamma_config": config["gamma"], "max_episode_steps_config": config["max_episode_steps_collect"],
+            "env_name_config": config["env_name"],
+            "num_stack_config": NUM_STACK,
+            "gamma_config": config["gamma"],
+            "max_episode_steps_config": config["max_episode_steps_collect"],
         }
         if config["num_envs"] > 1:
             self.real_env = SubprocVecEnv([
@@ -227,13 +240,24 @@ class DynaTrainer:
 
         print("Initializing PPO agent...")
         self.ppo_agent = PPO(
-            policy=config["policy"], env=self.real_env, learning_rate=config["ppo_learning_rate"],
-            n_steps=config["n_steps"], batch_size=config["ppo_batch_size"], n_epochs=config["n_epochs"],
-            gamma=config["gamma"], gae_lambda=config["gae_lambda"], clip_range=config["clip_range"],
-            ent_coef=config["ent_coef"], vf_coef=config["vf_coef"], max_grad_norm=config["ppo_max_grad_norm"],
-            target_kl=config["target_kl"], policy_kwargs=config["policy_kwargs"],
-            tensorboard_log=str(SB3_LOG_DIR / f"dyn_transformer_{self.config_name}"), verbose=1,
-            seed=config["seed"], device="cpu"
+            policy=config["policy"],
+            env=self.real_env,
+            learning_rate=config["ppo_learning_rate"],
+            n_steps=config["n_steps"],
+            batch_size=config["ppo_batch_size"],
+            n_epochs=config["n_epochs"],
+            gamma=config["gamma"],
+            gae_lambda=config["gae_lambda"],
+            clip_range=config["clip_range"],
+            ent_coef=config["ent_coef"],
+            vf_coef=config["vf_coef"],
+            max_grad_norm=config["ppo_max_grad_norm"],
+            target_kl=config["target_kl"],
+            policy_kwargs=config["policy_kwargs"],
+            tensorboard_log=str(SB3_LOG_DIR / f"dyn_transformer_{self.config_name}"),
+            verbose=1,
+            seed=config["seed"],
+            device=self.device
         )
 
         self.replay_buffer = deque(maxlen=config['total_real_steps'])
@@ -243,8 +267,8 @@ class DynaTrainer:
         self.done_loss_fn = nn.BCEWithLogitsLoss()
         self.scaler = torch.amp.GradScaler(enabled="cuda" in str(self.device))
 
-    def train_wm(self):
-        print("\n--- Training World Model ---")
+    def train_wm(self, global_tqdm):
+        global_tqdm.write("\n--- Training World Model ---")
         if len(self.replay_buffer) < self.config['history_length'] + 1:
             print("Not enough data for WM training. Skipping.")
             return
@@ -266,10 +290,11 @@ class DynaTrainer:
         if len(dataset) == 0:
             print("Not enough valid sequences for WM training. Skipping.")
             return
-        loader = DataLoader(dataset, batch_size=self.config['wm_batch_size'], shuffle=True, num_workers=0)
+        loader = DataLoader(dataset, batch_size=self.config['wm_batch_size'], shuffle=True,
+                            num_workers=self.config['num_loader_workers'])
 
         for epoch in range(self.config['wm_epochs']):
-            progress = tqdm(loader, desc=f"WM Epoch {epoch + 1}/{self.config['wm_epochs']}")
+            progress = tqdm(loader, desc=f"WM Epoch {epoch + 1}/{self.config['wm_epochs']}", position=0)
             for batch in progress:
                 for key in batch: batch[key] = batch[key].to(self.device)
 
@@ -292,17 +317,32 @@ class DynaTrainer:
                 self.scaler.step(self.wm_optimizer)
                 self.scaler.update()
                 progress.set_postfix(loss=total_loss.item())
-        print("--- World Model Training Finished ---")
+        global_tqdm.write("--- World Model Training Finished ---")
 
-    def train_agent_in_dream(self):
-        print("\n--- Training Agent in Dream ---")
-        # NOTE: Assumes DreamEnvTransformer can be implemented to handle the dream logic.
+    def train_agent_in_dream(self, global_tqdm):
+        global_tqdm.write("\n--- Training Agent in Dream ---")
+
         # It needs to sample initial states from the real buffer to start dreaming.
-        dream_env = DummyVecEnv([lambda: FrameStackWrapper(DreamEnvTransformer(
-            world_model=self.world_model, vq_vae=self.vq_vae,
-            device=self.device, seed=self.config['seed'], history_length=self.config['history_length'],
-            horizon=self.config['dream_horizon'], real_buffer=self.replay_buffer
-        ), num_stack=NUM_STACK)])
+        if config["num_envs"] > 1:
+            dream_env = SubprocVecEnv([lambda: FrameStackWrapper(DreamEnvTransformer(
+                world_model=self.world_model,
+                vq_vae=self.vq_vae,
+                device=self.device,
+                seed=self.config['seed'],
+                history_length=self.config['history_length'],
+                horizon=self.config['dream_horizon'],
+                real_buffer=self.replay_buffer
+            ), num_stack=NUM_STACK) for _ in range(self.config['num_envs'])])
+        else:
+            dream_env = DummyVecEnv([lambda: FrameStackWrapper(DreamEnvTransformer(
+                world_model=self.world_model,
+                vq_vae=self.vq_vae,
+                device=self.device,
+                seed=self.config['seed'],
+                history_length=self.config['history_length'],
+                horizon=self.config['dream_horizon'],
+                real_buffer=self.replay_buffer
+            ), num_stack=NUM_STACK)])
 
         # Temporarily set the dream environment for the agent
         original_env = self.ppo_agent.get_env()
@@ -317,16 +357,51 @@ class DynaTrainer:
 
         # Restore the original environment
         self.ppo_agent.set_env(original_env)
-        print("--- Agent Dream Training Finished ---")
+        self.ppo_agent.rollout_buffer.reset()
+
+        global_tqdm.write("--- Agent Dream Training Finished ---")
 
     def run(self):
         print("--- Starting Dyna-Style Training ---")
         callback = DynaCallback(trainer=self)
-        self.ppo_agent.learn(
-            total_timesteps=self.config['total_real_steps'],
-            callback=callback,
-            progress_bar=True
-        )
+        total_real_steps = self.config['total_real_steps']
+        wm_train_interval = self.config['wm_train_interval']
+
+        with tqdm(total=total_real_steps, desc="Total Real Steps", position=0) as pbar:
+            while pbar.n < total_real_steps:
+                last_steps = self.ppo_agent.num_timesteps
+                steps_to_collect = min(wm_train_interval, total_real_steps - pbar.n)
+
+                tqdm.write(f"Collecting {steps_to_collect} real steps...")
+                # Collect real data and train PPO on it
+                self.ppo_agent.learn(
+                    total_timesteps=steps_to_collect,
+                    callback=callback,
+                    reset_num_timesteps=False,
+                    progress_bar=True
+                )
+                # Update global progress bar
+                steps_this_run = self.ppo_agent.num_timesteps - last_steps
+                tqdm.write(f"Collected {steps_this_run} steps.")
+                pbar.update(steps_this_run)
+                real_steps_collected = self.ppo_agent.num_timesteps
+
+                # Train the World Model on the collected real data
+                self.train_wm(tqdm)
+
+                # Train the Agent in Dream (only after warmup)
+                if real_steps_collected >= self.config['warmup_real_steps']:
+                    self.train_agent_in_dream(tqdm)
+                else:
+                    pbar.write(
+                        f"Warmup phase: Skipping dream training. ({real_steps_collected}/{self.config['warmup_real_steps']})")
+
+                # Save models
+                wm_path = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_{self.config_name}_wm_step_{real_steps_collected}.pth"
+                ppo_path = CHECKPOINTS_DIR / "sb3_checkpoints" / f"dyn_{self.config_name}_ppo_step_{real_steps_collected}.zip"
+                torch.save(self.world_model.state_dict(), wm_path)
+                self.ppo_agent.save(ppo_path)
+                pbar.write(f"Saved models at step {real_steps_collected}")
         self.real_env.close()
         print("--- Dyna-Style Training Finished ---")
 
