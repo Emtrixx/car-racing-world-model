@@ -190,7 +190,8 @@ class DynaCallback(BaseCallback):
 
 
 class DynaTrainer:
-    def __init__(self, config, config_name, wm_checkpoint_path=None, run_name=None):
+    def __init__(self, config, config_name, wm_checkpoint_path=None, ppo_checkpoint=None,
+                 run_name=None):
         self.config = config
         self.config_name = config_name
         self.device = torch.device(config['device'])
@@ -262,6 +263,16 @@ class DynaTrainer:
             seed=config["seed"],
             device=self.device
         )
+
+        if ppo_checkpoint:
+            print(f"Loading PPO agent from {ppo_checkpoint}")
+            try:
+                self.ppo_agent.load(ppo_checkpoint, env=self.real_env)
+                print("PPO agent loaded successfully.")
+            except Exception as e:
+                print(f"Error loading PPO agent: {e}")
+                import traceback
+                traceback.print_exc()
 
         self.replay_buffer = deque(maxlen=config['total_real_steps'])
         self.wm_optimizer = torch.optim.Adam(self.world_model.parameters(), lr=config['wm_learning_rate'])
@@ -444,10 +455,12 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Transformer World Model with a PPO agent (Dyna-style).")
     parser.add_argument("--config", type=str, default="default", help="Configuration name ('default', 'test').")
     parser.add_argument("--wm-checkpoint", type=str, default=None, help="Path to a pre-trained world model checkpoint.")
+    parser.add_argument("--ppo-checkpoint", type=str, default=None, help="Path to a pre-trained PPO agent checkpoint.")
     parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
     args = parser.parse_args()
 
     config = get_combined_config(args.config)
     trainer = DynaTrainer(config, config_name=args.config, wm_checkpoint_path=args.wm_checkpoint,
+                          ppo_checkpoint=args.ppo_checkpoint,
                           run_name=args.run_name)
     trainer.run()
