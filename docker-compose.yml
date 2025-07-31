@@ -26,24 +26,14 @@ services:
               device_ids: [ '0', '1' ]
               #count: all
               capabilities: [ gpu ]
-  mlflow-transformer:
+  mlflow:
     image: ghcr.io/mlflow/mlflow:latest
     #    user: "1000:1000"
     container_name: mlflow_ui
     ports:
       - "5555:5000"
     volumes:
-      - ./logs/transformer_wm_logs/mlruns:/mlruns
-    command: mlflow ui --backend-store-uri file:///mlruns --host 0.0.0.0
-    restart: unless-stopped
-  mlflow-gru:
-    image: ghcr.io/mlflow/mlflow:latest
-    #    user: "1000:1000"
-    container_name: mlflow_ui
-    ports:
-      - "5555:5000"
-    volumes:
-      - ./logs/gru_wm_logs/mlruns:/mlruns
+      - ./logs/wm_mlflow:/mlruns
     command: mlflow ui --backend-store-uri file:///mlruns --host 0.0.0.0
     restart: unless-stopped
 
