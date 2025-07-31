@@ -454,6 +454,8 @@ class DynaTrainer:
         wm_path = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_{self.config_name}_{ENV_NAME.lower()}_wm_final.pth"
         ppo_path = str(SB3_SAVE_DIR / f"dyn_sb3_{self.config_name}_{ENV_NAME.lower()}_final.zip")
         torch.save(self.world_model.state_dict(), wm_path)
+        print(f"World Model saved to {wm_path}")
+        print(f"PPO Agent saved to {ppo_path}")
         self.ppo_agent.save(ppo_path)
 
         print("--- Dyna-Style Training Finished ---")
