@@ -2,6 +2,7 @@ import argparse
 import random
 import time
 from collections import deque
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -441,7 +442,7 @@ class DynaTrainer:
                 # Save models
                 wm_path = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_{self.config_name}_wm_step_{real_steps_collected}.pth"
                 ppo_path = str(SB3_SAVE_DIR / f"dyn_sb3_{self.config_name}_{ENV_NAME.lower()}")
-                ppo_path = ppo_path / f"ppo_model_{real_steps_collected}_steps.zip"
+                ppo_path = Path(ppo_path) / f"ppo_model_{real_steps_collected}_steps.zip"
                 torch.save(self.world_model.state_dict(), wm_path)
                 self.ppo_agent.save(ppo_path)
                 pbar.write(f"Saved models at step {real_steps_collected}")
