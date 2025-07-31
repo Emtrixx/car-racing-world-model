@@ -443,7 +443,7 @@ class DynaTrainer:
         original_env = self.ppo_agent.get_env()
         self.ppo_agent.set_env(dream_env)
         dream_steps = self.config['wm_train_interval'] * self.config['dream_steps_per_real_step']
-        self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=False)
+        self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True)
         self.ppo_agent.set_env(original_env)
         self.ppo_agent.rollout_buffer.reset()
         dream_env.close()
