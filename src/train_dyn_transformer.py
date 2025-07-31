@@ -26,6 +26,7 @@ from src.utils import (
 )
 from src.utils import _init_env_fn_sb3
 from src.vq_conv_vae import VQVAE, GRID_SIZE, VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM
+from train_ppo_sb3 import SB3_SAVE_DIR
 
 
 # --- Configuration ---
@@ -441,13 +442,21 @@ class DynaTrainer:
 
                 # Save models
                 wm_path = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_{self.config_name}_wm_step_{real_steps_collected}.pth"
-                ppo_path = CHECKPOINTS_DIR / "sb3_checkpoints" / f"dyn_{self.config_name}_ppo_step_{real_steps_collected}.zip"
+                ppo_path = str(SB3_SAVE_DIR / f"dyn_sb3_{self.config_name}_{ENV_NAME.lower()}")
+                ppo_path = ppo_path / f"ppo_model_{real_steps_collected}_steps.zip"
                 torch.save(self.world_model.state_dict(), wm_path)
                 self.ppo_agent.save(ppo_path)
                 pbar.write(f"Saved models at step {real_steps_collected}")
         self.real_env.close()
         if self.logger:
             self.logger.end_run()
+
+        # Save models
+        wm_path = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_{self.config_name}_{ENV_NAME.lower()}_wm_final.pth"
+        ppo_path = str(SB3_SAVE_DIR / f"dyn_sb3_{self.config_name}_{ENV_NAME.lower()}_final.zip")
+        torch.save(self.world_model.state_dict(), wm_path)
+        self.ppo_agent.save(ppo_path)
+
         print("--- Dyna-Style Training Finished ---")
 
 
