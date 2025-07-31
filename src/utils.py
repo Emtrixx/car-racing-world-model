@@ -11,8 +11,10 @@ from gymnasium import spaces
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 
-from src.vq_conv_vae import VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
+from src.dream_env_transformer import DreamEnvTransformer
+from src.vq_conv_vae import VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS, VQVAE
 from src.world_model import D_MODEL, GRU_NUM_LAYERS
+from src.transformer_world_model import WorldModelTransformer
 
 # --- Configuration Constants ---
 ENV_NAME = "CarRacing-v3"
@@ -349,3 +351,47 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
     # especially when using DummyVecEnv or if RecordEpisodeStatistics is not used inside make_env_sb3.
     env = Monitor(env)
     return env
+
+
+def _create_dream_env(wm_config, wm_state_dict, vq_vae_state_dict, real_buffer, seed):
+    """
+    A pickleable function to create the dream environment in a subprocess.
+    It reconstructs the models from their state_dicts.
+    """
+    device = torch.device(wm_config['device'])
+
+    # Reconstruct VQ-VAE
+    vq_vae = VQVAE()
+    vq_vae.load_state_dict(vq_vae_state_dict)
+    vq_vae = vq_vae.to(device)
+    vq_vae.eval()
+    # vq_vae = torch.compile(vq_vae)
+
+    # Reconstruct World Model
+    world_model = WorldModelTransformer(
+        embed_dim=wm_config['embed_dim'],
+        num_heads=wm_config['num_heads'],
+        num_layers=wm_config['num_layers'],
+        ff_dim=wm_config['ff_dim'],
+        grid_size=wm_config['grid_size'],
+        dropout_rate=wm_config['dropout_rate'],
+        max_seq_len=wm_config['max_seq_len'],
+        action_dim=wm_config['action_dim'],
+        codebook_size=wm_config['codebook_size'],
+        vqvae_embed_dim=wm_config['vqvae_embed_dim']
+    )
+    world_model.load_state_dict(wm_state_dict)
+    world_model = world_model.to(device)
+    world_model.eval()
+    # world_model = torch.compile(world_model)  # Compile for performance
+
+    dream_env = DreamEnvTransformer(
+        world_model=world_model,
+        vq_vae=vq_vae,
+        device=device,
+        seed=seed,
+        history_length=wm_config['history_length'],
+        horizon=wm_config['dream_horizon'],
+        real_buffer=real_buffer
+    )
+    return FrameStackWrapper(dream_env, num_stack=NUM_STACK)

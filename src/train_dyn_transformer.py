@@ -2,7 +2,6 @@ import argparse
 import random
 import time
 from collections import deque
-from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -22,11 +21,11 @@ from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED
     TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE, TRANSFORMER_MAX_SEQ_LEN
 from src.utils import (
     DEVICE, ENV_NAME, ACTION_DIM, NUM_STACK, VQ_VAE_CHECKPOINT_FILENAME,
-    TRANSFORMER_WM_CHECKPOINTS_DIR, SB3_LOG_DIR, CHECKPOINTS_DIR, FrameStackWrapper
+    TRANSFORMER_WM_CHECKPOINTS_DIR, SB3_LOG_DIR, FrameStackWrapper, _create_dream_env
 )
 from src.utils import _init_env_fn_sb3
 from src.vq_conv_vae import VQVAE, GRID_SIZE, VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM
-from train_ppo_sb3 import SB3_SAVE_DIR
+from src.train_ppo_sb3 import SB3_SAVE_DIR
 
 
 # --- Configuration ---
@@ -353,12 +352,12 @@ class DynaTrainer:
         # Log average metrics for the entire training call
         if self.logger and total_losses:
             self.logger.log_metrics({
-                'wm_train/mean_total_loss': sum(total_losses) / len(total_losses),
-                'wm_train/mean_token_loss': sum(token_losses) / len(token_losses),
-                'wm_train/mean_reward_loss': sum(reward_losses) / len(reward_losses),
-                'wm_train/mean_done_loss': sum(done_losses) / len(done_losses),
-                'wm_train/mean_grad_norm': sum(grad_norms) / len(grad_norms),
-                'wm_train/learning_rate': self.wm_optimizer.param_groups[0]['lr']
+                'train/mean_total_loss': sum(total_losses) / len(total_losses),
+                'train/mean_token_loss': sum(token_losses) / len(token_losses),
+                'train/mean_reward_loss': sum(reward_losses) / len(reward_losses),
+                'train/mean_done_loss': sum(done_losses) / len(done_losses),
+                'train/mean_grad_norm': sum(grad_norms) / len(grad_norms),
+                'train/learning_rate': self.wm_optimizer.param_groups[0]['lr']
             }, step=global_step)
 
         global_tqdm.write("--- World Model Training Finished ---")
@@ -368,15 +367,14 @@ class DynaTrainer:
 
         # It needs to sample initial states from the real buffer to start dreaming.
         if config["num_envs"] > 1:
-            dream_env = SubprocVecEnv([lambda: FrameStackWrapper(DreamEnvTransformer(
-                world_model=self.world_model,
-                vq_vae=self.vq_vae,
-                device=self.device,
-                seed=self.config['seed'],
-                history_length=self.config['history_length'],
-                horizon=self.config['dream_horizon'],
-                real_buffer=self.replay_buffer
-            ), num_stack=NUM_STACK) for _ in range(self.config['num_envs'])])
+            wm_state_dict = self.world_model.state_dict()
+            vq_vae_state_dict = self.vq_vae.state_dict()
+            env_fns = [
+                (lambda i=i: _create_dream_env(
+                    self.config, wm_state_dict, vq_vae_state_dict, self.replay_buffer, self.config['seed'] + i
+                )) for i in range(self.config['num_envs'])
+            ]
+            dream_env = SubprocVecEnv(env_fns)
         else:
             dream_env = DummyVecEnv([lambda: FrameStackWrapper(DreamEnvTransformer(
                 world_model=self.world_model,
