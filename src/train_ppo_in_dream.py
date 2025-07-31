@@ -2,14 +2,13 @@ import argparse
 import random
 import time
 
-import numpy as np
 import torch
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
 from stable_baselines3.common.vec_env import DummyVecEnv
 
 from src.dream_env import GruDreamEnv
-from src.dream_env_transformer import TransformerDreamEnv
+from src.dream_env_transformer import DreamEnvTransformer
 from src.impala_cnn import CustomCNN
 from src.transformer_world_model import WorldModelTransformer
 from src.utils import (
@@ -20,10 +19,11 @@ from src.utils import (
     WM_CHECKPOINT_FILENAME_GRU,
     DATA_DIR, FrameStackWrapper, WM_CHECKPOINT_FILENAME_TRANSFORMER,
 )
-from utils_vae import get_first_frame
+from src.utils import NUM_STACK, ACTION_DIM
+from src.utils_vae import get_first_frame
+from src.utils_wm import convert_dict_to_deque
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM
 from src.world_model import WorldModelGRU
-from src.utils import NUM_STACK, ACTION_DIM
 
 
 def get_config_dream(name="default"):
@@ -89,18 +89,36 @@ def train_ppo_in_dream(config_name: str, model_type: str, checkpoint_path: str =
     # Create the Dream Environment based on the selected model type
     if model_type == "gru":
         world_model = WorldModelGRU(action_dim=ACTION_DIM, latent_dim=VQVAE_EMBEDDING_DIM).to(DEVICE)
-        world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
+        world_model.eval()
         world_model = torch.compile(world_model)
+        world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=DEVICE))
         env = GruDreamEnv(world_model, vq_vae, initial_frame)
     elif model_type == "transformer":
+        # load replay buffer for priming the transformer world model on reset
+        data_buffer = torch.load("data/transformer_world_model_data", map_location='cpu')
+        limit = 1000
+        if limit < len(data_buffer['actions']):
+            # Limit the dataset to the first 'limit' sequences
+            for key in data_buffer:
+                data_buffer[key] = data_buffer[key][:limit]
+        data_buffer = convert_dict_to_deque(data_buffer)
+
+        # Load the transformer world model
         world_model = WorldModelTransformer(action_dim=ACTION_DIM, vqvae_embed_dim=VQVAE_EMBEDDING_DIM).to(DEVICE)
-        world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_TRANSFORMER, map_location=DEVICE))
+        world_model.eval()
         world_model = torch.compile(world_model)
-        env = TransformerDreamEnv(world_model, vq_vae, initial_frame)
+        world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_TRANSFORMER, map_location=DEVICE))
+        env = DreamEnvTransformer(
+            world_model=world_model,
+            vq_vae=vq_vae,
+            device=DEVICE,
+            seed=42,
+            history_length=32,
+            horizon=80,
+            real_buffer=data_buffer
+        )
     else:
         raise ValueError(f"Unknown model type: {model_type}")
-
-    world_model.eval()
 
     env = FrameStackWrapper(env, num_stack=NUM_STACK)  # Stack frames
     vec_env = DummyVecEnv([lambda: env])

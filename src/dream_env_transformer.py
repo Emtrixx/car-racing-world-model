@@ -16,10 +16,10 @@ class DreamEnvTransformer(gym.Env):
     The agent interacts with the world model's "dream" instead of the real environment.
     """
 
-    def __init__(self, agent, world_model: WorldModelTransformer, vq_vae: VQVAE, device, seed, history_length, horizon, real_buffer):
+    def __init__(self, world_model: WorldModelTransformer, vq_vae: VQVAE, device, seed, history_length, horizon,
+                 real_buffer):
         super(DreamEnvTransformer, self).__init__()
 
-        self.agent = agent
         self.world_model = world_model
         self.vq_vae = vq_vae
         self.device = device
@@ -35,24 +35,52 @@ class DreamEnvTransformer(gym.Env):
         self.token_history = deque(maxlen=self.history_length)
         self.current_step = 0
 
+    def _find_valid_start_indices(self):
+        """
+        Scans the real buffer to find all indices that can start a valid history sequence
+        without crossing an episode boundary.
+        """
+        self.valid_start_indices = []
+        for i in range(len(self.real_buffer) - self.history_length):
+            # A sequence is valid if no 'done' or 'is_first_step' is true within the history part.
+            # We check the transitions that form the history (from i to i + history_length - 1).
+            # The 'is_first_step' of the i-th element is fine, but not for i+1, i+2, ...
+            is_valid = True
+            for j in range(i + 1, i + self.history_length):
+                if self.real_buffer[j]['is_first_step'] or self.real_buffer[j - 1]['done']:
+                    is_valid = False
+                    break
+            if is_valid:
+                self.valid_start_indices.append(i)
+
     def reset(self, seed=None, options=None):
         super().reset(seed=seed if seed is not None else self.seed)
 
-        # Sample a starting sequence from the real replay buffer
-        start_idx = random.randint(0, len(self.real_buffer) - self.history_length - 1)
-        
+        # Re-calculate valid indices each time, as the buffer might have changed.
+        self._find_valid_start_indices()
+
+        if not self.valid_start_indices:
+            raise ValueError("No valid start indices found in the replay buffer. "
+                             "Buffer might be too small or contain only very short episodes.")
+
+        # Sample a starting sequence from the valid indices
+        start_idx = random.choice(self.valid_start_indices)
+
         self.action_history.clear()
         self.token_history.clear()
 
+        # Prime the history deques
         for i in range(self.history_length):
             data_point = self.real_buffer[start_idx + i]
             self.action_history.append(data_point['action'])
             self.token_history.append(data_point['prev_tokens'])
 
+        # The next observation is the one following the history sequence
         initial_obs_tokens = self.real_buffer[start_idx + self.history_length]['prev_tokens']
-        obs = self._decode_latent_to_obs(initial_obs_tokens.view(self.world_model.grid_size, self.world_model.grid_size))
+        obs = self._decode_latent_to_obs(
+            initial_obs_tokens.view(self.world_model.grid_size, self.world_model.grid_size))
         self.current_step = 0
-        
+
         return obs, {}
 
     def step(self, action):
@@ -73,7 +101,7 @@ class DreamEnvTransformer(gym.Env):
         obs = self._decode_latent_to_obs(next_tokens_flat.view(self.world_model.grid_size, self.world_model.grid_size))
         reward = pred_reward.item()
         done = torch.sigmoid(pred_done_logits).item() > 0.5
-        
+
         self.current_step += 1
         truncated = self.current_step >= self.horizon
 

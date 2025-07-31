@@ -299,7 +299,7 @@ class DynaTrainer:
         # NOTE: Assumes DreamEnvTransformer can be implemented to handle the dream logic.
         # It needs to sample initial states from the real buffer to start dreaming.
         dream_env = DummyVecEnv([lambda: FrameStackWrapper(DreamEnvTransformer(
-            agent=self.ppo_agent, world_model=self.world_model, vq_vae=self.vq_vae,
+            world_model=self.world_model, vq_vae=self.vq_vae,
             device=self.device, seed=self.config['seed'], history_length=self.config['history_length'],
             horizon=self.config['dream_horizon'], real_buffer=self.replay_buffer
         ), num_stack=NUM_STACK)])

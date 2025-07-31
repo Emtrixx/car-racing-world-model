@@ -74,13 +74,12 @@ def get_config(name="default"):
     # Test configuration for quick runs
     configs["test"] = configs["default"].copy()
     configs["test"].update({
-        "num_steps": 500,
+        "num_steps": 1000,
         "epochs": 3,
         "batch_size": 4,
         "history_length": 4,  # Shorter history for testing
         "num_collection_workers": 2,
         "num_loader_workers": 2,
-        "max_episode_steps_collect": 100,
         "dropout_rate": 0.1,
     })
     configs["profile"] = configs["default"].copy()
@@ -157,6 +156,7 @@ class WorldModelTransformerTrainer:
         self.vq_vae_model = vq_vae_model
         self.config = config
         self.device = config['device']
+        self.device_type = str(self.device).split(':')[0]  # Extract device type (e.g., 'cuda', 'cpu')
         self.train_dataloader = train_dataloader
         self.val_dataloader = val_dataloader
         self.logger = logger
@@ -184,7 +184,7 @@ class WorldModelTransformerTrainer:
         target_reward = batch['target_reward']
         target_done = batch['target_done']
 
-        with autocast(enabled=self.use_amp):
+        with autocast(enabled=self.use_amp, device_type=self.device_type):
             pred_logits, pred_reward, pred_done_logits, _ = self.world_model(action_hist, token_hist)
             b, h, w, c = pred_logits.shape
             token_loss = self.token_loss_fn(pred_logits.view(b * h * w, c), target_tokens.view(b * h * w))

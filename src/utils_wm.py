@@ -389,3 +389,47 @@ def collect_sequences_for_gru(num_steps_total, device_str_main,
             print(f"Warning: Could not remove temporary directory {temp_data_dir}: {e_rmdir}")
 
     return final_data_buffer
+
+
+from collections import deque
+import torch
+
+
+def convert_dict_to_deque(data_dict: dict) -> deque:
+    """
+    Converts a dictionary of stacked tensors back into a deque of dictionaries.
+
+    This is the reverse operation of stacking a replay buffer for saving.
+
+    Args:
+        data_dict (dict): A dictionary where keys are strings (e.g., 'actions')
+                          and values are tensors stacked along the first dimension.
+
+    Returns:
+        deque: A deque of dictionaries, where each dictionary represents a
+               single transition, suitable for use with DreamEnvTransformer.
+    """
+    # Find the number of transitions from the first dimension of a tensor
+    num_transitions = data_dict['actions'].shape[0]
+    print(f"Number of transitions {num_transitions}")
+
+    # The key for 'is_first_step' might be inconsistent. Let's find the correct one.
+    # is_first_step_key = 'is_first_steps' if 'is_first_steps' in data_dict else 'is_first_step'
+    is_first_step_key = 'is_first_steps'
+
+    replay_buffer = deque(
+        (
+            {
+                'prev_tokens': data_dict['prev_tokens'][i],
+                'action': data_dict['actions'][i],
+                'reward': data_dict['rewards'][i],
+                'done': data_dict['dones'][i],
+                'next_tokens': data_dict['next_tokens'][i],
+                'is_first_step': data_dict['is_first_steps'][i],
+            }
+            for i in range(num_transitions)
+        ),
+        maxlen=num_transitions  # Set maxlen to the total number of items
+    )
+
+    return replay_buffer
