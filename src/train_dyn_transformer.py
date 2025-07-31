@@ -1,6 +1,8 @@
 import argparse
 import random
+import time
 from collections import deque
+from pathlib import Path
 
 import torch
 import torch.nn as nn
@@ -14,9 +16,10 @@ from tqdm import tqdm
 # Local imports
 from src.dream_env_transformer import DreamEnvTransformer
 from src.impala_cnn import CustomCNN
+from src.logger import ExperimentLogger
 from src.train_transformer_world_model import TransformerHistoryDataset, NUM_LOADER_WORKERS
 from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED_DIM, TRANSFORMER_NUM_HEADS, \
-    TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE
+    TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE, TRANSFORMER_MAX_SEQ_LEN
 from src.utils import (
     DEVICE, ENV_NAME, ACTION_DIM, NUM_STACK, VQ_VAE_CHECKPOINT_FILENAME,
     TRANSFORMER_WM_CHECKPOINTS_DIR, SB3_LOG_DIR, CHECKPOINTS_DIR, FrameStackWrapper
@@ -34,7 +37,7 @@ def get_combined_config(name="default"):
     # --- World Model Config ---
     wm_config = {
         "wm_epochs": 5,
-        "wm_batch_size": 128,
+        "wm_batch_size": 256,
         "wm_learning_rate": 1e-4,
         "history_length": 32,
         "max_grad_norm": 1.0,
@@ -45,7 +48,7 @@ def get_combined_config(name="default"):
         "ff_dim": TRANSFORMER_FF_DIM,
         "grid_size": GRID_SIZE,
         "dropout_rate": TRANSFORMER_DROPOUT_RATE,
-        "max_seq_len": 4096,
+        "max_seq_len": TRANSFORMER_MAX_SEQ_LEN,
         "codebook_size": VQVAE_NUM_EMBEDDINGS,
         "vqvae_embed_dim": VQVAE_EMBEDDING_DIM,
         'num_loader_workers': NUM_LOADER_WORKERS,
@@ -187,7 +190,7 @@ class DynaCallback(BaseCallback):
 
 
 class DynaTrainer:
-    def __init__(self, config, config_name, wm_checkpoint_path=None):
+    def __init__(self, config, config_name, wm_checkpoint_path=None, run_name=None):
         self.config = config
         self.config_name = config_name
         self.device = torch.device(config['device'])
@@ -267,7 +270,14 @@ class DynaTrainer:
         self.done_loss_fn = nn.BCEWithLogitsLoss()
         self.scaler = torch.amp.GradScaler(enabled="cuda" in str(self.device))
 
-    def train_wm(self, global_tqdm):
+        # --- Logger ---
+        self.logger = ExperimentLogger(log_dir="logs",
+                                       experiment_name="dyna_transformer_wm_training")
+        if run_name is None:
+            run_name = f"{self.config_name}_{int(time.time())}"
+        self.logger.start_run(run_name=run_name, config=self.config)
+
+    def train_wm(self, global_tqdm, global_step):
         global_tqdm.write("\n--- Training World Model ---")
         if len(self.replay_buffer) < self.config['history_length'] + 1:
             print("Not enough data for WM training. Skipping.")
@@ -293,6 +303,9 @@ class DynaTrainer:
         loader = DataLoader(dataset, batch_size=self.config['wm_batch_size'], shuffle=True,
                             num_workers=self.config['num_loader_workers'])
 
+        # For logging
+        total_losses, token_losses, reward_losses, done_losses, grad_norms = [], [], [], [], []
+
         for epoch in range(self.config['wm_epochs']):
             progress = tqdm(loader, desc=f"WM Epoch {epoch + 1}/{self.config['wm_epochs']}", position=0)
             for batch in progress:
@@ -313,10 +326,29 @@ class DynaTrainer:
                 self.wm_optimizer.zero_grad(set_to_none=True)
                 self.scaler.scale(total_loss).backward()
                 self.scaler.unscale_(self.wm_optimizer)
-                nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
+                grad_norm = nn.utils.clip_grad_norm_(self.world_model.parameters(), self.config['max_grad_norm'])
                 self.scaler.step(self.wm_optimizer)
                 self.scaler.update()
                 progress.set_postfix(loss=total_loss.item())
+
+                # Append metrics for logging
+                total_losses.append(total_loss.item())
+                token_losses.append(token_loss.item())
+                reward_losses.append(reward_loss.item())
+                done_losses.append(done_loss.item())
+                grad_norms.append(grad_norm.item())
+
+        # Log average metrics for the entire training call
+        if self.logger and total_losses:
+            self.logger.log_metrics({
+                'wm_train/mean_total_loss': sum(total_losses) / len(total_losses),
+                'wm_train/mean_token_loss': sum(token_losses) / len(token_losses),
+                'wm_train/mean_reward_loss': sum(reward_losses) / len(reward_losses),
+                'wm_train/mean_done_loss': sum(done_losses) / len(done_losses),
+                'wm_train/mean_grad_norm': sum(grad_norms) / len(grad_norms),
+                'wm_train/learning_rate': self.wm_optimizer.param_groups[0]['lr']
+            }, step=global_step)
+
         global_tqdm.write("--- World Model Training Finished ---")
 
     def train_agent_in_dream(self, global_tqdm):
@@ -387,7 +419,7 @@ class DynaTrainer:
                 real_steps_collected = self.ppo_agent.num_timesteps
 
                 # Train the World Model on the collected real data
-                self.train_wm(tqdm)
+                self.train_wm(tqdm, global_step=real_steps_collected)
 
                 # Train the Agent in Dream (only after warmup)
                 if real_steps_collected >= self.config['warmup_real_steps']:
@@ -403,6 +435,8 @@ class DynaTrainer:
                 self.ppo_agent.save(ppo_path)
                 pbar.write(f"Saved models at step {real_steps_collected}")
         self.real_env.close()
+        if self.logger:
+            self.logger.end_run()
         print("--- Dyna-Style Training Finished ---")
 
 
@@ -410,8 +444,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Train a Transformer World Model with a PPO agent (Dyna-style).")
     parser.add_argument("--config", type=str, default="default", help="Configuration name ('default', 'test').")
     parser.add_argument("--wm-checkpoint", type=str, default=None, help="Path to a pre-trained world model checkpoint.")
+    parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
     args = parser.parse_args()
 
     config = get_combined_config(args.config)
-    trainer = DynaTrainer(config, config_name=args.config, wm_checkpoint_path=args.wm_checkpoint)
+    trainer = DynaTrainer(config, config_name=args.config, wm_checkpoint_path=args.wm_checkpoint,
+                          run_name=args.run_name)
     trainer.run()

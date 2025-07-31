@@ -13,7 +13,7 @@ from tqdm import tqdm
 
 from src.logger import ExperimentLogger
 from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED_DIM, TRANSFORMER_NUM_HEADS, \
-    TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE
+    TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE, TRANSFORMER_MAX_SEQ_LEN
 from src.utils import (
     ENV_NAME,
     ACTION_DIM,
@@ -68,7 +68,7 @@ def get_config(name="default"):
             "grid_size": GRID_SIZE,
             "dropout_rate": TRANSFORMER_DROPOUT_RATE,
             # At least the length of the history multiplied by (tokens per state + 1 for action).
-            "max_seq_len": 4096  # for positional encoding
+            "max_seq_len": TRANSFORMER_MAX_SEQ_LEN  # for positional encoding
         }
     }
     # Test configuration for quick runs

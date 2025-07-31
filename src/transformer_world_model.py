@@ -11,6 +11,7 @@ TRANSFORMER_NUM_HEADS = 8
 TRANSFORMER_NUM_LAYERS = 4
 TRANSFORMER_FF_DIM = 2048  # Typically 4 * embed_dim
 TRANSFORMER_DROPOUT_RATE = 0.1
+TRANSFORMER_MAX_SEQ_LEN = 4096  # Maximum sequence length for positional encoding
 
 
 # --- Positional Encoding ---
@@ -55,7 +56,7 @@ class WorldModelTransformer(nn.Module):
             ff_dim: int = TRANSFORMER_FF_DIM,
             grid_size: int = GRID_SIZE,
             dropout_rate: float = TRANSFORMER_DROPOUT_RATE,
-            max_seq_len: int = 4096,  # Maximum sequence length for positional encoding
+            max_seq_len: int = TRANSFORMER_MAX_SEQ_LEN,  # Maximum sequence length for positional encoding
     ):
         super().__init__()
         self.embed_dim = embed_dim
