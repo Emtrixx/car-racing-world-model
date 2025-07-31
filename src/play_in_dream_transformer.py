@@ -1,21 +1,20 @@
 import argparse
 import os
-import pygame
-import torch
-import numpy as np
-import cv2
 from collections import deque
 from pathlib import Path
 
+import cv2
+import numpy as np
+import pygame
+import torch
 from stable_baselines3 import PPO
 
-from dreaming_render_transformer import get_initial_obs_and_tokens
 from play_game_sb3 import SB3_MODEL_PATH
+from src.transformer_world_model import WorldModelTransformer
 from src.utils import (
     WM_CHECKPOINT_FILENAME_TRANSFORMER, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM, make_env_sb3, ENV_NAME, NUM_STACK
 )
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM
-from src.transformer_world_model import WorldModelTransformer
 from utils import preprocess_observation, DATA_DIR
 
 
@@ -73,7 +72,7 @@ def play_dream_transformer(autoplay=False, deterministic=False):
     SCREEN_WIDTH = 1024
     SCREEN_HEIGHT = 1024
     FPS = 8  # Transformer can be a bit slower
-    HISTORY_LEN = 16  # Must match the history length the model was trained with
+    HISTORY_LEN = 32  # Must match the history length the model was trained with
     DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     # --- Load Models ---

@@ -312,7 +312,7 @@ class DynaTrainer:
         self.ppo_agent.learn(
             total_timesteps=dream_steps,
             reset_num_timesteps=False,  # Continue counting timesteps
-            progress_bar=True
+            progress_bar=False
         )
 
         # Restore the original environment

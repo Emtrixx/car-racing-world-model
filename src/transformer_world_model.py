@@ -55,7 +55,7 @@ class WorldModelTransformer(nn.Module):
             ff_dim: int = TRANSFORMER_FF_DIM,
             grid_size: int = GRID_SIZE,
             dropout_rate: float = TRANSFORMER_DROPOUT_RATE,
-            max_seq_len: int = 1024,  # Maximum sequence length for positional encoding
+            max_seq_len: int = 4096,  # Maximum sequence length for positional encoding
     ):
         super().__init__()
         self.embed_dim = embed_dim
