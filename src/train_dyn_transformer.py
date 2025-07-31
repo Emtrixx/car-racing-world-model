@@ -58,7 +58,7 @@ def get_combined_config(name="default"):
     # --- PPO Config ---
     ppo_config = {
         "policy": "CnnPolicy",
-        "ppo_learning_rate": 3e-5,
+        "ppo_learning_rate": 45e-5,
         "n_steps": 1024,
         "ppo_batch_size": 64,
         "n_epochs": 10,
@@ -72,8 +72,10 @@ def get_combined_config(name="default"):
         "policy_kwargs": dict(
             features_extractor_class=CustomCNN,
             features_extractor_kwargs=dict(features_dim=1024),
-            net_arch=dict(pi=[256], vf=[256]), activation_fn=torch.nn.Tanh,
-            log_std_init=-1.0, ortho_init=True,
+            net_arch=dict(pi=[256], vf=[256]),
+            activation_fn=torch.nn.Tanh,
+            log_std_init=-1.0,
+            ortho_init=True,
         ),
     }
 
