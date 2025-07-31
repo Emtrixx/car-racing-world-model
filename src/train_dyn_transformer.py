@@ -179,11 +179,11 @@ class DynaCallback(BaseCallback):
             is_done_val = bool(done or info.get("TimeLimit.truncated", False))
 
             self.trainer.replay_buffer.append({
-                "prev_tokens": prev_tokens.squeeze(0).to(torch.int64),
+                "prev_tokens": prev_tokens.squeeze(0).to(torch.int64).cpu(),
                 "action": torch.tensor(action, dtype=torch.float32),
                 "reward": torch.tensor([reward], dtype=torch.float32),
                 "done": torch.tensor([is_done_val], dtype=torch.float32),
-                "next_tokens": next_tokens.squeeze(0).to(torch.int64),
+                "next_tokens": next_tokens.squeeze(0).to(torch.int64).cpu(),
                 "is_first_step": torch.tensor([is_first_step_val], dtype=torch.bool)
             })
         return True
