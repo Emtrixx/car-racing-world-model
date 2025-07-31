@@ -11,9 +11,10 @@ from gymnasium import spaces
 from stable_baselines3.common.monitor import Monitor
 from stable_baselines3.common.utils import set_random_seed
 
+from src.dream_env import GruDreamEnv
 from src.dream_env_transformer import DreamEnvTransformer
 from src.vq_conv_vae import VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS, VQVAE
-from src.world_model import D_MODEL, GRU_NUM_LAYERS
+from src.world_model import D_MODEL, GRU_NUM_LAYERS, WorldModelGRU
 from src.transformer_world_model import WorldModelTransformer
 
 # --- Configuration Constants ---
@@ -353,12 +354,12 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
     return env
 
 
-def _create_dream_env(wm_config, wm_state_dict, vq_vae_state_dict, real_buffer, seed):
+def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, seed, world_model_type):
     """
     A pickleable function to create the dream environment in a subprocess.
     It reconstructs the models from their state_dicts.
     """
-    device = torch.device(wm_config['device'])
+    device = torch.device(config['device'])
 
     # Reconstruct VQ-VAE
     vq_vae = VQVAE()
@@ -367,31 +368,35 @@ def _create_dream_env(wm_config, wm_state_dict, vq_vae_state_dict, real_buffer, 
     vq_vae.eval()
     # vq_vae = torch.compile(vq_vae)
 
-    # Reconstruct World Model
-    world_model = WorldModelTransformer(
-        embed_dim=wm_config['embed_dim'],
-        num_heads=wm_config['num_heads'],
-        num_layers=wm_config['num_layers'],
-        ff_dim=wm_config['ff_dim'],
-        grid_size=wm_config['grid_size'],
-        dropout_rate=wm_config['dropout_rate'],
-        max_seq_len=wm_config['max_seq_len'],
-        action_dim=wm_config['action_dim'],
-        codebook_size=wm_config['codebook_size'],
-        vqvae_embed_dim=wm_config['vqvae_embed_dim']
-    )
+    if world_model_type == 'transformer':
+        world_model = WorldModelTransformer(
+            embed_dim=config['embed_dim'], num_heads=config['num_heads'], num_layers=config['num_layers'],
+            ff_dim=config['ff_dim'], grid_size=config['grid_size'], dropout_rate=config['dropout_rate'],
+            max_seq_len=config['max_seq_len'], action_dim=config['action_dim'],
+            codebook_size=config['codebook_size'], vqvae_embed_dim=config['vqvae_embed_dim']
+        ).to(device)
+        env_class = DreamEnvTransformer
+        env_kwargs = {'history_length': config['history_length']}
+    elif world_model_type == 'gru':
+        world_model = WorldModelGRU(
+            latent_dim=config['vqvae_embed_dim'],
+            action_dim=config['action_dim'],
+            d_model=config['gru_d_model'],
+            gru_num_layers=config['gru_num_layers'],
+            codebook_size=config['codebook_size'],
+            grid_size=config['grid_size']
+        ).to(device)
+        env_class = GruDreamEnv
+        env_kwargs = {}
+    else:
+        raise ValueError(f"Unknown world model type: {world_model_type}")
+
     world_model.load_state_dict(wm_state_dict)
-    world_model = world_model.to(device)
     world_model.eval()
     # world_model = torch.compile(world_model)  # Compile for performance
 
-    dream_env = DreamEnvTransformer(
-        world_model=world_model,
-        vq_vae=vq_vae,
-        device=device,
-        seed=seed,
-        history_length=wm_config['history_length'],
-        horizon=wm_config['dream_horizon'],
-        real_buffer=real_buffer
+    dream_env = env_class(
+        world_model=world_model, vq_vae=vq_vae, device=device, seed=seed,
+        horizon=config['dream_horizon'], real_buffer=replay_buffer, **env_kwargs
     )
     return FrameStackWrapper(dream_env, num_stack=NUM_STACK)
