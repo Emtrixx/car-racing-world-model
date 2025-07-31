@@ -228,9 +228,8 @@ class DynaTrainer:
                 max_seq_len=config['max_seq_len'], action_dim=config['action_dim'],
                 codebook_size=config['codebook_size'], vqvae_embed_dim=config['vqvae_embed_dim']
             ).to(self.device)
-            if config_name != "test":
-                print("Compiling Transformer World Model for performance...")
-                self.world_model = torch.compile(self.world_model)
+            # print("Compiling Transformer World Model for performance...")
+            # self.world_model = torch.compile(self.world_model)
         elif self.world_model_type == 'gru':
             self.world_model = WorldModelGRU(
                 latent_dim=config['vqvae_embed_dim'],
@@ -240,6 +239,8 @@ class DynaTrainer:
                 codebook_size=config['codebook_size'],
                 grid_size=config['grid_size']
             ).to(self.device)
+            # print("Compiling GRU World Model for performance...")
+            # self.world_model = torch.compile(self.world_model)
         else:
             raise ValueError(f"Unknown world model type: {self.world_model_type}")
 
