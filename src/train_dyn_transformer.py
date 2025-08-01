@@ -96,8 +96,7 @@ def get_combined_config(name="default"):
         "wm_train_interval": 25_000,
         "dream_horizon": 15,
         "dream_steps_per_real_step": 1,
-        "num_envs": 8,
-        "num_dream_envs": 6,  # Number of parallel dream environments
+        "num_envs": 6,
         "max_episode_steps_collect": 1000,
         "seed": random.randint(0, 2 ** 31 - 1),
         "device": DEVICE,
@@ -119,7 +118,6 @@ def get_combined_config(name="default"):
         "history_length": 4,
         "dream_horizon": 5,
         "num_envs": 2,
-        "num_dream_envs": 2,
         "n_steps": 128,
         "ppo_batch_size": 32,
         "policy_kwargs": dict(
@@ -437,12 +435,12 @@ class DynaTrainer:
         buffer_sample_size = min(len(self.replay_buffer), 1000)  # Or another reasonable number
         replay_buffer_sample = random.sample(list(self.replay_buffer), buffer_sample_size)
 
-        if self.config["num_dream_envs"] > 1:
+        if self.config["num_envs"] > 1:
             env_fns = [
                 (lambda i=i: _create_dream_env(
                     config, wm_state_dict, vq_vae_state_dict, replay_buffer_sample, config['seed'] + i,
                     world_model_type
-                )) for i in range(self.config['num_dream_envs'])
+                )) for i in range(self.config['num_envs'])
             ]
             # Use 'spawn' to avoid CUDA deadlocks with multiprocessing
             dream_env = SubprocVecEnv(env_fns, start_method='spawn')
