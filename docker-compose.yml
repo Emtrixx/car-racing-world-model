@@ -36,6 +36,15 @@ services:
       - ./logs/wm_mlflow:/mlruns
     command: mlflow ui --backend-store-uri file:///mlruns --host 0.0.0.0
     restart: unless-stopped
+  tensorboard:
+    image: tensorflow/tensorflow:latest
+    container_name: tensorboard_ui
+    ports:
+      - "6006:6006"
+    volumes:
+      - ./logs:/app/logs
+    command: tensorboard --logdir /app/logs --host 0.0.0.0
+    restart: unless-stopped
 
 networks:
   default:
