@@ -331,7 +331,7 @@ class DynaTrainer:
             target_kl=config["target_kl"],
             policy_kwargs=config["policy_kwargs"],
             tensorboard_log=str(SB3_LOG_DIR / run_name_for_logging),
-            verbose=1,
+            verbose=0,
             seed=config["seed"],
             device=self.device,
         )
