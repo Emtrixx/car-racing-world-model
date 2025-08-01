@@ -111,14 +111,15 @@ def get_combined_config(name="default"):
     test_config = combined_default.copy()
     test_config.update({
         "total_real_steps": 2_000,
-        "warmup_real_steps": 1000,
+        "warmup_real_steps": 200,
         "wm_train_interval": 500,
         "wm_epochs": 2,
         "wm_batch_size": 4,
         "num_loader_workers": 0,
         "history_length": 4,
         "dream_horizon": 5,
-        "num_envs": 1,
+        "num_envs": 2,
+        "num_dream_envs": 2,
         "n_steps": 128,
         "ppo_batch_size": 32,
         "policy_kwargs": dict(
@@ -415,29 +416,39 @@ class DynaTrainer:
 
     def train_agent_in_dream(self, global_tqdm):
         global_tqdm.write("\n--- Training Agent in Dream ---")
-        if len(self.replay_buffer) < self.config.get('history_length', 1) + 1:
+        history_len = self.config.get('history_length', 1)
+        if len(self.replay_buffer) < history_len + 1:
             global_tqdm.write("Not enough data to initialize dream. Skipping.")
             return
 
-        wm_state_dict = self.world_model.state_dict()
-        vq_vae_state_dict = self.vq_vae.state_dict()
+        # Ensure the world model is in evaluation mode for inference in dream env
+        self.world_model.eval()
+
+        # Move state dicts to CPU to avoid CUDA issues in subprocesses
+        wm_state_dict = {k: v.cpu() for k, v in self.world_model.state_dict().items()}
+        vq_vae_state_dict = {k: v.cpu() for k, v in self.vq_vae.state_dict().items()}
 
         # Local variables for pickling
         config = self.config
-        replay_buffer = self.replay_buffer
         world_model_type = self.world_model_type
+
+        # Create a sample of the replay buffer to pass to the dream environments
+        # This is more memory-efficient than pickling the entire buffer for each process.
+        buffer_sample_size = min(len(self.replay_buffer), 1000)  # Or another reasonable number
+        replay_buffer_sample = random.sample(list(self.replay_buffer), buffer_sample_size)
 
         if self.config["num_dream_envs"] > 1:
             env_fns = [
                 (lambda i=i: _create_dream_env(
-                    config, wm_state_dict, vq_vae_state_dict, replay_buffer, config['seed'] + i,
+                    config, wm_state_dict, vq_vae_state_dict, replay_buffer_sample, config['seed'] + i,
                     world_model_type
                 )) for i in range(self.config['num_dream_envs'])
             ]
-            dream_env = SubprocVecEnv(env_fns, start_method='fork')
+            # Use 'spawn' to avoid CUDA deadlocks with multiprocessing
+            dream_env = SubprocVecEnv(env_fns, start_method='spawn')
         else:
             dream_env = DummyVecEnv([lambda: _create_dream_env(
-                self.config, wm_state_dict, vq_vae_state_dict, self.replay_buffer, self.config['seed'],
+                self.config, wm_state_dict, vq_vae_state_dict, replay_buffer_sample, self.config['seed'],
                 self.world_model_type
             )])
 
