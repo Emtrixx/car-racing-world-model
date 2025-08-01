@@ -97,6 +97,7 @@ def get_combined_config(name="default"):
         "dream_horizon": 15,
         "dream_steps_per_real_step": 1,
         "num_envs": 8,
+        "num_dream_envs": 2,  # Number of parallel dream environments
         "max_episode_steps_collect": 1000,
         "seed": random.randint(0, 2 ** 31 - 1),
         "device": DEVICE,
@@ -426,12 +427,12 @@ class DynaTrainer:
         replay_buffer = self.replay_buffer
         world_model_type = self.world_model_type
 
-        if self.config["num_envs"] > 1:
+        if self.config["num_dream_envs"] > 1:
             env_fns = [
                 (lambda i=i: _create_dream_env(
                     config, wm_state_dict, vq_vae_state_dict, replay_buffer, config['seed'] + i,
                     world_model_type
-                )) for i in range(self.config['num_envs'])
+                )) for i in range(self.config['num_dream_envs'])
             ]
             dream_env = SubprocVecEnv(env_fns, start_method='fork')
         else:
