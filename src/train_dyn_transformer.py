@@ -343,7 +343,12 @@ class DynaTrainer:
                     token_losses.append(token_loss.item())
                     reward_losses.append(reward_loss.item())
                     done_losses.append(done_loss.item())
-                    grad_norms.append(grad_norm.item())
+                    
+                    # Replace inf grad norm with a large number for logging
+                    grad_norm_item = grad_norm.item()
+                    if not torch.isfinite(grad_norm):
+                        grad_norm_item = 1e9  # A large number to indicate overflow
+                    grad_norms.append(grad_norm_item)
 
         elif self.world_model_type == 'gru':
             # For GRU, we train on single steps (history is handled by hidden state)
