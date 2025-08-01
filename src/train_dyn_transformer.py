@@ -9,7 +9,7 @@ import pynvml
 import torch
 import torch.nn as nn
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import BaseCallback
+from stable_baselines3.common.callbacks import BaseCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import DummyVecEnv, SubprocVecEnv
 from torch.utils.data import DataLoader, TensorDataset
@@ -80,6 +80,8 @@ def get_combined_config(name="default"):
         "vf_coef": 1.0,
         "ppo_max_grad_norm": 0.5,
         "target_kl": 0.015,
+        "eval_freq": 32_000,
+        "n_eval_episodes": 5,
         "policy_kwargs": dict(
             features_extractor_class=CustomCNN,
             features_extractor_kwargs=dict(features_dim=1024),
@@ -111,7 +113,7 @@ def get_combined_config(name="default"):
     test_config = combined_default.copy()
     test_config.update({
         "total_real_steps": 2_048,
-        "warmup_real_steps": 256,
+        "warmup_real_steps": 1024,
         "wm_train_interval": 500,
         "wm_epochs": 2,
         "wm_batch_size": 4,
@@ -295,6 +297,23 @@ class DynaTrainer:
             self.real_env = DummyVecEnv(
                 [lambda: _init_env_fn_sb3(rank=0, seed=config["seed"], config_env_params=env_params)])
 
+        # Eval callback
+        # Create a separate evaluation environment (usually single, non-vectorized)
+        eval_env_params = env_params.copy()
+        eval_env = DummyVecEnv([lambda: _init_env_fn_sb3(rank=config["num_envs"], seed=config["seed"] + 1000,
+                                                         config_env_params=eval_env_params)])
+
+        self.eval_callback = EvalCallback(
+            eval_env,
+            best_model_save_path=str(SB3_SAVE_DIR / f"dyn_{self.world_model_type}_{self.config_name}_best"),
+            log_path=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}_eval"),
+            eval_freq=max(config["eval_freq"] // config["num_envs"], 1),
+            n_eval_episodes=config["n_eval_episodes"],
+            deterministic=True,
+            render=False
+        )
+
+        run_timestamp = int(time.time())
         print("Initializing PPO agent...")
         self.ppo_agent = PPO(
             policy=config["policy"],
@@ -311,7 +330,7 @@ class DynaTrainer:
             max_grad_norm=config["ppo_max_grad_norm"],
             target_kl=config["target_kl"],
             policy_kwargs=config["policy_kwargs"],
-            tensorboard_log=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}"),
+            tensorboard_log=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}"),
             verbose=1, seed=config["seed"],
             device=self.device,
         )
@@ -586,7 +605,7 @@ class DynaTrainer:
         # Callbacks
         dyna_callback = DynaCallback(trainer=self)
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=1000)
-        callback_list = [dyna_callback, metrics_callback]
+        callback_list = [dyna_callback, metrics_callback, self.eval_callback]
 
         total_real_steps = self.config['total_real_steps']
         wm_train_interval = self.config['wm_train_interval']
