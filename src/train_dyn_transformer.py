@@ -314,6 +314,7 @@ class DynaTrainer:
         )
 
         print("Initializing PPO agent...")
+        run_name_for_logging = f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}_{int(time.time())}"
         self.ppo_agent = PPO(
             policy=config["policy"],
             env=self.real_env,
@@ -329,7 +330,7 @@ class DynaTrainer:
             max_grad_norm=config["ppo_max_grad_norm"],
             target_kl=config["target_kl"],
             policy_kwargs=config["policy_kwargs"],
-            tensorboard_log=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}"),
+            tensorboard_log=str(SB3_LOG_DIR / run_name_for_logging),
             verbose=1,
             seed=config["seed"],
             device=self.device,
@@ -589,8 +590,8 @@ class DynaTrainer:
             max_grad_norm=dream_ppo_config["ppo_max_grad_norm"],
             target_kl=dream_ppo_config["target_kl"],
             policy_kwargs=dream_ppo_config["policy_kwargs"],
-            tensorboard_log=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}"),
-            verbose=1,
+            tensorboard_log=None,
+            verbose=0,
             seed=dream_ppo_config["seed"],
             device=self.device,
         )
