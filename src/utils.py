@@ -58,15 +58,10 @@ WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_dm{D_MODEL}_ly{GR
 WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX_GRU}.pth"
 # WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / "world_model_step_45000.pth"
 # placeholder (todo: add suffix)
-WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_default.pth"
-
-
+# WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_default.pth"
 # WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_test.pth"
 # WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_step_10000.pth"
-
-
-# WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_test.pth"
-# WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_step_18000.pth"
+WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_default_wm_step_958464.pth"
 
 
 # --- Preprocessing Function ---
@@ -370,10 +365,16 @@ def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, s
 
     if world_model_type == 'transformer':
         world_model = WorldModelTransformer(
-            embed_dim=config['embed_dim'], num_heads=config['num_heads'], num_layers=config['num_layers'],
-            ff_dim=config['ff_dim'], grid_size=config['grid_size'], dropout_rate=config['dropout_rate'],
-            max_seq_len=config['max_seq_len'], action_dim=config['action_dim'],
-            codebook_size=config['codebook_size'], vqvae_embed_dim=config['vqvae_embed_dim']
+            embed_dim=config['embed_dim'],
+            num_heads=config['num_heads'],
+            num_layers=config['num_layers'],
+            ff_dim=config['ff_dim'],
+            grid_size=config['grid_size'],
+            dropout_rate=config['dropout_rate'],
+            max_seq_len=config['max_seq_len'],
+            action_dim=config['action_dim'],
+            codebook_size=config['codebook_size'],
+            vqvae_embed_dim=config['vqvae_embed_dim']
         ).to(device)
         env_class = DreamEnvTransformer
         env_kwargs = {'history_length': config['history_length']}
@@ -396,7 +397,12 @@ def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, s
     # world_model = torch.compile(world_model)  # Compile for performance
 
     dream_env = env_class(
-        world_model=world_model, vq_vae=vq_vae, device=device, seed=seed,
-        horizon=config['dream_horizon'], real_buffer=replay_buffer, **env_kwargs
+        world_model=world_model,
+        vq_vae=vq_vae,
+        device=device,
+        seed=seed,
+        horizon=config['dream_horizon'],
+        real_buffer=replay_buffer,
+        **env_kwargs
     )
     return FrameStackWrapper(dream_env, num_stack=NUM_STACK)

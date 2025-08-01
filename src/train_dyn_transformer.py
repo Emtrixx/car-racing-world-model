@@ -37,7 +37,7 @@ def get_combined_config(name="default"):
     """
     # --- World Model Config (Shared) ---
     wm_config = {
-        "wm_epochs": 5,
+        "wm_epochs": 10,
         "wm_batch_size": 256,
         "wm_learning_rate": 1e-4,
         "max_grad_norm": 1.0,
@@ -60,7 +60,6 @@ def get_combined_config(name="default"):
 
     # --- GRU Specific Config ---
     gru_config = {
-        "history_length": 1,  # GRU is recurrent, doesn't need long history dataset
         "gru_d_model": GRU_D_MODEL,
         "gru_num_layers": GRU_NUM_LAYERS,
     }
@@ -73,10 +72,10 @@ def get_combined_config(name="default"):
         "ppo_batch_size": 64,
         "n_epochs": 10,
         "gamma": 0.99,
-        "gae_lambda": 0.95,
+        "gae_lambda": 0.9,
         "clip_range": 0.2,
         "ent_coef": 0.02,
-        "vf_coef": 0.5,
+        "vf_coef": 1.0,
         "ppo_max_grad_norm": 0.5,
         "target_kl": 0.015,
         "policy_kwargs": dict(
@@ -92,9 +91,9 @@ def get_combined_config(name="default"):
     # --- Dyna-style Training Loop Config ---
     dyna_config = {
         "total_real_steps": 1_000_000,
-        "warmup_real_steps": 200_000,
+        "warmup_real_steps": 250_000,
         "wm_train_interval": 25_000,
-        "dream_horizon": 15,
+        "dream_horizon": 20,
         "dream_steps_per_real_step": 1,
         "num_envs": 12,
         "max_episode_steps_collect": 1000,
@@ -264,13 +263,23 @@ class DynaTrainer:
 
         print("Initializing PPO agent...")
         self.ppo_agent = PPO(
-            policy=config["policy"], env=self.real_env, learning_rate=config["ppo_learning_rate"],
-            n_steps=config["n_steps"], batch_size=config["ppo_batch_size"], n_epochs=config["n_epochs"],
-            gamma=config["gamma"], gae_lambda=config["gae_lambda"], clip_range=config["clip_range"],
-            ent_coef=config["ent_coef"], vf_coef=config["vf_coef"], max_grad_norm=config["ppo_max_grad_norm"],
-            target_kl=config["target_kl"], policy_kwargs=config["policy_kwargs"],
+            policy=config["policy"],
+            env=self.real_env,
+            learning_rate=config["ppo_learning_rate"],
+            n_steps=config["n_steps"],
+            batch_size=config["ppo_batch_size"],
+            n_epochs=config["n_epochs"],
+            gamma=config["gamma"],
+            gae_lambda=config["gae_lambda"],
+            clip_range=config["clip_range"],
+            ent_coef=config["ent_coef"],
+            vf_coef=config["vf_coef"],
+            max_grad_norm=config["ppo_max_grad_norm"],
+            target_kl=config["target_kl"],
+            policy_kwargs=config["policy_kwargs"],
             tensorboard_log=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}"),
-            verbose=1, seed=config["seed"], device=self.device
+            verbose=1, seed=config["seed"],
+            device=self.device,
         )
 
         if ppo_checkpoint:
@@ -405,7 +414,7 @@ class DynaTrainer:
                     token_losses.append(token_loss.item())
                     reward_losses.append(reward_loss.item())
                     done_losses.append(done_loss.item())
-                    
+
                     # Replace inf grad norm with a large number for logging
                     if torch.isinf(grad_norm):
                         grad_norm_item = 1e9  # A large number to indicate overflow
@@ -462,11 +471,19 @@ class DynaTrainer:
             )])
 
         original_env = self.ppo_agent.get_env()
-        self.ppo_agent.set_env(dream_env)
+        original_n_steps = self.ppo_agent.n_steps
+
+        # Switch to dream environment and settings
+        self.ppo_agent.n_steps = self.config['dream_horizon']
+        self.ppo_agent.set_env(dream_env, force_reset=True)  # force_reset re-initializes the buffer with new n_steps
+
         dream_steps = self.config['wm_train_interval'] * self.config['dream_steps_per_real_step']
         self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True)
-        self.ppo_agent.set_env(original_env)
-        self.ppo_agent.rollout_buffer.reset()
+
+        # Restore original environment and settings
+        self.ppo_agent.n_steps = original_n_steps
+        self.ppo_agent.set_env(original_env, force_reset=True)
+
         dream_env.close()
         global_tqdm.write("--- Agent Dream Training Finished ---")
 
