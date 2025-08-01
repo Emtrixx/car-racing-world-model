@@ -113,7 +113,7 @@ def get_combined_config(name="default"):
     test_config = combined_default.copy()
     test_config.update({
         "total_real_steps": 2_000,
-        "warmup_real_steps": 1000,
+        "warmup_real_steps": 500,
         "wm_train_interval": 500,
         "wm_epochs": 2,
         "wm_batch_size": 4,
@@ -559,42 +559,54 @@ class DynaTrainer:
                 self.world_model_type
             )])
 
-        original_env = self.ppo_agent.get_env()
-        original_n_steps = self.ppo_agent.n_steps
-
-        # Switch to dream environment and settings
-        self.ppo_agent.n_steps = self.config['dream_horizon']
-        self.ppo_agent.set_env(dream_env, force_reset=True)  # force_reset re-initializes the buffer with new n_steps
-        self.ppo_agent.rollout_buffer.reset()
-
-        # Ensure dream_steps is a multiple of dream_horizon to avoid buffer assertion errors
+        # Calculate dream steps and ensure it's sufficient for rollout buffer
         dream_steps_per_real = self.config['dream_steps_per_real_step']
         wm_interval = self.config['wm_train_interval']
-        dream_horizon = self.config['dream_horizon']
-        num_envs = self.config['num_envs']
-
-        # Calculate how many full rollouts we can do
-        total_dream_steps = wm_interval * dream_steps_per_real
-        rollout_size = dream_horizon * num_envs
-        num_rollouts = total_dream_steps // rollout_size
-        dream_steps = num_rollouts * rollout_size
-
-        if dream_steps == 0:
+        dream_steps = wm_interval * dream_steps_per_real
+        
+        # Ensure dream_steps is at least equal to the rollout buffer size (n_steps * num_envs)
+        min_rollout_size = self.config['dream_horizon'] * self.config['num_envs']
+        if dream_steps < min_rollout_size:
             global_tqdm.write(
-                f"Skipping dream: Not enough steps to fill a single rollout buffer (need {rollout_size}).")
-        else:
-            metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
-            self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
-                                 callback=metrics_callback)
+                f"Skipping dream: dream_steps ({dream_steps}) < min_rollout_size ({min_rollout_size})")
+            dream_env.close()
+            return
+        
+        # Create a separate PPO agent for dream training to avoid buffer conflicts
+        dream_ppo_config = self.config.copy()
+        dream_ppo_agent = PPO(
+            policy=dream_ppo_config["policy"],
+            env=dream_env,
+            learning_rate=dream_ppo_config["ppo_learning_rate"],
+            n_steps=dream_ppo_config["dream_horizon"],
+            batch_size=dream_ppo_config["ppo_batch_size"],
+            n_epochs=dream_ppo_config["n_epochs"],
+            gamma=dream_ppo_config["gamma"],
+            gae_lambda=dream_ppo_config["gae_lambda"],
+            clip_range=dream_ppo_config["clip_range"],
+            ent_coef=dream_ppo_config["ent_coef"],
+            vf_coef=dream_ppo_config["vf_coef"],
+            max_grad_norm=dream_ppo_config["ppo_max_grad_norm"],
+            target_kl=dream_ppo_config["target_kl"],
+            policy_kwargs=dream_ppo_config["policy_kwargs"],
+            verbose=0,  # Reduce verbosity for dream training
+            seed=dream_ppo_config["seed"],
+            device=self.device,
+        )
+        
+        # Copy policy parameters from the main agent to the dream agent
+        dream_ppo_agent.policy.load_state_dict(self.ppo_agent.policy.state_dict())
+        
         # Use the system metrics callback during dream training
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
-        self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
-                             callback=metrics_callback)
-
-        # Restore original environment and settings
-        self.ppo_agent.n_steps = original_n_steps
-        self.ppo_agent.set_env(original_env, force_reset=True)
-        self.ppo_agent.rollout_buffer.reset()
+        dream_ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
+                              callback=metrics_callback)
+        
+        # Copy the updated policy back to the main agent
+        self.ppo_agent.policy.load_state_dict(dream_ppo_agent.policy.state_dict())
+        
+        # Clean up dream agent
+        del dream_ppo_agent
 
         dream_env.close()
         global_tqdm.write("--- Agent Dream Training Finished ---")
