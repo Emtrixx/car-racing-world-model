@@ -313,7 +313,6 @@ class DynaTrainer:
             render=False
         )
 
-        run_timestamp = int(time.time())
         print("Initializing PPO agent...")
         self.ppo_agent = PPO(
             policy=config["policy"],
@@ -331,7 +330,8 @@ class DynaTrainer:
             target_kl=config["target_kl"],
             policy_kwargs=config["policy_kwargs"],
             tensorboard_log=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}"),
-            verbose=1, seed=config["seed"],
+            verbose=1,
+            seed=config["seed"],
             device=self.device,
         )
 
@@ -563,7 +563,7 @@ class DynaTrainer:
         dream_steps_per_real = self.config['dream_steps_per_real_step']
         wm_interval = self.config['wm_train_interval']
         dream_steps = wm_interval * dream_steps_per_real
-        
+
         # Ensure dream_steps is at least equal to the rollout buffer size (n_steps * num_envs)
         min_rollout_size = self.config['dream_horizon'] * self.config['num_envs']
         if dream_steps < min_rollout_size:
@@ -571,7 +571,7 @@ class DynaTrainer:
                 f"Skipping dream: dream_steps ({dream_steps}) < min_rollout_size ({min_rollout_size})")
             dream_env.close()
             return
-        
+
         # Create a separate PPO agent for dream training to avoid buffer conflicts
         dream_ppo_config = self.config.copy()
         dream_ppo_agent = PPO(
@@ -589,22 +589,27 @@ class DynaTrainer:
             max_grad_norm=dream_ppo_config["ppo_max_grad_norm"],
             target_kl=dream_ppo_config["target_kl"],
             policy_kwargs=dream_ppo_config["policy_kwargs"],
-            verbose=0,  # Reduce verbosity for dream training
+            tensorboard_log=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}"),
+            verbose=1,
             seed=dream_ppo_config["seed"],
             device=self.device,
         )
-        
+
         # Copy policy parameters from the main agent to the dream agent
         dream_ppo_agent.policy.load_state_dict(self.ppo_agent.policy.state_dict())
-        
+
+        # Set the dream agent's logger to the main agent's logger
+        # This ensures both log to the same TensorBoard run.
+        dream_ppo_agent.set_logger(self.ppo_agent.logger)
+
         # Use the system metrics callback during dream training
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
         dream_ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
                               callback=metrics_callback)
-        
+
         # Copy the updated policy back to the main agent
         self.ppo_agent.policy.load_state_dict(dream_ppo_agent.policy.state_dict())
-        
+
         # Clean up dream agent
         del dream_ppo_agent
 
