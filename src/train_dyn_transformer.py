@@ -95,7 +95,7 @@ def get_combined_config(name="default"):
         "wm_train_interval": 25_000,
         "dream_horizon": 20,
         "dream_steps_per_real_step": 1,
-        "num_envs": 12,
+        "num_envs": 16,
         "max_episode_steps_collect": 1000,
         "seed": random.randint(0, 2 ** 31 - 1),
         "device": DEVICE,
@@ -249,8 +249,10 @@ class DynaTrainer:
 
         print("Initializing environments...")
         env_params = {
-            "env_name_config": config["env_name"], "num_stack_config": NUM_STACK,
-            "gamma_config": config["gamma"], "max_episode_steps_config": config["max_episode_steps_collect"],
+            "env_name_config": config["env_name"],
+            "num_stack_config": NUM_STACK,
+            "gamma_config": config["gamma"],
+            "max_episode_steps_config": config["max_episode_steps_collect"],
         }
         if config["num_envs"] > 1:
             self.real_env = SubprocVecEnv([
