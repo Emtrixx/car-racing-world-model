@@ -110,8 +110,8 @@ def get_combined_config(name="default"):
 
     test_config = combined_default.copy()
     test_config.update({
-        "total_real_steps": 2_000,
-        "warmup_real_steps": 200,
+        "total_real_steps": 2_048,
+        "warmup_real_steps": 256,
         "wm_train_interval": 500,
         "wm_epochs": 2,
         "wm_batch_size": 4,
@@ -546,9 +546,27 @@ class DynaTrainer:
         # Switch to dream environment and settings
         self.ppo_agent.n_steps = self.config['dream_horizon']
         self.ppo_agent.set_env(dream_env, force_reset=True)  # force_reset re-initializes the buffer with new n_steps
+        self.ppo_agent.rollout_buffer.reset()
 
-        dream_steps = self.config['wm_train_interval'] * self.config['dream_steps_per_real_step']
+        # Ensure dream_steps is a multiple of dream_horizon to avoid buffer assertion errors
+        dream_steps_per_real = self.config['dream_steps_per_real_step']
+        wm_interval = self.config['wm_train_interval']
+        dream_horizon = self.config['dream_horizon']
+        num_envs = self.config['num_envs']
 
+        # Calculate how many full rollouts we can do
+        total_dream_steps = wm_interval * dream_steps_per_real
+        rollout_size = dream_horizon * num_envs
+        num_rollouts = total_dream_steps // rollout_size
+        dream_steps = num_rollouts * rollout_size
+
+        if dream_steps == 0:
+            global_tqdm.write(
+                f"Skipping dream: Not enough steps to fill a single rollout buffer (need {rollout_size}).")
+        else:
+            metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
+            self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
+                                 callback=metrics_callback)
         # Use the system metrics callback during dream training
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
         self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
@@ -557,6 +575,7 @@ class DynaTrainer:
         # Restore original environment and settings
         self.ppo_agent.n_steps = original_n_steps
         self.ppo_agent.set_env(original_env, force_reset=True)
+        self.ppo_agent.rollout_buffer.reset()
 
         dream_env.close()
         global_tqdm.write("--- Agent Dream Training Finished ---")
