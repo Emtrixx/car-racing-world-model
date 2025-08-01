@@ -112,8 +112,8 @@ def get_combined_config(name="default"):
 
     test_config = combined_default.copy()
     test_config.update({
-        "total_real_steps": 2_048,
-        "warmup_real_steps": 1024,
+        "total_real_steps": 2_000,
+        "warmup_real_steps": 1000,
         "wm_train_interval": 500,
         "wm_epochs": 2,
         "wm_batch_size": 4,
