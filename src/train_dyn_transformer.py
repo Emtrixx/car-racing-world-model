@@ -97,7 +97,7 @@ def get_combined_config(name="default"):
         "dream_horizon": 15,
         "dream_steps_per_real_step": 1,
         "num_envs": 8,
-        "num_dream_envs": 2,  # Number of parallel dream environments
+        "num_dream_envs": 6,  # Number of parallel dream environments
         "max_episode_steps_collect": 1000,
         "seed": random.randint(0, 2 ** 31 - 1),
         "device": DEVICE,
