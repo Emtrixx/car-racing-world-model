@@ -343,7 +343,7 @@ class DynaTrainer:
                     token_losses.append(token_loss.item())
                     reward_losses.append(reward_loss.item())
                     done_losses.append(done_loss.item())
-                    
+
                     # Replace inf grad norm with a large number for logging
                     grad_norm_item = grad_norm.item()
                     if not torch.isfinite(grad_norm):
@@ -405,7 +405,13 @@ class DynaTrainer:
                     token_losses.append(token_loss.item())
                     reward_losses.append(reward_loss.item())
                     done_losses.append(done_loss.item())
-                    grad_norms.append(grad_norm.item())
+                    
+                    # Replace inf grad norm with a large number for logging
+                    if torch.isinf(grad_norm):
+                        grad_norm_item = 1e9  # A large number to indicate overflow
+                    else:
+                        grad_norm_item = grad_norm.item()
+                    grad_norms.append(grad_norm_item)
 
         if self.logger and total_losses:
             self.logger.log_metrics({
