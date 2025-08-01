@@ -4,6 +4,8 @@ import time
 from collections import deque
 from pathlib import Path
 
+import psutil
+import pynvml
 import torch
 import torch.nn as nn
 from stable_baselines3 import PPO
@@ -202,6 +204,24 @@ class DynaCallback(BaseCallback):
         return True
 
 
+class SystemMetricsCallback(BaseCallback):
+    """
+    A custom callback that logs system metrics during PPO training.
+    """
+
+    def __init__(self, trainer, log_freq=500, verbose=0):
+        super().__init__(verbose)
+        self.trainer = trainer
+        self.log_freq = log_freq
+
+    def _on_step(self) -> bool:
+        # Log metrics every 'log_freq' steps
+        if self.n_calls % self.log_freq == 0:
+            # Use the PPO agent's total timesteps as the logging step
+            self.trainer._log_system_metrics(step=self.model.num_timesteps)
+        return True
+
+
 class DynaTrainer:
     def __init__(self, config, config_name, world_model_type, wm_checkpoint_path=None, ppo_checkpoint=None,
                  run_name=None):
@@ -214,6 +234,18 @@ class DynaTrainer:
         print(f"Seed for this run: {seed}")
         set_random_seed(seed)
 
+        # --- System Metrics Initialization ---
+        self.nvml_handle = None
+        if "cuda" in str(self.device):
+            try:
+                pynvml.nvmlInit()
+                # Assuming device 0, adjust if you have multiple GPUs
+                self.nvml_handle = pynvml.nvmlDeviceGetHandleByIndex(0)
+                print("Initialized NVML for GPU monitoring.")
+            except pynvml.NVMLError as e:
+                print(f"Could not initialize NVML for GPU monitoring: {e}")
+
+        # --- Model and Environment Initialization ---
         print("Initializing models...")
         self.vq_vae = VQVAE().to(self.device)
         self.vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=self.device))
@@ -300,6 +332,30 @@ class DynaTrainer:
             run_name = f"{self.config_name}_{int(time.time())}"
         self.logger.start_run(run_name=run_name, config=self.config)
 
+    def _log_system_metrics(self, step):
+        """Logs CPU, RAM, and GPU metrics to the logger."""
+        if not self.logger:
+            return
+
+        metrics = {
+            'system/cpu_percent': psutil.cpu_percent(),
+            'system/ram_percent': psutil.virtual_memory().percent,
+        }
+
+        if self.nvml_handle:
+            try:
+                mem_info = pynvml.nvmlDeviceGetMemoryInfo(self.nvml_handle)
+                util_rates = pynvml.nvmlDeviceGetUtilizationRates(self.nvml_handle)
+                metrics.update({
+                    'system/gpu_util_percent': util_rates.gpu,
+                    'system/vram_used_percent': (mem_info.used / mem_info.total) * 100,
+                    'system/vram_used_gb': mem_info.used / (1024 ** 3),
+                })
+            except pynvml.NVMLError as e:
+                print(f"Could not poll NVML for GPU stats: {e}")
+
+        self.logger.log_metrics(metrics, step=step)
+
     def train_wm(self, global_tqdm, global_step):
         global_tqdm.write(f"\n--- Training {self.world_model_type.upper()} World Model ---")
         history_len = self.config['history_length'] if self.world_model_type == 'transformer' else 1
@@ -312,6 +368,7 @@ class DynaTrainer:
 
         # For logging
         total_losses, token_losses, reward_losses, done_losses, grad_norms = [], [], [], [], []
+        log_interval = 100  # Log system metrics every 100 batches
 
         if self.world_model_type == 'transformer':
             data_dict = {
@@ -328,7 +385,7 @@ class DynaTrainer:
 
             for epoch in range(self.config['wm_epochs']):
                 progress = tqdm(loader, desc=f"WM Epoch {epoch + 1}/{self.config['wm_epochs']}", position=0)
-                for batch in progress:
+                for i, batch in enumerate(progress):
                     for key in batch: batch[key] = batch[key].to(self.device)
                     with torch.amp.autocast(enabled="cuda" in str(self.device), device_type=self.device_type):
                         pred_logits, pred_reward, pred_done_logits, _ = self.world_model(
@@ -348,6 +405,12 @@ class DynaTrainer:
                     self.scaler.step(self.wm_optimizer)
                     self.scaler.update()
                     progress.set_postfix(loss=total_loss.item())
+
+                    # Log system metrics periodically during training
+                    if i % log_interval == 0:
+                        # Create a unique step for intra-epoch logging
+                        log_step = global_step + (epoch * len(loader) + i)
+                        self._log_system_metrics(step=log_step)
 
                     # Append metrics for logging
                     total_losses.append(total_loss.item())
@@ -375,7 +438,7 @@ class DynaTrainer:
 
             for epoch in range(self.config['wm_epochs']):
                 progress = tqdm(loader, desc=f"WM Epoch {epoch + 1}/{self.config['wm_epochs']}", position=0)
-                for prev_tokens, actions, rewards, dones, next_tokens in progress:
+                for i, (prev_tokens, actions, rewards, dones, next_tokens) in enumerate(progress):
                     prev_tokens, actions, rewards, dones, next_tokens = \
                         prev_tokens.to(self.device), actions.to(self.device), rewards.to(self.device), \
                             dones.to(self.device), next_tokens.to(self.device)
@@ -410,6 +473,11 @@ class DynaTrainer:
                     self.scaler.step(self.wm_optimizer)
                     self.scaler.update()
                     progress.set_postfix(loss=total_loss.item())
+
+                    # Log system metrics periodically during training
+                    if i % log_interval == 0:
+                        log_step = global_step + (epoch * len(loader) + i)
+                        self._log_system_metrics(step=log_step)
 
                     # Append metrics for logging
                     total_losses.append(total_loss.item())
@@ -480,7 +548,11 @@ class DynaTrainer:
         self.ppo_agent.set_env(dream_env, force_reset=True)  # force_reset re-initializes the buffer with new n_steps
 
         dream_steps = self.config['wm_train_interval'] * self.config['dream_steps_per_real_step']
-        self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True)
+
+        # Use the system metrics callback during dream training
+        metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
+        self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
+                             callback=metrics_callback)
 
         # Restore original environment and settings
         self.ppo_agent.n_steps = original_n_steps
@@ -491,7 +563,12 @@ class DynaTrainer:
 
     def run(self):
         print("--- Starting Dyna-Style Training ---")
-        callback = DynaCallback(trainer=self)
+
+        # Callbacks
+        dyna_callback = DynaCallback(trainer=self)
+        metrics_callback = SystemMetricsCallback(trainer=self, log_freq=1000)
+        callback_list = [dyna_callback, metrics_callback]
+
         total_real_steps = self.config['total_real_steps']
         wm_train_interval = self.config['wm_train_interval']
         wm_dir = TRANSFORMER_WM_CHECKPOINTS_DIR if self.world_model_type == 'transformer' else GRU_WM_CHECKPOINTS_DIR
@@ -506,7 +583,7 @@ class DynaTrainer:
                 # Collect real data and train PPO on it
                 self.ppo_agent.learn(
                     total_timesteps=steps_to_collect,
-                    callback=callback,
+                    callback=callback_list,
                     reset_num_timesteps=False,
                     progress_bar=True
                 )
