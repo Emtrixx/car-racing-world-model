@@ -57,25 +57,30 @@ class GruDreamEnv(gym.Env):
 
         # Squeeze to [grid_size, grid_size]
         self.current_latent_codes = initial_tokens.view(self.world_model.grid_size, self.world_model.grid_size)
-        # Flatten to [num_tokens] and add batch dim to get [1, num_tokens]
-        tokens_for_encoding = self.current_latent_codes.flatten().unsqueeze(0)
 
-        self.hidden_state = self.world_model.encode_observation(tokens_for_encoding)
+        # Initialize the GRU hidden state for a batch size of 1
+        self.hidden_state = self.world_model.get_initial_hidden_state(batch_size=1, device=self.device)
 
         obs = self._decode_latent_to_obs(self.current_latent_codes)
         self.current_step = 0
         return obs, {}
 
     def step(self, action):
-        action_tensor = torch.from_numpy(action).unsqueeze(0).to(self.device)
+        action_tensor = torch.from_numpy(action).unsqueeze(0).unsqueeze(1).to(self.device)
 
         with torch.no_grad():
+            # The GRU model returns a tuple of (logits, rewards, dones, hidden_state, stochastic_dist)
             (
                 predicted_latent_logits,
                 predicted_reward,
                 predicted_done_logits,
                 next_hidden_state,
-            ) = self.world_model(action_tensor, self.hidden_state)
+                _,  # We don't need the stochastic distribution here
+            ) = self.world_model(
+                self.current_latent_codes.flatten().unsqueeze(0).unsqueeze(1),  # Add batch and sequence dimensions
+                action_tensor,
+                self.hidden_state
+            )
 
         self.hidden_state = next_hidden_state
 
@@ -96,6 +101,7 @@ class GruDreamEnv(gym.Env):
 
     def _decode_latent_to_obs(self, latent_codes):
         with torch.no_grad():
+            latent_codes = latent_codes.to(self.device)
             quantized = self.vq_vae.vq_layer.embeddings.data[latent_codes.long()]
             quantized = quantized.permute(2, 0, 1).unsqueeze(0)
             decoded_obs = self.vq_vae.decoder(quantized)
