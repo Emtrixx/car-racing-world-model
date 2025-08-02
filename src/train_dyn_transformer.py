@@ -71,7 +71,7 @@ def get_combined_config(name="default"):
         "policy": "CnnPolicy",
         "ppo_learning_rate": 45e-5,
         "n_steps": 1024,
-        "ppo_batch_size": 64,
+        "ppo_batch_size": 256,
         "n_epochs": 10,
         "gamma": 0.99,
         "gae_lambda": 0.9,
