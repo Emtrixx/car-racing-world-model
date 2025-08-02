@@ -13,6 +13,10 @@ services:
 
     # docker compose run app python train_world_model_parallel.py --config test
 
+    # keep alive for pycharm remote interpreter
+    tty: true
+    command: sleep infinity
+
     # Keep the container running if needed, or allow interactive sessions
     #    tty: true
     #    stdin_open: true
