@@ -432,6 +432,14 @@ class DynaTrainer:
                         log_step = global_step + (epoch * len(loader) + i)
                         self._log_system_metrics(step=log_step)
 
+                    # Log metrics to the logger
+                    if self.logger:
+                        self.logger.log_metrics({
+                            'train/total_loss': total_loss, 'train/token_loss': token_loss,
+                            'train/reward_loss': reward_loss, 'train/done_loss': done_loss,
+                            'train/grad_norm': grad_norm, 'learning_rate': self.wm_optimizer.param_groups[0]['lr']
+                        }, step=global_step)
+
                     # Append metrics for logging
                     total_losses.append(total_loss.item())
                     token_losses.append(token_loss.item())
@@ -499,6 +507,14 @@ class DynaTrainer:
                         log_step = global_step + (epoch * len(loader) + i)
                         self._log_system_metrics(step=log_step)
 
+                    # Log metrics to the logger
+                    if self.logger:
+                        self.logger.log_metrics({
+                            'train/total_loss': total_loss, 'train/token_loss': token_loss,
+                            'train/reward_loss': reward_loss, 'train/done_loss': done_loss,
+                            'train/grad_norm': grad_norm, 'learning_rate': self.wm_optimizer.param_groups[0]['lr']
+                        }, step=global_step)
+
                     # Append metrics for logging
                     total_losses.append(total_loss.item())
                     token_losses.append(token_loss.item())
@@ -512,14 +528,29 @@ class DynaTrainer:
                         grad_norm_item = grad_norm.item()
                     grad_norms.append(grad_norm_item)
 
-        if self.logger and total_losses:
-            self.logger.log_metrics({
-                'train/mean_total_loss': sum(total_losses) / len(total_losses),
-                'train/mean_token_loss': sum(token_losses) / len(token_losses),
-                'train/mean_reward_loss': sum(reward_losses) / len(reward_losses),
-                'train/mean_done_loss': sum(done_losses) / len(done_losses),
-                'train/mean_grad_norm': sum(grad_norms) / len(grad_norms),
-            }, step=global_step)
+        # Log final metrics after training
+        # if self.logger and total_losses:
+        #     self.logger.log_metrics({
+        #         'train/mean_total_loss': sum(total_losses) / len(total_losses),
+        #         'train/mean_token_loss': sum(token_losses) / len(token_losses),
+        #         'train/mean_reward_loss': sum(reward_losses) / len(reward_losses),
+        #         'train/mean_done_loss': sum(done_losses) / len(done_losses),
+        #         'train/mean_grad_norm': sum(grad_norms) / len(grad_norms),
+        #     }, step=global_step)
+
+        log_str = (
+            f"\n  +-----------------+----------+\n"
+            f"  |   Training      |  Value   |\n"
+            f"  +-----------------+----------+\n"
+            f"  | Step            | {global_step:8d} |\n"
+            f"  | Total Loss      | {sum(total_losses) / len(total_losses):.4f} |\n"
+            f"  | Token Loss      | {sum(token_losses) / len(token_losses):.4f} |\n"
+            f"  | Reward Loss     | {sum(reward_losses) / len(reward_losses):.4f} |\n"
+            f"  | Done Loss       | {sum(done_losses) / len(done_losses):.4f} |\n"
+            f"  | Grad Norm       | {sum(grad_norms) / len(grad_norms):.4f} |\n"
+            f"  +-----------------+----------+\n"
+        )
+        global_tqdm.write(log_str)
         global_tqdm.write("--- World Model Training Finished ---")
 
     def train_agent_in_dream(self, global_tqdm):
