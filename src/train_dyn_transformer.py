@@ -179,28 +179,32 @@ class DynaCallback(BaseCallback):
         self.trainer = trainer
 
     def _on_step(self) -> bool:
-        # This method is called after each step in the real environment
-        # We use it to store transitions for the world model
+        # This method is called after each step in the real environment.
+        # It's optimized to batch process observations for tokenization.
+
+        # Batch process observations to get VQ-VAE tokens efficiently.
+        # We extract the last frame from the stack for tokenization.
+        last_obs_batch = self.model._last_obs[:, -1]
+        new_obs_batch = self.locals['new_obs'][:, -1]
+
+        prev_tokens_batch = get_vq_indices(self.trainer.vq_vae, last_obs_batch, self.trainer.device)
+        next_tokens_batch = get_vq_indices(self.trainer.vq_vae, new_obs_batch, self.trainer.device)
+
         for i in range(self.model.n_envs):
-            obs = self.locals['new_obs'][i]
             action = self.locals['actions'][i]
             reward = self.locals['rewards'][i]
             done = self.locals['dones'][i]
             info = self.locals['infos'][i]
 
-            # Get tokens for prev and next states
-            prev_tokens = get_vq_indices(self.trainer.vq_vae, self.model._last_obs[i][-1], self.trainer.device)
-            next_tokens = get_vq_indices(self.trainer.vq_vae, obs[-1], self.trainer.device)
-
             is_first_step_val = bool(info.get('episode_start', done))
             is_done_val = bool(done or info.get("TimeLimit.truncated", False))
 
             self.trainer.replay_buffer.append({
-                "prev_tokens": prev_tokens.squeeze(0).to(torch.int64).cpu(),
+                "prev_tokens": prev_tokens_batch[i].to(torch.int64).cpu(),
                 "action": torch.tensor(action, dtype=torch.float32),
                 "reward": torch.tensor([reward], dtype=torch.float32),
                 "done": torch.tensor([is_done_val], dtype=torch.float32),
-                "next_tokens": next_tokens.squeeze(0).to(torch.int64).cpu(),
+                "next_tokens": next_tokens_batch[i].to(torch.int64).cpu(),
                 "is_first_step": torch.tensor([is_first_step_val], dtype=torch.bool)
             })
         return True
@@ -261,8 +265,8 @@ class DynaTrainer:
                 max_seq_len=config['max_seq_len'], action_dim=config['action_dim'],
                 codebook_size=config['codebook_size'], vqvae_embed_dim=config['vqvae_embed_dim']
             ).to(self.device)
-            # print("Compiling Transformer World Model for performance...")
-            # self.world_model = torch.compile(self.world_model)
+            print("Compiling Transformer World Model for performance...")
+            self.world_model = torch.compile(self.world_model)
         elif self.world_model_type == 'gru':
             self.world_model = WorldModelGRU(
                 latent_dim=config['vqvae_embed_dim'],
@@ -272,8 +276,8 @@ class DynaTrainer:
                 codebook_size=config['codebook_size'],
                 grid_size=config['grid_size']
             ).to(self.device)
-            # print("Compiling GRU World Model for performance...")
-            # self.world_model = torch.compile(self.world_model)
+            print("Compiling GRU World Model for performance...")
+            self.world_model = torch.compile(self.world_model)
         else:
             raise ValueError(f"Unknown world model type: {self.world_model_type}")
 
@@ -426,10 +430,11 @@ class DynaTrainer:
                     self.scaler.update()
                     progress.set_postfix(loss=total_loss.item())
 
+                    # Create a unique step for intra-epoch logging
+                    log_step = global_step + (epoch * len(loader) + i)
+
                     # Log system metrics periodically during training
                     if i % log_interval == 0:
-                        # Create a unique step for intra-epoch logging
-                        log_step = global_step + (epoch * len(loader) + i)
                         self._log_system_metrics(step=log_step)
 
                     # Log metrics to the logger
@@ -438,7 +443,7 @@ class DynaTrainer:
                             'train/total_loss': total_loss, 'train/token_loss': token_loss,
                             'train/reward_loss': reward_loss, 'train/done_loss': done_loss,
                             'train/grad_norm': grad_norm, 'learning_rate': self.wm_optimizer.param_groups[0]['lr']
-                        }, step=global_step)
+                        }, step=log_step)
 
                     # Append metrics for logging
                     total_losses.append(total_loss.item())
@@ -502,9 +507,11 @@ class DynaTrainer:
                     self.scaler.update()
                     progress.set_postfix(loss=total_loss.item())
 
+                    # Create a unique step for intra-epoch logging
+                    log_step = global_step + (epoch * len(loader) + i)
+
                     # Log system metrics periodically during training
                     if i % log_interval == 0:
-                        log_step = global_step + (epoch * len(loader) + i)
                         self._log_system_metrics(step=log_step)
 
                     # Log metrics to the logger
@@ -513,7 +520,7 @@ class DynaTrainer:
                             'train/total_loss': total_loss, 'train/token_loss': token_loss,
                             'train/reward_loss': reward_loss, 'train/done_loss': done_loss,
                             'train/grad_norm': grad_norm, 'learning_rate': self.wm_optimizer.param_groups[0]['lr']
-                        }, step=global_step)
+                        }, step=log_step)
 
                     # Append metrics for logging
                     total_losses.append(total_loss.item())
@@ -543,11 +550,11 @@ class DynaTrainer:
             f"  |   Training      |  Value   |\n"
             f"  +-----------------+----------+\n"
             f"  | Step            | {global_step:8d} |\n"
-            f"  | Total Loss      | {sum(total_losses) / len(total_losses):.4f} |\n"
-            f"  | Token Loss      | {sum(token_losses) / len(token_losses):.4f} |\n"
-            f"  | Reward Loss     | {sum(reward_losses) / len(reward_losses):.4f} |\n"
-            f"  | Done Loss       | {sum(done_losses) / len(done_losses):.4f} |\n"
-            f"  | Grad Norm       | {sum(grad_norms) / len(grad_norms):.4f} |\n"
+            f"  | Total Loss      | {sum(total_losses) / len(total_losses):.4f}    |\n"
+            f"  | Token Loss      | {sum(token_losses) / len(token_losses):.4f}    |\n"
+            f"  | Reward Loss     | {sum(reward_losses) / len(reward_losses):.4f}    |\n"
+            f"  | Done Loss       | {sum(done_losses) / len(done_losses):.4f}    |\n"
+            f"  | Grad Norm       | {sum(grad_norms) / len(grad_norms):.4f}  |\n"
             f"  +-----------------+----------+\n"
         )
         global_tqdm.write(log_str)
@@ -604,46 +611,17 @@ class DynaTrainer:
             dream_env.close()
             return
 
-        # Create a separate PPO agent for dream training to avoid buffer conflicts
-        dream_ppo_config = self.config.copy()
-        dream_ppo_agent = PPO(
-            policy=dream_ppo_config["policy"],
-            env=dream_env,
-            learning_rate=dream_ppo_config["ppo_learning_rate"],
-            n_steps=dream_ppo_config["n_steps"],
-            batch_size=dream_ppo_config["ppo_batch_size"],
-            n_epochs=dream_ppo_config["n_epochs"],
-            gamma=dream_ppo_config["gamma"],
-            gae_lambda=dream_ppo_config["gae_lambda"],
-            clip_range=dream_ppo_config["clip_range"],
-            ent_coef=dream_ppo_config["ent_coef"],
-            vf_coef=dream_ppo_config["vf_coef"],
-            max_grad_norm=dream_ppo_config["ppo_max_grad_norm"],
-            target_kl=dream_ppo_config["target_kl"],
-            policy_kwargs=dream_ppo_config["policy_kwargs"],
-            tensorboard_log=None,
-            verbose=0,
-            seed=dream_ppo_config["seed"],
-            device=self.device,
-        )
-
-        # Copy policy parameters from the main agent to the dream agent
-        dream_ppo_agent.policy.load_state_dict(self.ppo_agent.policy.state_dict())
-
-        # Set the dream agent's logger to the main agent's logger
-        # This ensures both log to the same TensorBoard run.
-        dream_ppo_agent.set_logger(self.ppo_agent.logger)
+        # Store original environment and set the dream environment
+        original_env = self.ppo_agent.env
+        self.ppo_agent.set_env(dream_env)
 
         # Use the system metrics callback during dream training
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
-        dream_ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
-                              callback=metrics_callback)
+        self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
+                             callback=metrics_callback)
 
-        # Copy the updated policy back to the main agent
-        self.ppo_agent.policy.load_state_dict(dream_ppo_agent.policy.state_dict())
-
-        # Clean up dream agent
-        del dream_ppo_agent
+        # Restore the original environment
+        self.ppo_agent.set_env(original_env)
 
         dream_env.close()
         global_tqdm.write("--- Agent Dream Training Finished ---")

@@ -361,7 +361,7 @@ def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, s
     vq_vae.load_state_dict(vq_vae_state_dict)
     vq_vae = vq_vae.to(device)
     vq_vae.eval()
-    # vq_vae = torch.compile(vq_vae)
+    vq_vae = torch.compile(vq_vae)
 
     if world_model_type == 'transformer':
         world_model = WorldModelTransformer(
@@ -392,9 +392,9 @@ def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, s
     else:
         raise ValueError(f"Unknown world model type: {world_model_type}")
 
+    world_model = torch.compile(world_model)  # Compile for performance
     world_model.load_state_dict(wm_state_dict)
     world_model.eval()
-    # world_model = torch.compile(world_model)  # Compile for performance
 
     dream_env = env_class(
         world_model=world_model,
