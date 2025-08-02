@@ -99,7 +99,7 @@ def get_combined_config(name="default"):
         "wm_train_interval": 25_000,
         "dream_horizon": 32,
         "dream_steps_per_real_step": 24,
-        "num_envs": 16,
+        "num_envs": 32,
         "max_episode_steps_collect": 1000,
         "seed": random.randint(0, 2 ** 31 - 1),
         "device": DEVICE,
