@@ -39,7 +39,7 @@ def get_combined_config(name="default"):
     """
     # --- World Model Config (Shared) ---
     wm_config = {
-        "wm_epochs": 10,
+        "wm_epochs": 15,
         "wm_batch_size": 256,
         "wm_learning_rate": 1e-4,
         "max_grad_norm": 1.0,
@@ -97,8 +97,8 @@ def get_combined_config(name="default"):
         "total_real_steps": 1_000_000,
         "warmup_real_steps": 250_000,
         "wm_train_interval": 25_000,
-        "dream_horizon": 20,
-        "dream_steps_per_real_step": 1,
+        "dream_horizon": 32,
+        "dream_steps_per_real_step": 24,
         "num_envs": 16,
         "max_episode_steps_collect": 1000,
         "seed": random.randint(0, 2 ** 31 - 1),
@@ -340,7 +340,7 @@ class DynaTrainer:
             print(f"Loading PPO agent from {ppo_checkpoint}")
             self.ppo_agent.load(ppo_checkpoint, env=self.real_env)
 
-        self.replay_buffer = deque(maxlen=config['total_real_steps'])
+        self.replay_buffer = deque(maxlen=config['warmup_real_steps'])
         self.wm_optimizer = torch.optim.Adam(self.world_model.parameters(), lr=config['wm_learning_rate'])
         self.token_loss_fn = nn.CrossEntropyLoss()
         self.reward_loss_fn = nn.MSELoss()
@@ -579,7 +579,7 @@ class DynaTrainer:
             policy=dream_ppo_config["policy"],
             env=dream_env,
             learning_rate=dream_ppo_config["ppo_learning_rate"],
-            n_steps=dream_ppo_config["dream_horizon"],
+            n_steps=dream_ppo_config["n_steps"],
             batch_size=dream_ppo_config["ppo_batch_size"],
             n_epochs=dream_ppo_config["n_epochs"],
             gamma=dream_ppo_config["gamma"],
