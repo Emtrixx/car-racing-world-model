@@ -70,7 +70,7 @@ def get_combined_config(name="default"):
     ppo_config = {
         "policy": "CnnPolicy",
         "ppo_learning_rate": 45e-5,
-        "n_steps": 4096,
+        "n_steps": 2048,  # Steps per batch (per environment)
         "ppo_batch_size": 1024,
         "n_epochs": 10,
         "gamma": 0.99,
@@ -603,14 +603,6 @@ class DynaTrainer:
         wm_interval = self.config['wm_train_interval']
         dream_steps = wm_interval * dream_steps_per_real
 
-        # Ensure dream_steps is at least equal to the rollout buffer size (n_steps * num_envs)
-        min_rollout_size = self.config['dream_horizon'] * self.config['num_envs']
-        if dream_steps < min_rollout_size:
-            global_tqdm.write(
-                f"Skipping dream: dream_steps ({dream_steps}) < min_rollout_size ({min_rollout_size})")
-            dream_env.close()
-            return
-
         # Store original environment and set the dream environment
         original_env = self.ppo_agent.env
         self.ppo_agent.set_env(dream_env)
@@ -709,4 +701,9 @@ if __name__ == "__main__":
                           wm_checkpoint_path=args.wm_checkpoint,
                           ppo_checkpoint=args.ppo_checkpoint,
                           run_name=args.run_name)
+
+    if "cuda" in str(config['device']):
+        print(f"Using float32 matmul high precision for CUDA training.")
+        torch.set_float32_matmul_precision('high')
+        
     trainer.run()
