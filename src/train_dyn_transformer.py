@@ -610,7 +610,7 @@ class DynaTrainer:
         # Use the system metrics callback during dream training
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
         self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
-                             callback=metrics_callback)
+                             callback=[metrics_callback, self.eval_callback])
 
         # Restore the original environment
         self.ppo_agent.set_env(original_env)
@@ -705,5 +705,5 @@ if __name__ == "__main__":
     if "cuda" in str(config['device']):
         print(f"Using float32 matmul high precision for CUDA training.")
         torch.set_float32_matmul_precision('high')
-        
+
     trainer.run()
