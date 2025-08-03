@@ -405,7 +405,7 @@ class DynaTrainer:
             }
             dataset = TransformerHistoryDataset(data_dict, self.config['history_length'])
             loader = DataLoader(dataset, batch_size=self.config['wm_batch_size'], shuffle=True,
-                                num_workers=self.config['num_loader_workers'])
+                                num_workers=self.config['num_loader_workers'], pin_memory=True)
 
             for epoch in range(self.config['wm_epochs']):
                 progress = tqdm(loader, desc=f"WM Epoch {epoch + 1}/{self.config['wm_epochs']}", position=0)
@@ -467,7 +467,7 @@ class DynaTrainer:
                 torch.stack([s['next_tokens'] for s in buffer_list])
             )
             loader = DataLoader(dataset, batch_size=self.config['wm_batch_size'], shuffle=True,
-                                num_workers=self.config['num_loader_workers'])
+                                num_workers=self.config['num_loader_workers'], pin_memory=True)
 
             for epoch in range(self.config['wm_epochs']):
                 progress = tqdm(loader, desc=f"WM Epoch {epoch + 1}/{self.config['wm_epochs']}", position=0)

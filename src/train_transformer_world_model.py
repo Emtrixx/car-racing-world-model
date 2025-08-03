@@ -36,7 +36,7 @@ MAX_GRAD_NORM = 1.0
 
 # Parallelism Configuration
 NUM_COLLECTION_WORKERS = 4
-NUM_LOADER_WORKERS = 12
+NUM_LOADER_WORKERS = 24
 
 # Environment settings for data collection
 MAX_EPISODE_STEPS_COLLECT = 1000
