@@ -371,7 +371,7 @@ if __name__ == "__main__":
             load_if_exists=True
         )
         mlflow_callback = MLflowCallback(
-            tracking_uri=args.mlflow_tracking_uri if args.mlflow_tracking_uri else "logs/wm_mlflow",
+            tracking_uri=args.mlflow_tracking_uri,
             create_experiment=True,
             metric_name="mean_reward",
         )
