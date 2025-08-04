@@ -332,7 +332,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--n-trials",
         type=int,
-        default=100,
+        default=500,
         help="Number of trials for Optuna optimization."
     )
     parser.add_argument(
