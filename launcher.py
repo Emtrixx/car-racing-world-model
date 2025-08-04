@@ -59,6 +59,12 @@ if __name__ == "__main__":
         default=None,
         help="Number of parallel workers to start. Overrides the default in the selected config."
     )
+    parser.add_argument(
+        "--study-name",
+        type=str,
+        default=None,
+        help="Name of the Optuna study. If not provided, uses the default from the selected config."
+    )
 
     args = parser.parse_args()
 
@@ -66,7 +72,7 @@ if __name__ == "__main__":
     selected_config = CONFIGS[args.config]
     command_to_run = selected_config["command_args"]
     num_workers = args.num_workers if args.num_workers is not None else selected_config["num_workers"]
-    study_name = selected_config["study_name"]
+    study_name = args.study_name if args.study_name is not None else selected_config["study_name"]
 
     # --- Define study parameters ---
     storage_path = "sqlite:///data/optuna_study.db"
