@@ -344,7 +344,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--storage",
         type=str,
-        default="sqlite:///optuna_ppo.db",
+        default="sqlite:///data/optuna_study.db",
         help="Database storage for Optuna study."
     )
     parser.add_argument(
