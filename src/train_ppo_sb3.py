@@ -6,6 +6,7 @@ from typing import Callable
 
 import torch
 import optuna
+from optuna.integration import MLflowCallback
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
@@ -346,6 +347,18 @@ if __name__ == "__main__":
         default="sqlite:///optuna_ppo.db",
         help="Database storage for Optuna study."
     )
+    parser.add_argument(
+        "--mlflow-tracking-uri",
+        type=str,
+        default="logs/wm_mlflow",
+        help="MLflow tracking URI."
+    )
+    # parser.add_argument(
+    #     "--mlflow-experiment-name",
+    #     type=str,
+    #     default="ppo_optimization",
+    #     help="Name for the MLflow experiment."
+    # )
     args = parser.parse_args()
 
     if args.optimize:
@@ -357,8 +370,14 @@ if __name__ == "__main__":
             pruner=optuna.pruners.MedianPruner(n_warmup_steps=5),
             load_if_exists=True
         )
+        mlflow_callback = MLflowCallback(
+            tracking_uri=args.mlflow_tracking_uri if args.mlflow_tracking_uri else "logs/wm_mlflow",
+            create_experiment=True,
+            metric_name="mean_reward",
+        )
+
         try:
-            study.optimize(objective, n_trials=args.n_trials, timeout=3600 * 6)  # 6 hours timeout
+            study.optimize(objective, n_trials=args.n_trials, timeout=3600 * 6, callbacks=[mlflow_callback])
         except KeyboardInterrupt:
             print("Optimization stopped manually.")
 

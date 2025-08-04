@@ -25,4 +25,5 @@ mlflow
 psutil
 pynvml
 optuna
+optuna-integration[mlflow]
 cmaes
