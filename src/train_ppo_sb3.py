@@ -58,7 +58,7 @@ def get_config_sb3(name="default"):
 
             # Training parameters
             "total_timesteps": 1_000_000,
-            "num_envs": 16,  # Number of parallel environments
+            "num_envs": 24,  # Number of parallel environments
             "save_freq": 50_000,  # Timesteps, not updates. (orig: 50 updates * 2048 steps/update = 102400 steps)
             # Let's use a step-based frequency for SB3 CheckpointCallback
             "eval_freq": 20480,  # Timesteps per eval environment
@@ -157,7 +157,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         config["total_timesteps"] = 50_000
         config["eval_freq"] = 10_000
         config["n_eval_episodes"] = 5
-        config["num_envs"] = 4  # Use fewer envs for HPO to reduce overhead
+        config["num_envs"] = 12  # Use fewer envs for HPO to reduce overhead
 
     # generate seed and print it
     seed = config["seed"]
