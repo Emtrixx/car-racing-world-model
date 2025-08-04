@@ -41,7 +41,7 @@ if __name__ == "__main__":
         formatter_class=argparse.RawTextHelpFormatter  # For better help text formatting
     )
     parser.add_argument(
-        "config_name",
+        "config",
         type=str,
         choices=CONFIGS.keys(),
         help="The name of the configuration to run. Available choices are:\n" +
@@ -57,11 +57,11 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     # --- Select the configuration ---
-    selected_config = CONFIGS[args.config_name]
+    selected_config = CONFIGS[args.config]
     command_to_run = selected_config["command_args"]
     num_workers = args.num_workers if args.num_workers is not None else selected_config["num_workers"]
 
-    print(f"Starting {num_workers} parallel optimization workers for config: '{args.config_name}'...")
+    print(f"Starting {num_workers} parallel optimization workers for config: '{args.config}'...")
     print(f"Command to be executed by each worker: {' '.join(command_to_run)}")
 
     # Prepare arguments for the worker pool
