@@ -136,28 +136,28 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         # Hyperparameters to tune
         config["learning_rate"] = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
         config["n_steps"] = trial.suggest_categorical("n_steps", [512, 1024, 2048])
-        config["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+        config["batch_size"] = trial.suggest_categorical("batch_size", [64, 128, 256])
         config["n_epochs"] = trial.suggest_int("n_epochs", 5, 15)
         config["gamma"] = trial.suggest_float("gamma", 0.9, 0.9999)
         config["gae_lambda"] = trial.suggest_float("gae_lambda", 0.9, 0.99)
         config["clip_range"] = trial.suggest_float("clip_range", 0.1, 0.3)
         config["ent_coef"] = trial.suggest_float("ent_coef", 1e-8, 0.1, log=True)
-        config["vf_coef"] = trial.suggest_float("vf_coef", 0.2, 0.8)
+        config["vf_coef"] = trial.suggest_float("vf_coef", 0.2, 0.9)
         config["max_grad_norm"] = trial.suggest_float("max_grad_norm", 0.3, 5.0)
 
         # For policy_kwargs
         features_dim = trial.suggest_categorical("features_dim", [256, 512, 1024])
-        net_arch_pi = trial.suggest_categorical("net_arch_pi", [64, 128, 256])
-        net_arch_vf = trial.suggest_categorical("net_arch_vf", [64, 128, 256])
+        net_arch_pi = trial.suggest_categorical("net_arch_pi", [64, 128, 256, [64, 64], [128, 64]])
+        net_arch_vf = trial.suggest_categorical("net_arch_vf", [64, 128, 256, [64, 64], [128, 64]])
 
         config["policy_kwargs"]["features_extractor_kwargs"]["features_dim"] = features_dim
         config["policy_kwargs"]["net_arch"] = dict(pi=[net_arch_pi], vf=[net_arch_vf])
 
         # For optimization, run shorter trials
-        config["total_timesteps"] = 50_000
+        config["total_timesteps"] = 250_000
         config["eval_freq"] = 10_000
         config["n_eval_episodes"] = 5
-        config["num_envs"] = 12  # Use fewer envs for HPO to reduce overhead
+        config["num_envs"] = 16  # Use fewer envs for HPO to reduce overhead
 
     # generate seed and print it
     seed = config["seed"]
@@ -353,19 +353,20 @@ if __name__ == "__main__":
         default="logs/wm_mlflow",
         help="MLflow tracking URI."
     )
-    # parser.add_argument(
-    #     "--mlflow-experiment-name",
-    #     type=str,
-    #     default="ppo_optimization",
-    #     help="Name for the MLflow experiment."
-    # )
     args = parser.parse_args()
 
     if args.optimize:
         print("Starting hyperparameter optimization with Optuna...")
+
+        # Increase the timeout for the SQLite connection to prevent "database is locked" errors
+        storage = optuna.storages.RDBStorage(
+            url=args.storage,
+            engine_kwargs={"connect_args": {"timeout": 30}},  # Set timeout to 30 seconds
+        )
+
         study = optuna.create_study(
             study_name=args.study_name,
-            storage=args.storage,
+            storage=storage,
             direction="maximize",
             pruner=optuna.pruners.MedianPruner(n_warmup_steps=5),
             load_if_exists=True
