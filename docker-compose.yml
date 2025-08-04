@@ -57,7 +57,7 @@ services:
       - "8080:8080"
     volumes:
       - ./data:/app/data
-    command: optuna-dashboard sqlite:////app/data/optuna_study.db --host 0.0.0.0
+    command: [ "optuna-dashboard", "sqlite:////app/data/optuna_study.db", "--host", "0.0.0.0" ]
     restart: unless-stopped
 
 networks:
