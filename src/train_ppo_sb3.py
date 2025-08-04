@@ -5,8 +5,9 @@ import time
 from typing import Callable
 
 import torch
+import optuna
 from stable_baselines3 import PPO
-from stable_baselines3.common.callbacks import CheckpointCallback, EvalCallback
+from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
 from stable_baselines3.common.utils import set_random_seed
 from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 
@@ -108,13 +109,54 @@ def linear_schedule(initial_value: float) -> Callable[[float], float]:
     return func
 
 
-def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
+class OptunaPruningCallback(BaseCallback):
+    def __init__(self, trial: optuna.Trial, eval_callback: EvalCallback):
+        super().__init__()
+        self.trial = trial
+        self.eval_callback = eval_callback
+
+    def _on_step(self) -> bool:
+        if self.eval_callback.best_mean_reward is not None:
+            self.trial.report(self.eval_callback.best_mean_reward, self.num_timesteps)
+            if self.trial.should_prune():
+                return False
+        return True
+
+
+def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.Trial = None) -> float:
     """
     Train a PPO agent using Stable Baselines3 with the specified configuration.
     """
     print(f"Starting Stable Baselines3 PPO training with config: {config_name}...")
     config = get_config_sb3(config_name)
     start_time = time.time()
+
+    if trial:
+        # Hyperparameters to tune
+        config["learning_rate"] = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
+        config["n_steps"] = trial.suggest_categorical("n_steps", [512, 1024, 2048])
+        config["batch_size"] = trial.suggest_categorical("batch_size", [32, 64, 128])
+        config["n_epochs"] = trial.suggest_int("n_epochs", 5, 15)
+        config["gamma"] = trial.suggest_float("gamma", 0.9, 0.9999)
+        config["gae_lambda"] = trial.suggest_float("gae_lambda", 0.9, 0.99)
+        config["clip_range"] = trial.suggest_float("clip_range", 0.1, 0.3)
+        config["ent_coef"] = trial.suggest_float("ent_coef", 1e-8, 0.1, log=True)
+        config["vf_coef"] = trial.suggest_float("vf_coef", 0.2, 0.8)
+        config["max_grad_norm"] = trial.suggest_float("max_grad_norm", 0.3, 5.0)
+
+        # For policy_kwargs
+        features_dim = trial.suggest_categorical("features_dim", [256, 512, 1024])
+        net_arch_pi = trial.suggest_categorical("net_arch_pi", [64, 128, 256])
+        net_arch_vf = trial.suggest_categorical("net_arch_vf", [64, 128, 256])
+
+        config["policy_kwargs"]["features_extractor_kwargs"]["features_dim"] = features_dim
+        config["policy_kwargs"]["net_arch"] = dict(pi=[net_arch_pi], vf=[net_arch_vf])
+
+        # For optimization, run shorter trials
+        config["total_timesteps"] = 50_000
+        config["eval_freq"] = 10_000
+        config["n_eval_episodes"] = 5
+        config["num_envs"] = 4  # Use fewer envs for HPO to reduce overhead
 
     # generate seed and print it
     seed = config["seed"]
@@ -144,10 +186,14 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
     # Learning rate schedule
     lr_schedule = linear_schedule(config["learning_rate"])
 
+    run_name = config_name
+    if trial:
+        run_name = f"{config_name}-trial-{trial.number}"
+
     # Callbacks
     checkpoint_callback = CheckpointCallback(
         save_freq=max(config["save_freq"] // config["num_envs"], 1),  # Convert total steps to per-env steps
-        save_path=str(SB3_SAVE_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}"),
+        save_path=str(SB3_SAVE_DIR / f"cnn_sb3_{run_name}_{ENV_NAME.lower()}"),
         name_prefix="ppo_model"
     )
 
@@ -159,15 +205,20 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
 
     eval_callback = EvalCallback(
         eval_env,
-        best_model_save_path=str(SB3_SAVE_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}_best"),
-        log_path=str(SB3_LOG_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}_eval"),
+        best_model_save_path=str(SB3_SAVE_DIR / f"cnn_sb3_{run_name}_{ENV_NAME.lower()}_best"),
+        log_path=str(SB3_LOG_DIR / f"cnn_sb3_{run_name}_{ENV_NAME.lower()}_eval"),
         eval_freq=max(config["eval_freq"] // config["num_envs"], 1),
         n_eval_episodes=config["n_eval_episodes"],
         deterministic=True,
         render=False
     )
 
-    callbacks = [checkpoint_callback, eval_callback]
+    callbacks = [eval_callback]
+    if trial:
+        pruning_callback = OptunaPruningCallback(trial, eval_callback)
+        callbacks.append(pruning_callback)
+    else:
+        callbacks.append(checkpoint_callback)
 
     # PPO should be run on CPU
     # ppo_device = "cpu"
@@ -189,8 +240,8 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
         max_grad_norm=config["max_grad_norm"],
         target_kl=config["target_kl"],
         policy_kwargs=config["policy_kwargs"],
-        tensorboard_log=str(SB3_LOG_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}"),
-        verbose=1,
+        tensorboard_log=str(SB3_LOG_DIR / f"cnn_sb3_{run_name}_{ENV_NAME.lower()}"),
+        verbose=0,
         seed=config["seed"],
         device=ppo_device  # SB3 will handle moving model to this device
     )
@@ -216,24 +267,45 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None):
         model.learn(
             total_timesteps=config["total_timesteps"],
             callback=callbacks,
-            progress_bar=True
+            progress_bar=True if not trial else False
         )
+    except optuna.exceptions.TrialPruned as e:
+        print(f"Trial pruned: {e}")
+        vec_env.close()
+        eval_env.close()
+        raise e
     except Exception as e:
         print(f"Error during model.learn: {e}")
         import traceback
         traceback.print_exc()
+        vec_env.close()
+        eval_env.close()
+        return -1.0  # Return a bad value for failed trials
     finally:
-        # Save the final model
-        final_model_path = SB3_SAVE_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}_final.zip"
-        model.save(final_model_path)
-        print(f"Final model saved to {final_model_path}")
+        if not trial:
+            # Save the final model only on regular runs
+            final_model_path = SB3_SAVE_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}_final.zip"
+            model.save(final_model_path)
+            print(f"Final model saved to {final_model_path}")
 
         vec_env.close()  # Important to close vectorized environments
         eval_env.close()
 
     total_time = time.time() - start_time
     print(f"Training finished. Total training time: {total_time:.2f} seconds")
-    print(f"Models and logs saved in: {SB3_SAVE_DIR} and {SB3_LOG_DIR}")
+    if not trial:
+        print(f"Models and logs saved in: {SB3_SAVE_DIR} and {SB3_LOG_DIR}")
+
+    best_reward = eval_callback.best_mean_reward
+    print(f"Best mean reward: {best_reward}")
+    return best_reward
+
+
+def objective(trial: optuna.Trial) -> float:
+    """
+    The objective function for Optuna optimization.
+    """
+    return train_ppo_sb3(config_name="default", trial=trial)
 
 
 if __name__ == "__main__":
@@ -251,6 +323,53 @@ if __name__ == "__main__":
         help="Path to a pre-trained model checkpoint to load before training. If provided, "
              "the model will be loaded and training will continue from that point."
     )
+    parser.add_argument(
+        "--optimize",
+        action="store_true",
+        help="Enable hyperparameter optimization with Optuna."
+    )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=100,
+        help="Number of trials for Optuna optimization."
+    )
+    parser.add_argument(
+        "--study-name",
+        type=str,
+        default="ppo_optimization",
+        help="Name for the Optuna study."
+    )
+    parser.add_argument(
+        "--storage",
+        type=str,
+        default="sqlite:///optuna_ppo.db",
+        help="Database storage for Optuna study."
+    )
     args = parser.parse_args()
 
-    train_ppo_sb3(args.config, checkpoint_path=args.checkpoint)
+    if args.optimize:
+        print("Starting hyperparameter optimization with Optuna...")
+        study = optuna.create_study(
+            study_name=args.study_name,
+            storage=args.storage,
+            direction="maximize",
+            pruner=optuna.pruners.MedianPruner(n_warmup_steps=5),
+            load_if_exists=True
+        )
+        try:
+            study.optimize(objective, n_trials=args.n_trials, timeout=3600 * 6)  # 6 hours timeout
+        except KeyboardInterrupt:
+            print("Optimization stopped manually.")
+
+        print("Optimization finished.")
+        print(f"Number of finished trials: {len(study.trials)}")
+        print("Best trial:")
+        trial = study.best_trial
+        print(f"  Value: {trial.value}")
+        print("  Params: ")
+        for key, value in trial.params.items():
+            print(f"    {key}: {value}")
+
+    else:
+        train_ppo_sb3(args.config, checkpoint_path=args.checkpoint)

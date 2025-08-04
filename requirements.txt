@@ -24,3 +24,5 @@ lpips~=0.1.4
 mlflow
 psutil
 pynvml
+optuna
+cmaes
