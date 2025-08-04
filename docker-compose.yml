@@ -50,6 +50,16 @@ services:
     command: tensorboard --logdir /app/logs --host 0.0.0.0
     restart: unless-stopped
 
+  optuna-dashboard:
+    image: ghcr.io/optuna/optuna-dashboard:latest
+    container_name: optuna_ui
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./data:/app/data
+    command: optuna-dashboard sqlite:////app/data/optuna_study.db --host 0.0.0.0
+    restart: unless-stopped
+
 networks:
   default:
     driver: bridge
