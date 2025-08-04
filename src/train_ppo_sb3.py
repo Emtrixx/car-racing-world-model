@@ -151,8 +151,10 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         net_arch_vf = trial.suggest_categorical("net_arch_vf", [64, 128, 256, [64, 64], [128, 64]])
 
         config["policy_kwargs"]["features_extractor_kwargs"]["features_dim"] = features_dim
-        config["policy_kwargs"]["net_arch"] = dict(pi=[net_arch_pi], vf=[net_arch_vf])
-
+        config["policy_kwargs"]["net_arch"] = dict(
+            pi=net_arch_pi if isinstance(net_arch_pi, list) else [net_arch_pi],
+            vf=net_arch_vf if isinstance(net_arch_vf, list) else [net_arch_vf]
+        )
         # For optimization, run shorter trials
         config["total_timesteps"] = 250_000
         config["eval_freq"] = 10_000
