@@ -12,7 +12,7 @@ CONFIGS = {
     "ppo": {
         "description": "Hyperparameter sweep for PPO.",
         "num_workers": 16,
-        "study_name": "ppo_optimization_sweep",
+        "study_name": "ppo_optimization",
         "command_args": [
             "python",
             "-m",
