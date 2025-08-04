@@ -1,14 +1,16 @@
 import subprocess
 import multiprocessing
 import argparse
+import optuna
 
 # =============================================================================
 #  CONFIGURATION
 # =============================================================================
 CONFIGS = {
     "ppo": {
-        "description": "Hyperparameter sweep for PPO on an A100 GPU.",
+        "description": "Hyperparameter sweep for PPO.",
         "num_workers": 16,
+        "study_name": "ppo_optimization_sweep",
         "command_args": [
             "python",
             "-m",
@@ -38,11 +40,12 @@ def run_worker(worker_id_and_command):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
         description="A parallel worker launcher for optimization tasks.",
-        formatter_class=argparse.RawTextHelpFormatter  # For better help text formatting
+        formatter_class=argparse.RawTextHelpFormatter
     )
     parser.add_argument(
-        "config",
+        "--config",
         type=str,
+        required=True,
         choices=CONFIGS.keys(),
         help="The name of the configuration to run. Available choices are:\n" +
              "\n".join([f"  - {name}: {conf.get('description', 'No description')} " for name, conf in CONFIGS.items()])
@@ -56,12 +59,34 @@ if __name__ == "__main__":
 
     args = parser.parse_args()
 
-    # --- Select the configuration ---
+    # --- Select and prepare the configuration ---
     selected_config = CONFIGS[args.config]
     command_to_run = selected_config["command_args"]
     num_workers = args.num_workers if args.num_workers is not None else selected_config["num_workers"]
+    study_name = selected_config["study_name"]
 
-    print(f"Starting {num_workers} parallel optimization workers for config: '{args.config}'...")
+    # --- Define study parameters ---
+    storage_path = "sqlite:///data/optuna_study.db"
+    mlflow_tracking_uri = "logs/wm_mlflow"
+
+    # --- Create the study BEFORE starting workers to prevent race conditions ---
+    print(f"Ensuring Optuna study '{study_name}' exists in {storage_path}...")
+    study = optuna.create_study(
+        study_name=study_name,
+        storage=storage_path,
+        direction="maximize",
+        load_if_exists=True
+    )
+    print("Study created or loaded successfully.")
+
+    # --- Append arguments for the worker command ---
+    command_to_run.extend([
+        f"--storage={storage_path}",
+        f"--study-name={study_name}",
+        f"--mlflow-tracking-uri={mlflow_tracking_uri}",
+    ])
+
+    print(f"Starting {num_workers} parallel optimization workers for study: '{study_name}'...")
     print(f"Command to be executed by each worker: {' '.join(command_to_run)}")
 
     # Prepare arguments for the worker pool
