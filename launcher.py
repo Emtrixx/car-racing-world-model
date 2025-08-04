@@ -1,6 +1,8 @@
 import subprocess
 import multiprocessing
 import argparse
+import time
+
 import optuna
 
 # =============================================================================
@@ -25,7 +27,8 @@ CONFIGS = {
 
 def run_worker(worker_id_and_command):
     """Function to be executed by each worker process."""
-    worker_id, command = worker_id_and_command
+    worker_id, command, delay = worker_id_and_command
+    time.sleep(delay)  # delay for staggered starts
     print(f"Starting worker {worker_id}...")
     try:
         # Each worker will independently run the training script.
@@ -90,7 +93,8 @@ if __name__ == "__main__":
     print(f"Command to be executed by each worker: {' '.join(command_to_run)}")
 
     # Prepare arguments for the worker pool
-    worker_args = [(i, command_to_run) for i in range(num_workers)]
+    delay = 1  # Delay in seconds between worker starts
+    worker_args = [(i, command_to_run, i * delay) for i in range(num_workers)]
 
     # Create a pool of worker processes
     with multiprocessing.Pool(processes=num_workers) as pool:
