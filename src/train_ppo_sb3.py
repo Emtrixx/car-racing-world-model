@@ -375,12 +375,11 @@ if __name__ == "__main__":
             engine_kwargs={"connect_args": {"timeout": 30}},  # Set timeout to 30 seconds
         )
 
-        study = optuna.create_study(
+        study = optuna.load_study(
             study_name=args.study_name,
             storage=storage,
             direction="maximize",
             pruner=optuna.pruners.MedianPruner(n_warmup_steps=10),
-            load_if_exists=True
         )
         mlflow_callback = MLflowCallback(
             tracking_uri=args.mlflow_tracking_uri,
