@@ -147,13 +147,16 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
 
         # For policy_kwargs
         features_dim = trial.suggest_categorical("features_dim", [256, 512, 1024])
-        net_arch_pi = trial.suggest_categorical("net_arch_pi", [64, 128, 256, [64, 64], [128, 64]])
-        net_arch_vf = trial.suggest_categorical("net_arch_vf", [64, 128, 256, [64, 64], [128, 64]])
+        # Use tuples for list choices to make them hashable for the Optuna dashboard
+        net_arch_choices = [64, 128, 256, (64, 64), (128, 64)]
+        net_arch_pi = trial.suggest_categorical("net_arch_pi", net_arch_choices)
+        net_arch_vf = trial.suggest_categorical("net_arch_vf", net_arch_choices)
 
         config["policy_kwargs"]["features_extractor_kwargs"]["features_dim"] = features_dim
+        # Convert tuples back to lists for Stable Baselines3
         config["policy_kwargs"]["net_arch"] = dict(
-            pi=net_arch_pi if isinstance(net_arch_pi, list) else [net_arch_pi],
-            vf=net_arch_vf if isinstance(net_arch_vf, list) else [net_arch_vf]
+            pi=list(net_arch_pi) if isinstance(net_arch_pi, tuple) else [net_arch_pi],
+            vf=list(net_arch_vf) if isinstance(net_arch_vf, tuple) else [net_arch_vf]
         )
         # For optimization, run shorter trials
         config["total_timesteps"] = 250_000
