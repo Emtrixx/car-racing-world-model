@@ -148,7 +148,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         # For policy_kwargs
         features_dim = trial.suggest_categorical("features_dim", [256, 512, 1024])
         # Use tuples for list choices to make them hashable for the Optuna dashboard
-        net_arch_choices = [64, 128, 256, (64, 64), (128, 64)]
+        net_arch_choices = (64, 128, 256, (64, 64), (128, 64))
         net_arch_pi = trial.suggest_categorical("net_arch_pi", net_arch_choices)
         net_arch_vf = trial.suggest_categorical("net_arch_vf", net_arch_choices)
 
