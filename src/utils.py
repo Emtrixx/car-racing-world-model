@@ -318,15 +318,14 @@ def make_env_sb3(
     # FrameSkip: Skips frames to reduce data size and speed up training and inference.
     env = FrameSkip(env, skip=4)  # Skip every 4th frame
 
+    # OffTrackRewardShaper: Heavily penalizes going off-track. @CarRacing-v3
+    env = OffTrackRewardShaper(env)
+
     # VaeEncodeWrapper: Preprocess raw frame (crop, resize)
     env = PreprocessWrapper(env)  # @CarRacing-v3
 
     # FrameStackWrapper: Stacks the last N observations (quantized latent vectors) to create a temporal context.
     env = FrameStackWrapper(env, frame_stack_num)
-
-    # --- Reward Wrapper ---
-    # OffTrackRewardShaper: Heavily penalizes going off-track. @CarRacing-v3
-    env = OffTrackRewardShaper(env)
 
     # NormalizeReward: Normalizes rewards.
     env = gym.wrappers.NormalizeReward(env, gamma=gamma)
