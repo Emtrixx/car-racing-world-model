@@ -37,8 +37,8 @@ def get_config_sb3(name="default"):
             "n_steps": 1024,  # Corresponds to STEPS_PER_BATCH (per environment)
             "batch_size": 64,  # PPO's minibatch size
             "n_epochs": 10,  # Corresponds to EPOCHS_PER_UPDATE
-            "gamma": 0.99,
-            "gae_lambda": 0.95,
+            "gamma": 0.99,  # Discount factor
+            "gae_lambda": 0.95,  # Factor for trade-off of bias vs variance for Generalized Advantage Estimation
             "clip_range": 0.2,
             "ent_coef": 0.02,  # Corresponds to INITIAL_ENTROPY_COEF (fixed for now)
             "vf_coef": 0.5,
@@ -135,7 +135,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
     if trial:
         # Hyperparameters to tune
         config["learning_rate"] = trial.suggest_float("learning_rate", 1e-5, 1e-3, log=True)
-        config["n_steps"] = trial.suggest_categorical("n_steps", [512, 1024, 2048])
+        config["n_steps"] = trial.suggest_categorical("n_steps", [512, 1024, 2048, 4096])
         config["batch_size"] = trial.suggest_categorical("batch_size", [64, 128, 256])
         config["n_epochs"] = trial.suggest_int("n_epochs", 5, 15)
         config["gamma"] = trial.suggest_float("gamma", 0.8, 0.9999)

@@ -261,6 +261,20 @@ class SkipStartFramesWrapper(gym.Wrapper):
         return obs, info
 
 
+class OffTrackRewardShaper(gym.Wrapper):
+    def __init__(self, env):
+        super().__init__(env)
+
+    def step(self, action):
+        obs, reward, terminated, truncated, info = self.env.step(action)
+
+        # Heavily penalize going off-track
+        if np.mean(obs[:, :, 1]) > 180.0:  # A simple check for green grass
+            reward -= 5.0  # Increase the off-track penalty significantly
+
+        return obs, reward, terminated, truncated, info
+
+
 def make_env_sb3(
         env_id: str,
         frame_stack_num: int,
@@ -297,20 +311,23 @@ def make_env_sb3(
     #    - It defines self.action_space = Box([-1, 1]^3, ...) which SB3 will see.
     env = ActionTransformWrapper(env)
 
-    # --- SkipStartFramesWrapper: Skips the first N frames at the start of each episode.
+    # --- SkipStartFramesWrapper: Skips the first N frames at the start of each episode. @CarRacing-v3
     env = SkipStartFramesWrapper(env, skip=50)  # Skip the first 50 frames
 
     # --- Observation Wrappers ---
     # FrameSkip: Skips frames to reduce data size and speed up training and inference.
     env = FrameSkip(env, skip=4)  # Skip every 4th frame
 
-    # VaeEncodeWrapper: Preprocess raw frame (crop, grayscale, resize)
-    env = PreprocessWrapper(env)
+    # VaeEncodeWrapper: Preprocess raw frame (crop, resize)
+    env = PreprocessWrapper(env)  # @CarRacing-v3
 
     # FrameStackWrapper: Stacks the last N observations (quantized latent vectors) to create a temporal context.
     env = FrameStackWrapper(env, frame_stack_num)
 
     # --- Reward Wrapper ---
+    # OffTrackRewardShaper: Heavily penalizes going off-track. @CarRacing-v3
+    env = OffTrackRewardShaper(env)
+
     # NormalizeReward: Normalizes rewards.
     env = gym.wrappers.NormalizeReward(env, gamma=gamma)
 
