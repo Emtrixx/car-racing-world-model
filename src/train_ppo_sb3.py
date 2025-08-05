@@ -143,10 +143,12 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         config["ent_coef"] = trial.suggest_float("ent_coef", 1e-8, 0.1, log=True)
         config["vf_coef"] = trial.suggest_float("vf_coef", 0.2, 0.9)
         config["max_grad_norm"] = trial.suggest_float("max_grad_norm", 0.3, 5.0)
+        config["target_kl"] = trial.suggest_float("target_kl", 0.005, 0.05)
 
         # For policy_kwargs
         features_dim = trial.suggest_categorical("features_dim", [256, 512, 1024])
-
+        activation_choices = trial.suggest_categorical("activation_fn", ["tanh", "relu"])
+        activation_fn = torch.nn.Tanh if activation_choices == "tanh" else torch.nn.ReLU
         # Use tuples for list choices to make them hashable for the Optuna dashboard
         net_arch_choices_str = ("64", "128", "256", "64,64", "128,64")
         net_arch_pi_str = trial.suggest_categorical("net_arch_pi", net_arch_choices_str)
@@ -161,7 +163,9 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         net_arch_pi = parse_arch(net_arch_pi_str)
         net_arch_vf = parse_arch(net_arch_vf_str)
 
+        config["policy_kwargs"]["log_std_init"] = trial.suggest_float("log_std_init", -2.0, 0.0)
         config["policy_kwargs"]["features_extractor_kwargs"]["features_dim"] = features_dim
+        config["policy_kwargs"]["activation_fn"] = activation_fn
         config["policy_kwargs"]["net_arch"] = dict(pi=net_arch_pi, vf=net_arch_vf)
         # For optimization, run shorter trials
         config["total_timesteps"] = 250_000
