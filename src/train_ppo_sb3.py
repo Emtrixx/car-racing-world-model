@@ -308,9 +308,11 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
     if not trial:
         print(f"Models and logs saved in: {SB3_SAVE_DIR} and {SB3_LOG_DIR}")
 
-    best_reward = eval_callback.best_mean_reward
-    print(f"Best mean reward: {best_reward}")
-    return best_reward
+    # Use the reward from the last evaluation, not the best one.
+    final_reward = eval_callback.last_mean_reward
+    print(f"Best mean reward during run: {eval_callback.best_mean_reward}")
+    print(f"Final mean reward for Optuna: {final_reward}")
+    return final_reward
 
 
 def objective(trial: optuna.Trial) -> float:
