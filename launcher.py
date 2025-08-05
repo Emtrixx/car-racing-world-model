@@ -1,3 +1,4 @@
+import os
 import subprocess
 import multiprocessing
 import argparse
@@ -75,14 +76,25 @@ if __name__ == "__main__":
     study_name = args.study_name if args.study_name is not None else selected_config["study_name"]
 
     # --- Define study parameters ---
-    storage_path = "sqlite:///data/optuna_study.db"
+    # Use PostgreSQL connection string from environment variables
+    user = os.getenv("POSTGRES_USER", "optuna")
+    password = os.getenv("POSTGRES_PASSWORD", "optuna")
+    host = os.getenv("POSTGRES_HOST", "db")
+    dbname = os.getenv("POSTGRES_DB", "optuna")
+    storage_path = f"postgresql://{user}:{password}@{host}:5432/{dbname}"
+
     mlflow_tracking_uri = "logs/wm_mlflow"
 
-    # --- Create the study BEFORE starting workers to prevent race conditions ---
+    # --- Create the study before starting workers to prevent race conditions ---
     print(f"Ensuring Optuna study '{study_name}' exists in {storage_path}...")
+    # Add a timeout to handle initial DB connection
+    storage = optuna.storages.RDBStorage(
+        url=storage_path,
+        engine_kwargs={"connect_args": {"timeout": 10}}
+    )
     study = optuna.create_study(
         study_name=study_name,
-        storage=storage_path,
+        storage=storage,
         direction="maximize",
         load_if_exists=True
     )

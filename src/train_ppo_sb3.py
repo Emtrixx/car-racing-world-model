@@ -355,7 +355,7 @@ if __name__ == "__main__":
     parser.add_argument(
         "--storage",
         type=str,
-        default="sqlite:///data/optuna_study.db",
+        default="postgresql://optuna:optuna@db:5432/optuna",
         help="Database storage for Optuna study."
     )
     parser.add_argument(
@@ -369,7 +369,7 @@ if __name__ == "__main__":
     if args.optimize:
         print("Starting hyperparameter optimization with Optuna...")
 
-        # Increase the timeout for the SQLite connection to prevent "database is locked" errors
+        # Increase the timeout for the SQL connection to prevent "database is locked" errors
         storage = optuna.storages.RDBStorage(
             url=args.storage,
             engine_kwargs={"connect_args": {"timeout": 30}},  # Set timeout to 30 seconds

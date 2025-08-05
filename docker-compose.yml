@@ -30,6 +30,35 @@ services:
               device_ids: [ '2' ]
               #count: all
               capabilities: [ gpu ]
+
+    # If optuna optimize script is running db needs to be healthy
+    environment:
+      - POSTGRES_USER=optuna
+      - POSTGRES_PASSWORD=optuna
+      - POSTGRES_DB=optuna
+      - POSTGRES_HOST=db
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:13
+    container_name: optuna_db
+    restart: always
+    environment:
+      - POSTGRES_USER=optuna
+      - POSTGRES_PASSWORD=optuna
+      - POSTGRES_DB=optuna
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U optuna -d optuna" ]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
   mlflow:
     image: ghcr.io/mlflow/mlflow:latest
     #    user: "1000:1000"
@@ -58,7 +87,7 @@ services:
     volumes:
       - ./data:/app/data
     working_dir: /app/data
-    command: [ "sqlite:///optuna_study.db", "--host", "0.0.0.0" ]
+    command: [ "postgresql://optuna:optuna@db:5432/optuna", "--host", "0.0.0.0" ]
     restart: unless-stopped
 
 networks:
