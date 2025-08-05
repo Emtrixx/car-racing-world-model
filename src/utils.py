@@ -270,7 +270,7 @@ class OffTrackRewardShaper(gym.Wrapper):
 
         # Heavily penalize going off-track
         if np.mean(obs[:, :, 1]) > 180.0:  # A simple check for green grass
-            reward -= 5.0  # Increase the off-track penalty significantly
+            reward -= 8.0  # Increase the off-track penalty significantly
 
         return obs, reward, terminated, truncated, info
 

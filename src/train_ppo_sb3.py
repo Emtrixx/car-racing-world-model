@@ -59,7 +59,7 @@ def get_config_sb3(name="default"):
             # Training parameters
             "total_timesteps": 1_000_000,
             "num_envs": 24,  # Number of parallel environments
-            "save_freq": 50_000,  # Timesteps, not updates. (orig: 50 updates * 2048 steps/update = 102400 steps)
+            "save_freq": 250_000,  # Timesteps, not updates. (orig: 50 updates * 2048 steps/update = 102400 steps)
             # Let's use a step-based frequency for SB3 CheckpointCallback
             "eval_freq": 20480,  # Timesteps per eval environment
             "n_eval_episodes": 5,
