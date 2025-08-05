@@ -3,42 +3,48 @@ import torch.nn as nn
 from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 # Constants for the ImpalaCNN architecture
-IN_CHANNELS = 1  # Input channels for the image (grayscale)
+IN_CHANNELS = 3  # Input channels for one image
 IMG_SIZE = 64  # Input image size (height and width)
 EMBEDDING_DIM = 1024  # The output dimension of the ImpalaCNN
 
 
 class ResidualBlock(nn.Module):
     """
-    The ResNet block as described in the paper.
-    Each block is composed of (a) a ReLU activation, (b) an instance normalization,
-    and (c) a convolutional layer with kernel size 3x3 and stride of 1.
+    The ResNet block as described in the original IMPALA paper.
+    Each block contains two convolutional layers.
     """
 
     def __init__(self, in_channels):
         super(ResidualBlock, self).__init__()
-        self.conv = nn.Conv2d(
+        self.conv1 = nn.Conv2d(
             in_channels=in_channels,
             out_channels=in_channels,
             kernel_size=3,
             stride=1,
             padding=1
         )
-        self.inst_norm = nn.InstanceNorm2d(in_channels)
+        self.conv2 = nn.Conv2d(
+            in_channels=in_channels,
+            out_channels=in_channels,
+            kernel_size=3,
+            stride=1,
+            padding=1
+        )
         self.relu = nn.ReLU()
 
     def forward(self, x):
         residual = x
         out = self.relu(x)
-        out = self.inst_norm(out)
-        out = self.conv(out)
-        out += residual  # Add the residual connection
+        out = self.conv1(out)
+        out = self.relu(out)
+        out = self.conv2(out)
+        out += residual
         return out
 
 
 class ImpalaCNN(nn.Module):
     """
-    A smaller ImpalaCNN architecture.
+    A smaller ImpalaCNN architecture
     """
 
     def __init__(self, in_channels=IN_CHANNELS, img_size=IMG_SIZE, out_dim=EMBEDDING_DIM):
@@ -51,7 +57,6 @@ class ImpalaCNN(nn.Module):
 
         for channels in stack_channels:
             stack = nn.Sequential(
-                nn.InstanceNorm2d(current_channels),
                 nn.Conv2d(current_channels, channels, kernel_size=3, stride=1, padding=1),
                 nn.MaxPool2d(kernel_size=3, stride=2, padding=1),
                 ResidualBlock(channels),
