@@ -90,6 +90,9 @@ services:
     command: [ "postgresql://optuna:optuna@db:5432/optuna", "--host", "0.0.0.0" ]
     restart: unless-stopped
 
+volumes:
+  postgres_data:
+
 networks:
   default:
     driver: bridge
