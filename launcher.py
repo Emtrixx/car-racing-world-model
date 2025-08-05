@@ -90,7 +90,6 @@ if __name__ == "__main__":
     # Add a timeout to handle initial DB connection
     storage = optuna.storages.RDBStorage(
         url=storage_path,
-        engine_kwargs={"connect_args": {"timeout": 10}}
     )
     study = optuna.create_study(
         study_name=study_name,
