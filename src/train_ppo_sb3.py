@@ -378,7 +378,6 @@ if __name__ == "__main__":
         study = optuna.load_study(
             study_name=args.study_name,
             storage=storage,
-            direction="maximize",
             pruner=optuna.pruners.MedianPruner(n_warmup_steps=10),
         )
         mlflow_callback = MLflowCallback(
