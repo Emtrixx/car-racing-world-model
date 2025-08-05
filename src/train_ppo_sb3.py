@@ -4,8 +4,8 @@ import random
 import time
 from typing import Callable
 
-import torch
 import optuna
+import torch
 from optuna.integration import MLflowCallback
 from stable_baselines3 import PPO
 from stable_baselines3.common.callbacks import BaseCallback, CheckpointCallback, EvalCallback
@@ -15,7 +15,7 @@ from stable_baselines3.common.vec_env import SubprocVecEnv, DummyVecEnv
 from src.impala_cnn import CustomCNN
 # Import from local modules
 from src.utils import (
-    DEVICE, ENV_NAME, NUM_STACK, _init_env_fn_sb3, CHECKPOINTS_DIR, LOGS_DIR, SB3_LOG_DIR
+    DEVICE, ENV_NAME, NUM_STACK, _init_env_fn_sb3, CHECKPOINTS_DIR, SB3_LOG_DIR
 )
 
 print(f"Using device for main script: {DEVICE}")

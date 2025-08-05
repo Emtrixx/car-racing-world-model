@@ -27,3 +27,4 @@ pynvml
 optuna
 optuna-integration[mlflow]
 cmaes
+psycopg2-binary
