@@ -116,8 +116,8 @@ class OptunaPruningCallback(BaseCallback):
         self.eval_callback = eval_callback
 
     def _on_step(self) -> bool:
-        if self.eval_callback.best_mean_reward is not None:
-            self.trial.report(self.eval_callback.best_mean_reward, self.num_timesteps)
+        if self.eval_callback.last_mean_reward is not None:
+            self.trial.report(self.eval_callback.last_mean_reward, self.num_timesteps)
             if self.trial.should_prune():
                 return False
         return True
