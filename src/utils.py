@@ -319,7 +319,7 @@ def make_env_sb3(
     env = FrameSkip(env, skip=4)  # Skip every 4th frame
 
     # OffTrackRewardShaper: Heavily penalizes going off-track. @CarRacing-v3
-    env = OffTrackRewardShaper(env)
+    # env = OffTrackRewardShaper(env)
 
     # VaeEncodeWrapper: Preprocess raw frame (crop, resize)
     env = PreprocessWrapper(env)  # @CarRacing-v3
