@@ -7,6 +7,8 @@ from pathlib import Path
 import numpy as np
 import torch
 import torch.nn as nn
+import optuna
+from optuna.integration import MLflowCallback
 from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 from torch.amp import GradScaler, autocast
 from tqdm import tqdm
@@ -28,7 +30,7 @@ from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 # --- Configuration ---
 # Training Hyperparameters
 NUM_STEPS = 1_000_000
-WM_EPOCHS = 10
+WM_EPOCHS = 20
 WM_BATCH_SIZE = 256
 WM_LEARNING_RATE = 1e-4
 HISTORY_LENGTH = 32  # Renamed from SEQUENCE_LENGTH
@@ -60,7 +62,7 @@ def get_config(name="default"):
             'num_loader_workers': NUM_LOADER_WORKERS,
             "validation_split": 0.1,
             "random_seed": random.randint(0, 2 ** 31 - 1),
-            "val_freq": 200,
+            "val_freq": 1000,
             "embed_dim": TRANSFORMER_EMBED_DIM,
             "num_heads": TRANSFORMER_NUM_HEADS,
             "num_layers": TRANSFORMER_NUM_LAYERS,
@@ -77,6 +79,7 @@ def get_config(name="default"):
         "num_steps": 1000,
         "epochs": 3,
         "batch_size": 4,
+        "val_freq": 200,
         "history_length": 4,  # Shorter history for testing
         "num_collection_workers": 2,
         "num_loader_workers": 2,
@@ -226,7 +229,7 @@ class WorldModelTransformerTrainer:
             'done': done_loss / num_batches,
         }
 
-    def train(self, num_epochs, copy_vq_weights=True, profile=False):
+    def train(self, num_epochs, copy_vq_weights=True, profile=False, trial: optuna.Trial = None):
         """Main training loop."""
         print("Starting Transformer world model training...")
         if copy_vq_weights:
@@ -240,6 +243,7 @@ class WorldModelTransformerTrainer:
         log_freq = self.config.get('log_freq', 10)
         val_freq = self.config.get('val_freq', 200)
         checkpoint_freq = self.config.get('checkpoint_freq', 5000)
+        best_val_loss = float('inf')
 
         profiler = None
         if profile:
@@ -311,10 +315,19 @@ class WorldModelTransformerTrainer:
                     )
                     tqdm.write(val_log_str)
 
+                    current_val_loss = val_losses['total']
+                    if current_val_loss < best_val_loss:
+                        best_val_loss = current_val_loss
+
+                    if trial:
+                        trial.report(current_val_loss, global_step)
+                        if trial.should_prune():
+                            raise optuna.exceptions.TrialPruned()
+
                     self.world_model.train()  # Set back to training mode
 
-                if global_step % checkpoint_freq == 0:
-                    model_state = self.world_model.module.state_dict() if isinstance(self.world_model,
+                if global_step % checkpoint_freq == 0 and not trial:
+                    model_state = self.world_model.module.state_dict() if isinstance(self.world_model, \
                                                                                      nn.DataParallel) else self.world_model.state_dict()
                     torch.save(model_state, TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_step_{global_step}.pth")
                     tqdm.write(f"Saved model checkpoint at step {global_step}.")
@@ -327,21 +340,38 @@ class WorldModelTransformerTrainer:
             print("Profiling finished. You can view the trace with TensorBoard.")
 
         print("Training finished.")
+        return best_val_loss
 
 
-if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Train History-Aware Transformer World Model")
-    parser.add_argument("--config", type=str, default="default", help="Configuration name ('default', 'test').")
-    parser.add_argument("--save-data-to", type=str, default=None, help="Path to save collected data.")
-    parser.add_argument("--load-data-from", type=str, default=None, help="Path to load data, skipping collection.")
-    parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
-    parser.add_argument("--checkpoint-path", type=str, default=None,
-                        help="Path to a model checkpoint to resume training.")
-    parser.add_argument("--profile", action="store_true", help="Enable profiling.")
-    args = parser.parse_args()
+def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data_to: str = None,
+                         load_data_from: str = None, run_name_arg: str = None, checkpoint_path: str = None,
+                         profile: bool = False):
+    """Main function to train the Transformer World Model."""
+    config = get_config(config_name)
 
-    config = get_config(args.config)
-    print(f"Loaded configuration: '{args.config}'")
+    if trial:
+        # Hyperparameters to tune with Optuna
+        config['learning_rate'] = trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True)
+        config['batch_size'] = trial.suggest_categorical('batch_size', [128, 256, 512, 1024, 2048])
+        config['history_length'] = trial.suggest_int('history_length', 16, 32, step=4)
+        config['dropout_rate'] = trial.suggest_float('dropout_rate', 0.05, 0.3)
+        config['max_grad_norm'] = trial.suggest_float('max_grad_norm', 0.5, 2.0)
+
+        # Architectural hyperparameters
+        config['embed_dim'] = trial.suggest_categorical('embed_dim', [256, 512, 768])
+        # Ensure num_heads is a divisor of embed_dim
+        possible_heads = [h for h in [4, 8, 16] if config['embed_dim'] % h == 0]
+        config['num_heads'] = trial.suggest_categorical('num_heads', possible_heads)
+        config['num_layers'] = trial.suggest_int('num_layers', 2, 8)
+        config['ff_dim'] = trial.suggest_categorical('ff_dim', [config['embed_dim'] * 2, config['embed_dim'] * 4])
+
+        # For optimization, run shorter trials
+        config['num_steps'] = 100_000
+        config['epochs'] = 10
+
+    print(f"Loaded configuration: '{config_name}'")
+    if trial:
+        print("Running with Optuna-suggested hyperparameters.")
     print(f"Device: {config['device']}")
 
     if "cuda" in str(config['device']):
@@ -356,12 +386,11 @@ if __name__ == "__main__":
         raise FileNotFoundError(f"CRITICAL ERROR: VQ-VAE Checkpoint {VQ_VAE_CHECKPOINT_FILENAME} not found.")
 
     data_buffer = None
-    if args.load_data_from and Path(args.load_data_from).exists():
-        print(f"Loading data from {args.load_data_from}...")
-        data_buffer = torch.load(args.load_data_from, map_location='cpu')
+    if load_data_from and Path(load_data_from).exists():
+        print(f"Loading data from {load_data_from}...")
+        data_buffer = torch.load(load_data_from, map_location='cpu')
         limit = config["num_steps"]
         if limit < len(data_buffer['actions']):
-            # Limit the dataset to the first 'limit' sequences
             for key in data_buffer:
                 data_buffer[key] = data_buffer[key][:limit]
     else:
@@ -374,10 +403,10 @@ if __name__ == "__main__":
             max_episode_steps=config["max_episode_steps_collect"]
         )
         print(f"Data collection took {time.time() - start_time:.2f} seconds.")
-        if data_buffer and args.save_data_to:
-            Path(args.save_data_to).parent.mkdir(parents=True, exist_ok=True)
-            torch.save(data_buffer, args.save_data_to)
-            print(f"Data saved to {args.save_data_to}.")
+        if data_buffer and save_data_to:
+            Path(save_data_to).parent.mkdir(parents=True, exist_ok=True)
+            torch.save(data_buffer, save_data_to)
+            print(f"Data saved to {save_data_to}.")
 
     if not data_buffer:
         raise RuntimeError("ERROR: No data collected or loaded. Exiting.")
@@ -421,36 +450,129 @@ if __name__ == "__main__":
         vqvae_embed_dim=VQVAE_EMBEDDING_DIM,
     ).to(config['device'])
 
-    # Compile the model for performance
     world_model = torch.compile(world_model)
 
-    if args.checkpoint_path and Path(args.checkpoint_path).exists():
-        print(f"Loading pre-trained model from {args.checkpoint_path}...")
-        world_model.load_state_dict(torch.load(args.checkpoint_path, map_location=config['device']))
+    if checkpoint_path and Path(checkpoint_path).exists():
+        print(f"Loading pre-trained model from {checkpoint_path}...")
+        world_model.load_state_dict(torch.load(checkpoint_path, map_location=config['device']))
 
     vq_vae_model = VQVAE().to(config['device'])
     vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=config['device']))
     vq_vae_model.eval()
 
     logger = ExperimentLogger(log_dir="logs", experiment_name="transformer_wm_training")
-    run_name = args.run_name if args.run_name else f"{args.config}_{int(time.time())}"
+    run_name = run_name_arg
+    if not run_name:
+        run_name = f"{config_name}_{int(time.time())}"
     logger.start_run(run_name=run_name, config=config)
 
     trainer = WorldModelTransformerTrainer(
-        world_model,
-        vq_vae_model,
-        config,
-        train_loader,
-        val_loader,
-        logger
+        world_model, vq_vae_model, config, train_loader, val_loader, logger
     )
 
+    best_val_loss = float('inf')
     start_train_time = time.time()
-    trainer.train(num_epochs=config["epochs"], copy_vq_weights=args.checkpoint_path is None, profile=args.profile)
-    print(f"Total training took {time.time() - start_train_time:.2f} seconds.")
-    logger.end_run()
+    try:
+        best_val_loss = trainer.train(
+            num_epochs=config["epochs"],
+            copy_vq_weights=checkpoint_path is None,
+            profile=profile,
+            trial=trial
+        )
+    except optuna.exceptions.TrialPruned as e:
+        print(f"Trial pruned: {e}")
+        logger.end_run()
+        raise e
+    except Exception as e:
+        print(f"An error occurred during training: {e}")
+        import traceback
+        traceback.print_exc()
+        logger.end_run()
+        return float('inf')  # Return a bad value for failed trials
+    finally:
+        print(f"Total training took {time.time() - start_train_time:.2f} seconds.")
+        logger.end_run()
 
-    TRANSFORMER_WM_CHECKPOINTS_DIR.mkdir(exist_ok=True)
-    final_filename = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_{args.config}.pth"
-    torch.save(world_model.state_dict(), final_filename)
-    print(f"Final model saved to {final_filename}")
+    if not trial:
+        TRANSFORMER_WM_CHECKPOINTS_DIR.mkdir(exist_ok=True)
+        final_filename = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_{config_name}.pth"
+        torch.save(world_model.state_dict(), final_filename)
+        print(f"Final model saved to {final_filename}")
+
+    return best_val_loss
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train History-Aware Transformer World Model")
+    parser.add_argument("--config", type=str, default="default", help="Configuration name ('default', 'test').")
+    parser.add_argument("--save-data-to", type=str, default=None, help="Path to save collected data.")
+    parser.add_argument("--load-data-from", type=str, default=None, help="Path to load data, skipping collection.")
+    parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
+    parser.add_argument("--checkpoint-path", type=str, default=None,
+                        help="Path to a model checkpoint to resume training.")
+    parser.add_argument("--profile", action="store_true", help="Enable profiling.")
+    # Optuna arguments
+    parser.add_argument("--optimize", action="store_true", help="Enable hyperparameter optimization with Optuna.")
+    parser.add_argument("--n-trials", type=int, default=50, help="Number of trials for Optuna optimization.")
+    parser.add_argument("--study-name", type=str, default="transformer_wm_optimization",
+                        help="Name for the Optuna study.")
+    parser.add_argument("--storage", type=str, default="postgresql://optuna:optuna@db:5432/optuna",
+                        help="Database storage for Optuna study.")
+    parser.add_argument("--mlflow-tracking-uri", type=str, default="logs/wm_mlflow", help="MLflow tracking URI.")
+    args = parser.parse_args()
+
+    if args.optimize:
+        print("Starting hyperparameter optimization with Optuna...")
+
+        storage = optuna.storages.RDBStorage(url=args.storage)
+        pruner = optuna.pruners.MedianPruner(n_warmup_steps=5, n_min_trials=3)
+
+        study = optuna.create_study(
+            study_name=args.study_name,
+            storage=storage,
+            pruner=pruner,
+            direction="minimize",
+            load_if_exists=True
+        )
+
+        mlflow_callback = MLflowCallback(
+            tracking_uri=args.mlflow_tracking_uri,
+            create_experiment=True,
+            metric_name="validation_loss",
+        )
+
+
+        def objective(trial: optuna.Trial) -> float:
+            """Objective function for Optuna."""
+            run_name = f"{args.study_name}_trial_{trial.number}"
+            return train_transformer_wm(
+                config_name="default",
+                trial=trial,
+                load_data_from=args.load_data_from,
+                run_name_arg=run_name
+            )
+
+
+        try:
+            study.optimize(objective, n_trials=args.n_trials, timeout=3600 * 8, callbacks=[mlflow_callback])
+        except KeyboardInterrupt:
+            print("Optimization stopped manually.")
+
+        print("Optimization finished.")
+        print(f"Number of finished trials: {len(study.trials)}")
+        print("Best trial:")
+        trial = study.best_trial
+        print(f"  Value (best validation loss): {trial.value}")
+        print("  Params: ")
+        for key, value in trial.params.items():
+            print(f"    {key}: {value}")
+
+    else:
+        train_transformer_wm(
+            config_name=args.config,
+            save_data_to=args.save_data_to,
+            load_data_from=args.load_data_from,
+            run_name_arg=args.run_name,
+            checkpoint_path=args.checkpoint_path,
+            profile=args.profile
+        )
