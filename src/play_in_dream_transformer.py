@@ -9,13 +9,13 @@ import pygame
 import torch
 from stable_baselines3 import PPO
 
-from play_game_sb3 import SB3_MODEL_PATH
+from src.play_game_sb3 import SB3_MODEL_PATH
 from src.transformer_world_model import WorldModelTransformer
 from src.utils import (
     WM_CHECKPOINT_FILENAME_TRANSFORMER, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM, make_env_sb3, ENV_NAME, NUM_STACK
 )
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM
-from utils import preprocess_observation, DATA_DIR
+from src.utils import preprocess_observation, DATA_DIR
 
 
 # --- Function to draw key presses ---

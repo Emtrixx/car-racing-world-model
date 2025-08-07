@@ -16,9 +16,6 @@ services:
     # keep alive for pycharm remote interpreter
     tty: true
     command: sleep infinity
-
-    # Keep the container running if needed, or allow interactive sessions
-    #    tty: true
     #    stdin_open: true
 
     # GPU Configuration
