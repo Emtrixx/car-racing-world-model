@@ -270,7 +270,8 @@ class WorldModelTransformerTrainer:
 
         for epoch in range(1, num_epochs + 1):
             self.world_model.train()
-            epoch_progress = tqdm(self.train_dataloader, desc=f"Epoch {epoch}/{num_epochs}", leave=False)
+            epoch_progress = tqdm(self.train_dataloader, desc=f"Epoch {epoch}/{num_epochs}", leave=False,
+                                  disable=profiler or trial)
             for batch in epoch_progress:
                 global_step += 1
                 total_loss, token_loss, reward_loss, done_loss, grad_norm = self._run_batch(batch, is_train=True)
@@ -282,7 +283,7 @@ class WorldModelTransformerTrainer:
                         'train/grad_norm': grad_norm, 'learning_rate': self.optimizer.param_groups[0]['lr']
                     }, step=global_step)
 
-                if global_step % log_freq == 0:
+                if global_step % log_freq == 0 and not profiler and not trial:
                     log_str = (
                         f"\n  +-----------------+----------+\n"
                         f"  |   Training      |  Value   |\n"
@@ -358,12 +359,27 @@ def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data
         config['max_grad_norm'] = trial.suggest_float('max_grad_norm', 0.5, 2.0)
 
         # Architectural hyperparameters
-        config['embed_dim'] = trial.suggest_categorical('embed_dim', [256, 512, 768])
-        # Ensure num_heads is a divisor of embed_dim
-        possible_heads = [h for h in [4, 8, 16] if config['embed_dim'] % h == 0]
-        config['num_heads'] = trial.suggest_categorical('num_heads', possible_heads)
+        # To prevent invalid combinations, we define a set of valid architectures and choose one.
+        architectures = [
+            # (embed_dim, num_heads, ff_dim)
+            # Small models
+            (256, 8, 512), (256, 8, 1024),
+            (256, 16, 512), (256, 16, 1024),
+            # Medium models
+            (512, 8, 1024), (512, 8, 2048),
+            (512, 16, 1024), (512, 16, 2048),
+            # Large models
+            (768, 12, 1536), (768, 12, 3072),
+            (768, 16, 1536), (768, 16, 3072),
+        ]
+        # Optuna requires choices to be primitive types, so we suggest a string and eval it.
+        arch_str = trial.suggest_categorical("architecture", [str(a) for a in architectures])
+        embed_dim, num_heads, ff_dim = eval(arch_str)
+
+        config['embed_dim'] = embed_dim
+        config['num_heads'] = num_heads
+        config['ff_dim'] = ff_dim
         config['num_layers'] = trial.suggest_int('num_layers', 2, 8)
-        config['ff_dim'] = trial.suggest_categorical('ff_dim', [config['embed_dim'] * 2, config['embed_dim'] * 4])
 
         # For optimization, run shorter trials
         config['num_steps'] = 120_000
@@ -546,7 +562,7 @@ if __name__ == "__main__":
             """Objective function for Optuna."""
             run_name = f"{args.study_name}_trial_{trial.number}"
             return train_transformer_wm(
-                config_name="default",
+                config_name=args.config,
                 trial=trial,
                 load_data_from=args.load_data_from,
                 run_name_arg=run_name
