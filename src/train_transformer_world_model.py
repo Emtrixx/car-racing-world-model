@@ -5,12 +5,11 @@ import time
 from pathlib import Path
 
 import numpy as np
+import optuna
 import torch
 import torch.nn as nn
-import optuna
-from optuna.integration import MLflowCallback
-from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 from torch.amp import GradScaler, autocast
+from torch.utils.data import DataLoader, Dataset, SubsetRandomSampler
 from tqdm import tqdm
 
 from src.logger import ExperimentLogger
@@ -534,7 +533,6 @@ if __name__ == "__main__":
                         help="Name for the Optuna study.")
     parser.add_argument("--storage", type=str, default="postgresql://optuna:optuna@db:5432/optuna",
                         help="Database storage for Optuna study.")
-    parser.add_argument("--mlflow-tracking-uri", type=str, default="logs/wm_mlflow", help="MLflow tracking URI.")
     args = parser.parse_args()
 
     if args.optimize:
@@ -551,12 +549,6 @@ if __name__ == "__main__":
             load_if_exists=True
         )
 
-        mlflow_callback = MLflowCallback(
-            tracking_uri=args.mlflow_tracking_uri,
-            create_experiment=True,
-            metric_name="validation_loss",
-        )
-
 
         def objective(trial: optuna.Trial) -> float:
             """Objective function for Optuna."""
@@ -570,7 +562,7 @@ if __name__ == "__main__":
 
 
         try:
-            study.optimize(objective, n_trials=args.n_trials, timeout=3600 * 8, callbacks=[mlflow_callback])
+            study.optimize(objective, n_trials=args.n_trials, timeout=3600 * 8)
         except KeyboardInterrupt:
             print("Optimization stopped manually.")
 
