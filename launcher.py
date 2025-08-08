@@ -113,11 +113,11 @@ if __name__ == "__main__":
         print("Study created or loaded successfully.")
         # --- Append arguments for the worker command ---
         command_to_run.extend([
-            f"--storage={storage_path}",
             f"--mlflow-tracking-uri={mlflow_tracking_uri}",
         ])
 
     command_to_run.extend([
+        f"--storage={storage_path}",
         f"--study-name={study_name}",
     ])
 
