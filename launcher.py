@@ -98,7 +98,7 @@ if __name__ == "__main__":
     mlflow_tracking_uri = "logs/wm_mlflow"
 
     # --- Create the study before starting workers to prevent race conditions ---
-    if args.config is "ppo":
+    if args.config == "ppo":
         print(f"Ensuring Optuna study '{study_name}' exists in {storage_path}...")
         # Add a timeout to handle initial DB connection
         storage = optuna.storages.RDBStorage(
@@ -111,12 +111,14 @@ if __name__ == "__main__":
             load_if_exists=True
         )
         print("Study created or loaded successfully.")
+        # --- Append arguments for the worker command ---
+        command_to_run.extend([
+            f"--storage={storage_path}",
+            f"--mlflow-tracking-uri={mlflow_tracking_uri}",
+        ])
 
-    # --- Append arguments for the worker command ---
     command_to_run.extend([
-        f"--storage={storage_path}",
         f"--study-name={study_name}",
-        f"--mlflow-tracking-uri={mlflow_tracking_uri}",
     ])
 
     print(f"Starting {num_workers} parallel optimization workers for study: '{study_name}'...")
