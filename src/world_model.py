@@ -37,6 +37,7 @@ class WorldModelGRU(nn.Module):
         # A network to process the full grid of tokens into a single state embedding.
         # This replaces the need for a "spatial GRU".
         self.token_embedding = nn.Embedding(codebook_size, latent_dim)
+        self.grid_pos_embedding = nn.Parameter(torch.randn(1, self.num_tokens, latent_dim))
         self.encoder = nn.Sequential(
             nn.Linear(latent_dim * self.num_tokens, d_model),
             nn.ReLU(),
@@ -78,6 +79,7 @@ class WorldModelGRU(nn.Module):
         batch_size, seq_len, num_tokens = obs_tokens.shape
         obs_tokens = obs_tokens.view(batch_size * seq_len, num_tokens)
         embedded_tokens = self.token_embedding(obs_tokens)
+        embedded_tokens = embedded_tokens + self.grid_pos_embedding
         flat_embedded = embedded_tokens.view(batch_size * seq_len, -1)
         obs_embedding = self.encoder(flat_embedded)
         return obs_embedding.view(batch_size, seq_len, self.d_model)
