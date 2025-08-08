@@ -366,8 +366,8 @@ def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data
         config['ff_dim'] = trial.suggest_categorical('ff_dim', [config['embed_dim'] * 2, config['embed_dim'] * 4])
 
         # For optimization, run shorter trials
-        config['num_steps'] = 100_000
-        config['epochs'] = 10
+        config['num_steps'] = 120_000
+        config['epochs'] = 8
 
     print(f"Loaded configuration: '{config_name}'")
     if trial:
