@@ -381,7 +381,7 @@ def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data
         config['num_layers'] = trial.suggest_int('num_layers', 2, 8)
 
         # For optimization, run shorter trials
-        config['num_steps'] = 120_000
+        config['num_steps'] = 250_000
         config['epochs'] = 8
 
     print(f"Loaded configuration: '{config_name}'")
@@ -428,6 +428,7 @@ def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data
 
     full_dataset = TransformerHistoryDataset(data_buffer, config["history_length"])
     dataset_size = len(full_dataset)
+    print(f"Dataset valid sequences size: {dataset_size} samples.")
     indices = list(range(dataset_size))
     split_idx = int(np.floor(config["validation_split"] * dataset_size))
     np.random.seed(config["random_seed"])
