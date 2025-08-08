@@ -77,7 +77,7 @@ class WorldModelTransformer(nn.Module):
 
         # --- Learnable Query Tokens for BTF ---
         # These are the queries fed into the decoder to predict the next state tokens in parallel.
-        self.output_token_queries = nn.Parameter(torch.randn(1, self.num_tokens, embed_dim))
+        self.output_token_queries = nn.Parameter(torch.randn(1, self.num_tokens + 1, embed_dim))
 
         # --- Transformer Decoder ---
         # The decoder will be used to predict the next state tokens based on the memory context.
@@ -150,14 +150,15 @@ class WorldModelTransformer(nn.Module):
             tgt_mask=None,  # No mask needed for parallel decoding queries
         )
 
-        # The reward and done predictions are based on the last output of the decoder
+        # The reward and done predictions are based on the extra global token
         # [B, num_tokens, embed_dim] -> [B, 1]
-        predicted_reward = self.reward_head(decoder_output[:, -1, :])  # Last token's output
-        predicted_done = self.done_head(decoder_output[:, -1, :])  # Last token's output
+        global_token_output = decoder_output[:, -1, :]  # This is now a dedicated global token
+        predicted_reward = self.reward_head(global_token_output)
+        predicted_done = self.done_head(global_token_output)
 
         # Get logits for all next-state tokens at once
         # [B, num_tokens, codebook_size]
-        predicted_latent_logits = self.next_latent_head(decoder_output)
+        predicted_latent_logits = self.next_latent_head(decoder_output[:, :-1, :])
 
         # Reshape logits to match the grid structure
         # [B, H, W, codebook_size]
