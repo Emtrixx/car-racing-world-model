@@ -75,6 +75,10 @@ class WorldModelTransformer(nn.Module):
         self.action_embedding = nn.Linear(action_dim, embed_dim)
         self.pos_encoder = PositionalEncoding(embed_dim, max_len=max_seq_len)
 
+        # --- Learnable 2D Positional Encoding for the Grid ---
+        # This provides spatial information to the token grid.
+        self.grid_pos_embedding = nn.Parameter(torch.randn(1, self.num_tokens, embed_dim))
+
         # --- Learnable Query Tokens for BTF ---
         # These are the queries fed into the decoder to predict the next state tokens in parallel.
         self.output_token_queries = nn.Parameter(torch.randn(1, self.num_tokens + 1, embed_dim))
@@ -119,6 +123,11 @@ class WorldModelTransformer(nn.Module):
         # [B, H, num_tokens, vqvae_embed_dim] -> [B, H, num_tokens, embed_dim]
         state_history_emb = self.input_projection(state_history_emb)
 
+        # --- Add 2D spatial positional encoding to the grid tokens ---
+        # self.grid_pos_embedding is [1, num_tokens, embed_dim]
+        # state_history_emb is [B, H, num_tokens, embed_dim]
+        state_history_emb = state_history_emb + self.grid_pos_embedding.unsqueeze(1)
+
         # [B, H, action_dim] -> [B, H, 1, embed_dim]
         action_history_emb = self.action_embedding(action_history).unsqueeze(2)
 
@@ -131,19 +140,26 @@ class WorldModelTransformer(nn.Module):
         # [B, H, num_tokens + 1, embed_dim] -> [B, H * (num_tokens + 1), embed_dim]
         memory = memory_interleaved.view(batch_size, history_len * (self.num_tokens + 1), self.embed_dim)
 
-        # Apply positional encoding and dropout to the entire history
+        # Apply 1D temporal positional encoding and dropout to the entire history
         memory = self.pos_encoder(memory)
         memory = self.dropout(memory)
 
         # Predict Next State Tokens in Parallel (BTF mechanism)
         # The decoder input (queries) remains the same.
-        # [1, num_tokens, embed_dim] -> [B, num_tokens, embed_dim]
+        # [1, num_tokens + 1, embed_dim] -> [B, num_tokens + 1, embed_dim]
         decoder_input = self.output_token_queries.expand(batch_size, -1, -1)
-        # Note: Positional encoding for the decoder queries starts from 0, as it's a "fresh" prediction.
+
+        # --- Add 2D spatial positional encoding to the query tokens ---
+        # The last query token is for the global features (reward/done), so we don't add grid encoding to it.
+        decoder_input_tokens = decoder_input[:, :-1, :] + self.grid_pos_embedding
+        decoder_input_global = decoder_input[:, -1, :].unsqueeze(1)
+        decoder_input = torch.cat([decoder_input_tokens, decoder_input_global], dim=1)
+
+        # Note: 1D temporal positional encoding for the decoder queries starts from 0, as it's a "fresh" prediction.
         decoder_input = self.pos_encoder(decoder_input, offset=0)
 
         # The decoder attends to the entire historical `memory` to generate the next state.
-        # Output: [B, num_tokens, embed_dim]
+        # Output: [B, num_tokens + 1, embed_dim]
         decoder_output = self.transformer_decoder(
             tgt=decoder_input,
             memory=memory,
