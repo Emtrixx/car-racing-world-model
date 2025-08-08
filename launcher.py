@@ -21,6 +21,18 @@ CONFIGS = {
             "--optimize",
         ]
     },
+    "transformer_wm": {
+        "description": "Hyperparameter sweep for the Transformer World Model.",
+        "num_workers": 8,
+        "study_name": "transformer_wm_optimization",
+        "command_args": [
+            "python",
+            "-m",
+            "src.train_transformer_world_model",
+            "--optimize",
+            "--load-data-from=./data/transformer_world_model_data",
+        ]
+    },
 }
 
 
@@ -86,18 +98,19 @@ if __name__ == "__main__":
     mlflow_tracking_uri = "logs/wm_mlflow"
 
     # --- Create the study before starting workers to prevent race conditions ---
-    print(f"Ensuring Optuna study '{study_name}' exists in {storage_path}...")
-    # Add a timeout to handle initial DB connection
-    storage = optuna.storages.RDBStorage(
-        url=storage_path,
-    )
-    study = optuna.create_study(
-        study_name=study_name,
-        storage=storage,
-        direction="maximize",
-        load_if_exists=True
-    )
-    print("Study created or loaded successfully.")
+    if args.config is "ppo":
+        print(f"Ensuring Optuna study '{study_name}' exists in {storage_path}...")
+        # Add a timeout to handle initial DB connection
+        storage = optuna.storages.RDBStorage(
+            url=storage_path,
+        )
+        study = optuna.create_study(
+            study_name=study_name,
+            storage=storage,
+            direction="maximize",
+            load_if_exists=True
+        )
+        print("Study created or loaded successfully.")
 
     # --- Append arguments for the worker command ---
     command_to_run.extend([
