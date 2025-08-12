@@ -110,15 +110,20 @@ class SequenceDataset(Dataset):
         if is_first_steps.ndim > 1:
             is_first_steps = is_first_steps.squeeze(1)
 
-        # Pre-calculate all valid start indices for sequences.
-        # A sequence is valid if it does not contain an episode start
-        # at any point after the first step.
-        self.valid_indices = []
-        for i in range(self.total_steps - self.sequence_length + 1):
-            # The window to check is from the second element to the end of the sequence.
-            window = is_first_steps[i + 1: i + self.sequence_length]
-            if not torch.any(window):
-                self.valid_indices.append(i)
+        # Vectorized approach to find valid start indices.
+        # A sequence is valid if it doesn't contain an episode start after the first step.
+        if self.total_steps >= self.sequence_length:
+            # We check for episode starts in the window that follows the initial step of a sequence.
+            # This window has size `sequence_length - 1`.
+            # `unfold` creates sliding windows. The i-th window corresponds to the sequence starting at index i.
+            starts_in_window = is_first_steps[1:].unfold(0, self.sequence_length - 1, 1).any(dim=1)
+
+            # The number of windows created is (total_steps - 1) - (sequence_length - 1) + 1 = total_steps - sequence_length + 1.
+            # This matches the number of possible start indices from 0 to total_steps - sequence_length.
+            valid_mask = ~starts_in_window
+            self.valid_indices = torch.where(valid_mask)[0]
+        else:
+            self.valid_indices = torch.tensor([], dtype=torch.long)
 
     def __len__(self):
         """Returns the total number of valid sequences."""
