@@ -540,7 +540,7 @@ if __name__ == "__main__":
         print("Starting hyperparameter optimization with Optuna...")
 
         storage = optuna.storages.RDBStorage(url=args.storage)
-        pruner = optuna.pruners.MedianPruner(n_warmup_steps=80, n_min_trials=3)
+        pruner = optuna.pruners.MedianPruner(n_warmup_steps=5000, n_min_trials=3)
 
         study = optuna.create_study(
             study_name=args.study_name,

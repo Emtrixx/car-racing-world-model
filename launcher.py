@@ -33,6 +33,18 @@ CONFIGS = {
             "--load-data-from=./data/transformer_world_model_data",
         ]
     },
+    "gru_wm": {
+        "description": "Hyperparameter sweep for the GRU World Model.",
+        "num_workers": 10,
+        "study_name": "gru_wm_optimization",
+        "command_args": [
+            "python",
+            "-m",
+            "src.train_world_model_parallel",
+            "--optimize",
+            "--load-data-from=./data/world_model_data",
+        ]
+    },
 }
 
 

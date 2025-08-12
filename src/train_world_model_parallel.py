@@ -3,9 +3,11 @@ import multiprocessing as mp
 import os
 import random
 import time
+import traceback
 from pathlib import Path
 
 import numpy as np
+import optuna
 import torch
 from torch import nn
 from torch.optim import Adam
@@ -222,7 +224,7 @@ class GruWorldModelTrainer:
             'kl': avg_val_kl_loss.item(),
         }
 
-    def train(self, num_epochs, copy_vq_weights=True, profile=False):
+    def train(self, num_epochs, copy_vq_weights=True, profile=False, trial: optuna.Trial = None):
         """Main training loop that iterates over a DataLoader."""
         print("Starting world model training...")
         if copy_vq_weights:
@@ -241,8 +243,9 @@ class GruWorldModelTrainer:
         # Initialize step counters
         global_step = 0
         log_freq = self.config.get('log_freq', 100)
-        val_freq = self.config.get('val_freq', log_freq * 5)
+        val_freq = self.config.get('val_freq', 200)
         checkpoint_freq = self.config.get('checkpoint_freq', 5000)
+        best_val_loss = float('inf')
 
         profiler = None
         if profile:
@@ -268,7 +271,8 @@ class GruWorldModelTrainer:
             profiler.start()
 
         for epoch in range(1, num_epochs + 1):
-            epoch_progress = tqdm(self.train_dataloader, desc=f"Epoch {epoch}/{num_epochs}", leave=False)
+            epoch_progress = tqdm(self.train_dataloader, desc=f"Epoch {epoch}/{num_epochs}", leave=False,
+                                  disable=profiler or trial)
             for batch_idx, batch in enumerate(epoch_progress):
                 global_step += 1
 
@@ -325,7 +329,7 @@ class GruWorldModelTrainer:
                         'learning_rate': self.optimizer.param_groups[0]['lr'],
                     }, step=global_step)
 
-                if global_step % log_freq == 0:
+                if global_step % log_freq == 0 and not profiler and not trial:
                     log_str = (
                         f"\n  +-----------------+----------+\n"
                         f"  |   Training      |  Value   |\n"
@@ -347,22 +351,33 @@ class GruWorldModelTrainer:
                     if self.logger:
                         self.logger.log_metrics({f'val/{k}_loss': v for k, v in val_losses.items()}, step=global_step)
 
-                    val_log_str = (
-                        f"\n  +-----------------+----------+\n"
-                        f"  |   Validation    |  Value   |\n"
-                        f"  +-----------------+----------+\n"
-                        f"  | Step            | {global_step:<8} |\n"
-                        f"  | Avg Total Loss  | {val_losses['total']:<8.4f} |\n"
-                        f"  | Avg Token Loss  | {val_losses['token']:<8.4f} |\n"
-                        f"  | Avg Reward Loss | {val_losses['reward']:<8.4f} |\n"
-                        f"  | Avg Done Loss   | {val_losses['done']:<8.4f} |\n"
-                        f"  | Avg KL Loss     | {val_losses['kl']:<8.4f} |\n"
-                        f"  +-----------------+----------+\n"
-                    )
-                    epoch_progress.write(val_log_str)
+                    if not profiler and not trial:
+                        val_log_str = (
+                            f"\n  +-----------------+----------+\n"
+                            f"  |   Validation    |  Value   |\n"
+                            f"  +-----------------+----------+\n"
+                            f"  | Step            | {global_step:<8} |\n"
+                            f"  | Avg Total Loss  | {val_losses['total']:<8.4f} |\n"
+                            f"  | Avg Token Loss  | {val_losses['token']:<8.4f} |\n"
+                            f"  | Avg Reward Loss | {val_losses['reward']:<8.4f} |\n"
+                            f"  | Avg Done Loss   | {val_losses['done']:<8.4f} |\n"
+                            f"  | Avg KL Loss     | {val_losses['kl']:<8.4f} |\n"
+                            f"  +-----------------+----------+\n"
+                        )
+                        epoch_progress.write(val_log_str)
+
+                    current_val_loss = val_losses['total']
+                    if current_val_loss < best_val_loss:
+                        best_val_loss = current_val_loss
+
+                    if trial:
+                        trial.report(current_val_loss, global_step)
+                        if trial.should_prune():
+                            raise optuna.exceptions.TrialPruned()
+
                     self.world_model.train()
 
-                if global_step > 0 and global_step % checkpoint_freq == 0:
+                if global_step > 0 and global_step % checkpoint_freq == 0 and not trial:
                     model_state_to_save = self.world_model.module.state_dict() if isinstance(self.world_model,
                                                                                              nn.DataParallel) else self.world_model.state_dict()
                     filename = GRU_WM_CHECKPOINTS_DIR / f"world_model_step_{global_step}.pth"
@@ -377,34 +392,40 @@ class GruWorldModelTrainer:
             print("Profiling finished")
 
         print("Training finished.")
+        return best_val_loss
 
 
-# --- Main Execution ---
-if __name__ == "__main__":
-    # Argument Parsing: Allow selecting config from command line
-    parser = argparse.ArgumentParser(description="Train GRU World Model")
-    parser.add_argument("--config", type=str, default="default",
-                        help="Name of the configuration to use (e.g., 'default', 'test').")
-    parser.add_argument("--save-data-to", type=str, default=None,
-                        help="Path to save the collected data to. Data is not saved unless this is specified.")
-    parser.add_argument("--load-data-from", type=str, default=None,
-                        help="Path to load data from, skipping collection.")
-    parser.add_argument("--checkpoint-path", type=str, default=None,
-                        help="Path to a model checkpoint to resume training.")
-    parser.add_argument("--profile", action="store_true", help="Enable profiling.")
-    parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
-    args = parser.parse_args()
+def train_gru_wm(config_name: str, trial: optuna.Trial = None, save_data_to: str = None,
+                 load_data_from: str = None, run_name_arg: str = None, checkpoint_path: str = None,
+                 profile: bool = False):
+    """Main function to train the GRU World Model."""
+    config = get_config(config_name)
 
-    # Load the chosen configuration
-    config = get_config(args.config)
-    print(f"Loaded configuration: '{args.config}'")
+    if trial:
+        # Hyperparameters to tune with Optuna
+        config['learning_rate'] = trial.suggest_float('learning_rate', 1e-5, 1e-3, log=True)
+        config['batch_size'] = trial.suggest_categorical('batch_size', [128, 256, 512, 1024])
+        config['sequence_length'] = trial.suggest_int('sequence_length', 16, 64, step=8)
+        config['max_grad_norm'] = trial.suggest_float('max_grad_norm', 0.5, 2.0)
+
+        # Architectural hyperparameters
+        config['d_model'] = trial.suggest_categorical('d_model', [256, 512, 768, 1024])
+        config['num_gru_layers'] = trial.suggest_int('num_gru_layers', 1, 4)
+
+        # For optimization, run shorter trials
+        config['num_steps'] = 250_000
+        config['epochs'] = 8
+
+    print(f"Loaded configuration: '{config_name}'")
+    if trial:
+        print("Running with Optuna-suggested hyperparameters.")
+    print(f"Device: {config['device']}")
 
     # Set multiprocessing start method - crucial for CUDA.
     try:
-        mp.set_start_method('spawn')
+        mp.set_start_method('spawn', force=True)
     except RuntimeError as e:
-        print(f"Could not set start method (possibly already set or not allowed): {e}")
-        pass
+        print(f"Could not set start method (possibly already set): {e}")
 
     print(f"Starting GRU World Model training on device: {config['device']}")
 
@@ -414,26 +435,18 @@ if __name__ == "__main__":
 
     # checks for checkpoint files
     if not os.path.exists(VQ_VAE_CHECKPOINT_FILENAME):
-        print(
-            f"CRITICAL ERROR: VAE Checkpoint {VQ_VAE_CHECKPOINT_FILENAME} not found. Exiting before starting workers.")
-        exit()
+        raise FileNotFoundError(f"CRITICAL ERROR: VQ-VAE Checkpoint {VQ_VAE_CHECKPOINT_FILENAME} not found.")
 
     sequence_data_buffer = None
-    if args.load_data_from:
-        if os.path.exists(args.load_data_from):
-            print(f"Loading sequence data from {args.load_data_from}...")
-            sequence_data_buffer = torch.load(args.load_data_from, map_location="cpu")
-            limit = config["num_steps"]
-            if limit < len(sequence_data_buffer['actions']):
-                # Limit the dataset to the first 'limit' sequences
-                for key in sequence_data_buffer:
-                    sequence_data_buffer[key] = sequence_data_buffer[key][:limit]
-            print("Data loaded successfully.")
-        else:
-            print(f"ERROR: Data file not found at {args.load_data_from}. Exiting.")
-            exit()
+    if load_data_from and os.path.exists(load_data_from):
+        print(f"Loading sequence data from {load_data_from}...")
+        sequence_data_buffer = torch.load(load_data_from, map_location="cpu")
+        limit = config["num_steps"]
+        if limit < len(sequence_data_buffer['actions']):
+            for key in sequence_data_buffer:
+                sequence_data_buffer[key] = sequence_data_buffer[key][:limit]
+        print("Data loaded successfully.")
     else:
-        # Collect Sequence Data (Parallelized)
         print(f"Number of collection workers configured: {config['num_collection_workers']}")
         start_collect_time = time.time()
         sequence_data_buffer = collect_sequences_for_gru(
@@ -443,48 +456,33 @@ if __name__ == "__main__":
             env_name_str_for_worker=config["env_name"],
             max_episode_steps_collect_int=config["max_episode_steps_collect"]
         )
-        print(f"Sequence data collection (parallel/serial) took {time.time() - start_collect_time:.2f} seconds.")
+        print(f"Sequence data collection took {time.time() - start_collect_time:.2f} seconds.")
 
-        if sequence_data_buffer and args.save_data_to:
-            print(f"Saving collected data to {args.save_data_to}...")
-            save_dir = os.path.dirname(args.save_data_to)
+        if sequence_data_buffer and save_data_to:
+            print(f"Saving collected data to {save_data_to}...")
+            save_dir = os.path.dirname(save_data_to)
             if save_dir and not os.path.exists(save_dir):
                 os.makedirs(save_dir, exist_ok=True)
-            torch.save(sequence_data_buffer, args.save_data_to)
-            print(f"Data saved to {args.save_data_to}.")
+            torch.save(sequence_data_buffer, save_data_to)
+            print(f"Data saved to {save_data_to}.")
 
     if not sequence_data_buffer:
-        print("ERROR: No sequence data collected. Exiting.")
-        exit()
+        raise RuntimeError("ERROR: No sequence data collected or loaded. Exiting.")
 
-    # Ensure all collected data is on the CPU before creating the Dataset
     print("Moving collected data to CPU...")
     for key in sequence_data_buffer:
         if isinstance(sequence_data_buffer[key], torch.Tensor):
             sequence_data_buffer[key] = sequence_data_buffer[key].cpu()
 
-    # Prepare DataLoader with train/validation split
     print("Splitting data into training and validation sets...")
     full_dataset = SequenceDataset(sequence_data_buffer, config["sequence_length"])
 
-    validation_split_ratio = config.get("validation_split", 0.1)
-    shuffle_dataset = True
-    random_seed_split = config.get("random_seed", 42)
-    print(f"Random seed: {random_seed_split}")
-
     dataset_size = len(full_dataset)
     indices = list(range(dataset_size))
-    split_idx = int(np.floor(validation_split_ratio * dataset_size))
-
-    if shuffle_dataset:
-        np.random.seed(random_seed_split)
-        np.random.shuffle(indices)
-
+    split_idx = int(np.floor(config["validation_split"] * dataset_size))
+    np.random.seed(config["random_seed"])
+    np.random.shuffle(indices)
     train_indices, val_indices = indices[split_idx:], indices[:split_idx]
-
-    print(f"Total sequences: {dataset_size}")
-    print(f"Training sequences: {len(train_indices)}")
-    print(f"Validation sequences: {len(val_indices)}")
 
     train_sampler = SubsetRandomSampler(train_indices)
     val_sampler = SubsetRandomSampler(val_indices)
@@ -494,14 +492,14 @@ if __name__ == "__main__":
         batch_size=config["batch_size"],
         sampler=train_sampler,
         num_workers=config["num_loader_workers"],
-        pin_memory=True if "cuda" in str(config['device']) else False  # Added pin_memory
+        pin_memory="cuda" in str(config['device'])
     )
     val_dataloader = DataLoader(
         full_dataset,
         batch_size=config["batch_size"],
         sampler=val_sampler,
         num_workers=config["num_loader_workers"],
-        pin_memory=True if "cuda" in str(config['device']) else False  # Added pin_memory
+        pin_memory="cuda" in str(config['device'])
     )
 
     # Initialize GRU World Model
@@ -518,9 +516,9 @@ if __name__ == "__main__":
     # Compile the GRU model
     world_model_gru = torch.compile(world_model_gru)
 
-    if args.checkpoint_path and Path(args.checkpoint_path).exists():
-        print(f"Loading pre-trained model from {args.checkpoint_path}...")
-        world_model_gru.load_state_dict(torch.load(args.checkpoint_path, map_location=config['device']))
+    if checkpoint_path and Path(checkpoint_path).exists():
+        print(f"Loading pre-trained model from {checkpoint_path}...")
+        world_model_gru.load_state_dict(torch.load(checkpoint_path, map_location=config['device']))
 
     # Initialize VQ-VAE Model
     vq_vae_model = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS)
@@ -534,39 +532,128 @@ if __name__ == "__main__":
         world_model_gru = nn.DataParallel(world_model_gru)
 
     logger = ExperimentLogger(log_dir="logs", experiment_name="gru_wm_training")
-    run_name = args.run_name if args.run_name else f"{args.config}_{int(time.time())}"
+    run_name = run_name_arg if run_name_arg else f"{config_name}_{int(time.time())}"
     logger.start_run(run_name=run_name, config=config)
 
     # Create the trainer instance
     # The trainer encapsulates the model, optimizer, and training logic.
     trainer = GruWorldModelTrainer(
-        world_model_gru,
-        vq_vae_model,
-        config,
-        train_dataloader,  # Pass train_dataloader
-        val_dataloader,  # Pass val_dataloader
-        logger=logger
+        world_model_gru, vq_vae_model, config, train_dataloader, val_dataloader, logger=logger
     )
 
-    # Run the training loop
-    print("Starting GRU World Model training via WorldModelTrainer...")
+    best_val_loss = float('inf')
     start_train_time = time.time()
-    # trainer saves checkpoints automatically during training
-    trainer.train(num_epochs=config["epochs"],
-                  copy_vq_weights=args.checkpoint_path is None,
-                  profile=args.profile)
-    print(f"GRU World Model training took {time.time() - start_train_time:.2f} seconds.")
-    logger.end_run()
-
-    # Save the final GRU World Model
     try:
-        model_state_to_save = world_model_gru.module.state_dict() if isinstance(world_model_gru,
-                                                                                nn.DataParallel) else world_model_gru.state_dict()
-
-        WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_dm{config['d_model']}_ly{config['num_gru_layers']}"
-        WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX_GRU}.pth"
-
-        torch.save(model_state_to_save, WM_CHECKPOINT_FILENAME_GRU)
-        print(f"GRU World Model saved to {WM_CHECKPOINT_FILENAME_GRU}")
+        best_val_loss = trainer.train(
+            num_epochs=config["epochs"],
+            copy_vq_weights=checkpoint_path is None,
+            profile=profile,
+            trial=trial
+        )
+    except optuna.exceptions.TrialPruned as e:
+        print(f"Trial pruned: {e}")
+        logger.end_run()
+        raise e
     except Exception as e:
-        print(f"Error saving GRU World Model: {e}")
+        print(f"An error occurred during training: {e}")
+        traceback.print_exc()
+        logger.end_run()
+        return float('inf')
+    finally:
+        print(f"Total training took {time.time() - start_train_time:.2f} seconds.")
+        logger.end_run()
+
+    if not trial:
+        try:
+            model_state_to_save = world_model_gru.module.state_dict() if isinstance(world_model_gru,
+                                                                                    nn.DataParallel) else world_model_gru.state_dict()
+            WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_dm{config['d_model']}_ly{config['num_gru_layers']}"
+            WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX_GRU}.pth"
+            torch.save(model_state_to_save, WM_CHECKPOINT_FILENAME_GRU)
+            print(f"GRU World Model saved to {WM_CHECKPOINT_FILENAME_GRU}")
+        except Exception as e:
+            print(f"Error saving GRU World Model: {e}")
+
+    return best_val_loss
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description="Train GRU World Model")
+    parser.add_argument("--config", type=str, default="default",
+                        help="Name of the configuration to use (e.g., 'default', 'test').")
+    parser.add_argument("--save-data-to", type=str, default=None,
+                        help="Path to save the collected data to. Data is not saved unless this is specified.")
+    parser.add_argument("--load-data-from", type=str, default=None,
+                        help="Path to load data from, skipping collection.")
+    parser.add_argument("--checkpoint-path", type=str, default=None,
+                        help="Path to a model checkpoint to resume training.")
+    parser.add_argument("--profile", action="store_true", help="Enable profiling.")
+    parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
+    # Optuna arguments
+    parser.add_argument("--optimize", action="store_true", help="Enable hyperparameter optimization with Optuna.")
+    parser.add_argument("--n-trials", type=int, default=50, help="Number of trials for Optuna optimization.")
+    parser.add_argument("--study-name", type=str, default="gru_wm_optimization", help="Name for the Optuna study.")
+    parser.add_argument("--storage", type=str, default="postgresql://optuna:optuna@db:5432/optuna",
+                        help="Database storage for Optuna study.")
+    args = parser.parse_args()
+
+    if args.optimize:
+        print("Starting hyperparameter optimization with Optuna...")
+
+        storage = None
+        try:
+            storage = optuna.storages.RDBStorage(url=args.storage)
+            storage.get_all_study_summaries()
+            print(f"Using Optuna RDB storage: {args.storage}")
+        except Exception as e:
+            print(f"Could not connect to Optuna RDB storage at {args.storage}. Error: {e}")
+            print("Falling back to in-memory storage.")
+            storage = None
+
+        pruner = optuna.pruners.MedianPruner(n_warmup_steps=5000, n_min_trials=3)
+
+        study = optuna.create_study(
+            study_name=args.study_name,
+            storage=storage,
+            pruner=pruner,
+            direction="minimize",
+            load_if_exists=True
+        )
+
+
+        def objective(trial: optuna.Trial) -> float:
+            """Objective function for Optuna."""
+            run_name = f"{args.study_name}_trial_{trial.number}"
+            # Use a default config that can be overridden by Optuna
+            config_name = "test" if "test" in args.config else "default"
+            return train_gru_wm(
+                config_name=config_name,
+                trial=trial,
+                load_data_from=args.load_data_from,
+                run_name_arg=run_name
+            )
+
+
+        try:
+            study.optimize(objective, n_trials=args.n_trials, timeout=3600 * 8)
+        except KeyboardInterrupt:
+            print("Optimization stopped manually.")
+
+        print("Optimization finished.")
+        print(f"Number of finished trials: {len(study.trials)}")
+        print("Best trial:")
+        trial = study.best_trial
+        print(f"  Value (best validation loss): {trial.value}")
+        print("  Params: ")
+        for key, value in trial.params.items():
+            print(f"    {key}: {value}")
+
+    else:
+        train_gru_wm(
+            config_name=args.config,
+            save_data_to=args.save_data_to,
+            load_data_from=args.load_data_from,
+            run_name_arg=args.run_name,
+            checkpoint_path=args.checkpoint_path,
+            profile=args.profile
+        )
