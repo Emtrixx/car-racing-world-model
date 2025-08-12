@@ -605,12 +605,8 @@ if __name__ == "__main__":
     if args.optimize:
         print("Starting hyperparameter optimization with Optuna...")
 
-        storage = None
-        try:
-            storage = optuna.storages.RDBStorage(url=args.storage)
-            print(f"Using Optuna RDB storage: {args.storage}")
-        except Exception as e:
-            print(f"Could not connect to Optuna RDB storage at {args.storage}. Error: {e}")
+        storage = optuna.storages.RDBStorage(url=args.storage)
+        print(f"Using Optuna RDB storage: {args.storage}")
 
         pruner = optuna.pruners.MedianPruner(n_warmup_steps=5000, n_min_trials=3)
 
