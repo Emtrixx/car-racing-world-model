@@ -608,12 +608,9 @@ if __name__ == "__main__":
         storage = None
         try:
             storage = optuna.storages.RDBStorage(url=args.storage)
-            storage.get_all_study_summaries()
             print(f"Using Optuna RDB storage: {args.storage}")
         except Exception as e:
             print(f"Could not connect to Optuna RDB storage at {args.storage}. Error: {e}")
-            print("Falling back to in-memory storage.")
-            storage = None
 
         pruner = optuna.pruners.MedianPruner(n_warmup_steps=5000, n_min_trials=3)
 
