@@ -30,10 +30,10 @@ from src.world_model import D_MODEL, GRU_NUM_LAYERS, WorldModelGRU
 # Training Hyperparameters
 NUM_STEPS = 1_000_000  # Number of steps to collect for training the world model
 WM_EPOCHS = 16  # Number of epochs to train the world model
-WM_BATCH_SIZE = 256  # Sequences per batch
-WM_LEARNING_RATE = 1e-4  # Learning rate for world model optimizer
-SEQUENCE_LENGTH = 32  # Length of sequences to train on
-MAX_GRAD_NORM = 1.0  # Max gradient norm for clipping
+WM_BATCH_SIZE = 128  # Sequences per batch
+WM_LEARNING_RATE = 38e-5  # Learning rate for world model optimizer
+SEQUENCE_LENGTH = 64  # Length of sequences to train on
+MAX_GRAD_NORM = 1.47  # Max gradient norm for clipping
 
 # Parallelism Configuration
 NUM_COLLECTION_WORKERS = 4  # For multiprocessing data collection
