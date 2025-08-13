@@ -402,10 +402,12 @@ if __name__ == "__main__":
             url=args.storage,
         )
 
-        study = optuna.load_study(
+        study = optuna.create_study(
             study_name=args.study_name,
             storage=storage,
             pruner=optuna.pruners.MedianPruner(n_warmup_steps=10),
+            direction="maximize",
+            load_if_exists=True
         )
         mlflow_callback = MLflowCallback(
             tracking_uri=args.mlflow_tracking_uri,
