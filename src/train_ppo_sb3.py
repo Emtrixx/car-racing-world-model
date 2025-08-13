@@ -4,6 +4,7 @@ import random
 import time
 from typing import Callable
 
+import numpy as np
 import optuna
 import torch
 from optuna.integration import MLflowCallback
@@ -41,8 +42,8 @@ def get_config_sb3(name="default"):
             "gae_lambda": 0.95,  # Factor for trade-off of bias vs variance for Generalized Advantage Estimation
             "clip_range": 0.2,
             "ent_coef": 0.02,  # Corresponds to INITIAL_ENTROPY_COEF (fixed for now)
-            "vf_coef": 0.5,
-            "max_grad_norm": 0.5,
+            "vf_coef": 0.4,
+            "max_grad_norm": 2.3,
             "target_kl": 0.015,  # For early stopping in PPO updates
             "sde_sample_freq": -1,  # Set to -1 to disable SDE for standard PPO
 
@@ -50,7 +51,7 @@ def get_config_sb3(name="default"):
             "policy_kwargs": dict(
                 features_extractor_class=CustomCNN,
                 features_extractor_kwargs=dict(features_dim=1024),
-                net_arch=dict(pi=[256], vf=[256]),
+                net_arch=dict(pi=[256, 128], vf=[256, 128]),
                 activation_fn=torch.nn.Tanh,
                 log_std_init=-1.0,  # Matches custom Actor's initial log_std bias
                 ortho_init=True,  # SB3 default, can be False if issues arise
@@ -117,7 +118,15 @@ class OptunaPruningCallback(BaseCallback):
 
     def _on_step(self) -> bool:
         if self.eval_callback.last_mean_reward is not None:
-            self.trial.report(self.eval_callback.last_mean_reward, self.num_timesteps)
+            # Report the best mean reward achieved so far, ignoring the first evaluation.
+            # This avoids pruning promising trials that have an initial performance dip after a high initial score.
+            evaluations = self.eval_callback.evaluations_results
+            if len(evaluations) > 1:
+                reported_value = max(np.mean(res) for res in evaluations[1:])
+            else:
+                reported_value = self.eval_callback.last_mean_reward
+
+            self.trial.report(reported_value, self.num_timesteps)
             if self.trial.should_prune():
                 return False
         return True
@@ -168,7 +177,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         config["policy_kwargs"]["net_arch"] = dict(pi=net_arch_pi, vf=net_arch_vf)
         # For optimization, run shorter trials
         config["total_timesteps"] = 250_000
-        config["eval_freq"] = 10_000
+        config["eval_freq"] = 20_000
         config["n_eval_episodes"] = 5
         config["num_envs"] = 12  # Use fewer envs for HPO to reduce overhead
 
@@ -310,8 +319,23 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
     if not trial:
         print(f"Models and logs saved in: {SB3_SAVE_DIR} and {SB3_LOG_DIR}")
 
-    # Use the reward from the last evaluation, not the best one.
-    final_reward = eval_callback.last_mean_reward
+    # For Optuna trials, we return the best mean reward achieved after the first evaluation.
+    # This avoids being misled by initially high rewards from passive policies.
+    if trial:
+        evaluations = eval_callback.evaluations_results
+        if len(evaluations) > 1:
+            # Best reward after the first evaluation
+            final_reward = max(np.mean(res) for res in evaluations[1:])
+        elif evaluations:
+            # Fallback to the first evaluation result if it's the only one
+            final_reward = np.mean(evaluations[0])
+        else:
+            # Should not happen in a successful run
+            final_reward = -1.0  # Return a bad value for failed trials
+    else:
+        # For regular runs, use the last evaluation's reward.
+        final_reward = eval_callback.last_mean_reward
+
     print(f"Best mean reward during run: {eval_callback.best_mean_reward}")
     print(f"Final mean reward for Optuna: {final_reward}")
     return final_reward
