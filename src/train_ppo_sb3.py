@@ -146,11 +146,10 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         config["target_kl"] = trial.suggest_float("target_kl", 0.005, 0.05)
 
         # For policy_kwargs
-        features_dim = trial.suggest_categorical("features_dim", [256, 512, 1024])
-        activation_choices = trial.suggest_categorical("activation_fn", ["tanh", "relu"])
-        activation_fn = torch.nn.Tanh if activation_choices == "tanh" else torch.nn.ReLU
-        # Use tuples for list choices to make them hashable for the Optuna dashboard
-        net_arch_choices_str = ("64", "128", "256", "64,64", "128,64")
+        features_dim = trial.suggest_categorical("features_dim", [256, 512, 1024, 2048])
+        activation_choices = trial.suggest_categorical("activation_fn", ["tanh", "relu", "gelu"])
+        activation_fn = torch.nn.Tanh if activation_choices == "tanh" else torch.nn.ReLU if activation_choices == "relu" else torch.nn.GELU  # Use tuples for list choices to make them hashable for the Optuna dashboard
+        net_arch_choices_str = ("64", "128", "256", "64,64", "128,64", "256,128", "512,256", "1024,512", "2048,1024")
         net_arch_pi_str = trial.suggest_categorical("net_arch_pi", net_arch_choices_str)
         net_arch_vf_str = trial.suggest_categorical("net_arch_vf", net_arch_choices_str)
 
@@ -171,7 +170,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         config["total_timesteps"] = 250_000
         config["eval_freq"] = 10_000
         config["n_eval_episodes"] = 5
-        config["num_envs"] = 16  # Use fewer envs for HPO to reduce overhead
+        config["num_envs"] = 12  # Use fewer envs for HPO to reduce overhead
 
     # generate seed and print it
     seed = config["seed"]
