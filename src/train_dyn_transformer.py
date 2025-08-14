@@ -41,8 +41,8 @@ def get_combined_config(name="default"):
     wm_config = {
         "wm_epochs": 15,
         "wm_batch_size": 256,
-        "wm_learning_rate": 1e-4,
-        "max_grad_norm": 1.0,
+        "wm_learning_rate": 38e-5,
+        "max_grad_norm": 1.47,
         "grid_size": GRID_SIZE,
         "codebook_size": VQVAE_NUM_EMBEDDINGS,
         "vqvae_embed_dim": VQVAE_EMBEDDING_DIM,
@@ -72,7 +72,7 @@ def get_combined_config(name="default"):
         "ppo_learning_rate": 45e-5,
         "n_steps": 2048,  # Steps per batch (per environment)
         "ppo_batch_size": 1024,
-        "n_epochs": 10,
+        "n_epochs": 15,
         "gamma": 0.99,
         "gae_lambda": 0.9,
         "clip_range": 0.2,
@@ -84,8 +84,8 @@ def get_combined_config(name="default"):
         "n_eval_episodes": 5,
         "policy_kwargs": dict(
             features_extractor_class=CustomCNN,
-            features_extractor_kwargs=dict(features_dim=512),
-            net_arch=dict(pi=[256], vf=[256]),
+            features_extractor_kwargs=dict(features_dim=1024),
+            net_arch=dict(pi=[256, 128], vf=[256, 128]),
             activation_fn=torch.nn.ReLU,
             log_std_init=-0.8,
             ortho_init=True,
@@ -94,9 +94,10 @@ def get_combined_config(name="default"):
 
     # --- Dyna-style Training Loop Config ---
     dyna_config = {
-        "total_real_steps": 1_000_000,
-        "warmup_real_steps": 250_000,
-        "wm_train_interval": 25_000,
+        "total_real_steps": 5_000_000,
+        "warmup_real_steps": 1_000_000,
+        "wm_buffer_size": 500_000,
+        "wm_train_interval": 50_000,
         "dream_horizon": 32,
         "dream_steps_per_real_step": 24,
         "num_envs": 32,
@@ -114,6 +115,7 @@ def get_combined_config(name="default"):
     test_config.update({
         "total_real_steps": 2_000,
         "warmup_real_steps": 500,
+        "wm_buffer_size": 250,
         "wm_train_interval": 500,
         "wm_epochs": 2,
         "wm_batch_size": 4,
@@ -344,7 +346,7 @@ class DynaTrainer:
             print(f"Loading PPO agent from {ppo_checkpoint}")
             self.ppo_agent.load(ppo_checkpoint, env=self.real_env)
 
-        self.replay_buffer = deque(maxlen=config['warmup_real_steps'])
+        self.replay_buffer = deque(maxlen=config['wm_buffer_size'])
         self.wm_optimizer = torch.optim.Adam(self.world_model.parameters(), lr=config['wm_learning_rate'])
         self.token_loss_fn = nn.CrossEntropyLoss()
         self.reward_loss_fn = nn.MSELoss()

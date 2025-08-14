@@ -34,7 +34,7 @@ def get_config_sb3(name="default"):
         "default": {
             # SB3 PPO Hyperparameters
             "policy": "CnnPolicy",
-            "learning_rate": 45e-5,  # Can be a schedule
+            "learning_rate": 5e-5,  # Can be a schedule
             "n_steps": 1024,  # Corresponds to STEPS_PER_BATCH (per environment)
             "batch_size": 64,  # PPO's minibatch size
             "n_epochs": 10,  # Corresponds to EPOCHS_PER_UPDATE

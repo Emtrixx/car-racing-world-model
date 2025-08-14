@@ -110,7 +110,6 @@ class CustomCNN(BaseFeaturesExtractor):
 
         # SB3 observation shape: (num_stack, height, width, channels)
         num_stack = observation_space.shape[0]
-        # Assuming the base env has 1 channel after preprocessing
         original_channels = observation_space.shape[-1]
         in_channels = num_stack * original_channels
 
