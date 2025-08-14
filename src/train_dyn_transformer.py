@@ -232,7 +232,7 @@ class SystemMetricsCallback(BaseCallback):
 
 class DynaTrainer:
     def __init__(self, config, config_name, world_model_type, wm_checkpoint_path=None, ppo_checkpoint=None,
-                 run_name=None):
+                 run_name=None, val_data_path=None):
         self.config = config
         self.config_name = config_name
         self.world_model_type = world_model_type
@@ -358,6 +358,35 @@ class DynaTrainer:
             run_name = f"{self.config_name}_{int(time.time())}"
         self.logger.start_run(run_name=run_name, config=self.config)
 
+        # --- Validation Dataloader ---
+        self.val_loader = None
+        if val_data_path:
+            print(f"Loading validation data from {val_data_path}...")
+            try:
+                val_data_buffer = torch.load(val_data_path, map_location='cpu')
+                if self.world_model_type == 'transformer':
+                    val_dataset = TransformerHistoryDataset(val_data_buffer, self.config['history_length'])
+                    self.val_loader = DataLoader(val_dataset, batch_size=self.config['wm_batch_size'], shuffle=False,
+                                                 num_workers=self.config['num_loader_workers'],
+                                                 pin_memory="cuda" in str(config['device']))
+                elif self.world_model_type == 'gru':
+                    # Assumes val_data_buffer is a dict of tensors with plural keys
+                    val_dataset = TensorDataset(
+                        val_data_buffer['prev_tokens'],
+                        val_data_buffer['actions'],
+                        val_data_buffer['rewards'],
+                        val_data_buffer['dones'],
+                        val_data_buffer['next_tokens']
+                    )
+                    self.val_loader = DataLoader(val_dataset, batch_size=self.config['wm_batch_size'],
+                                                 shuffle=False,
+                                                 num_workers=self.config['num_loader_workers'], pin_memory=True)
+                print(f"Successfully loaded {len(self.val_loader.dataset)} validation samples.")
+            except FileNotFoundError:
+                print(f"Validation data file not found at {val_data_path}. Continuing without validation.")
+            except Exception as e:
+                print(f"Error loading validation data: {e}. Continuing without validation.")
+
     def _log_system_metrics(self, step):
         """Logs CPU, RAM, and GPU metrics to the logger."""
         if not self.logger:
@@ -381,6 +410,89 @@ class DynaTrainer:
                 print(f"Could not poll NVML for GPU stats: {e}")
 
         self.logger.log_metrics(metrics, step=step)
+
+    @torch.no_grad()
+    def evaluate_wm(self, global_tqdm, global_step):
+        """Runs a full evaluation on the validation set."""
+        if not self.val_loader:
+            return
+
+        global_tqdm.write(f"\n--- Evaluating {self.world_model_type.upper()} World Model ---")
+        self.world_model.eval()
+        total_losses, token_losses, reward_losses, done_losses = [], [], [], []
+
+        progress = tqdm(self.val_loader, desc=f"WM Validation", leave=False)
+        for batch in progress:
+            if self.world_model_type == 'transformer':
+                for key in batch:
+                    batch[key] = batch[key].to(self.device)
+
+                with torch.amp.autocast(enabled="cuda" in str(self.device), device_type=self.device_type):
+                    pred_logits, pred_reward, pred_done_logits, _ = self.world_model(
+                        batch['action_history'], batch['latent_token_history']
+                    )
+                    b, h, w, c = pred_logits.shape
+                    token_loss = self.token_loss_fn(pred_logits.view(b * h * w, c),
+                                                    batch['target_next_tokens'].view(b * h * w))
+                    reward_loss = self.reward_loss_fn(pred_reward, batch['target_reward'])
+                    done_loss = self.done_loss_fn(pred_done_logits, batch['target_done'])
+                    total_loss = token_loss + reward_loss + done_loss
+
+            elif self.world_model_type == 'gru':
+                prev_tokens, actions, rewards, dones, next_tokens = batch
+                prev_tokens, actions, rewards, dones, next_tokens = \
+                    prev_tokens.to(self.device), actions.to(self.device), rewards.to(self.device), \
+                        dones.to(self.device), next_tokens.to(self.device)
+
+                # Add sequence dimension (T=1)
+                prev_tokens = prev_tokens.unsqueeze(1)
+                actions = actions.unsqueeze(1)
+
+                # Get initial hidden state for the batch
+                initial_hidden_state = self.world_model.get_initial_hidden_state(
+                    batch_size=prev_tokens.size(0), device=self.device
+                )
+
+                with torch.amp.autocast(enabled="cuda" in str(self.device), device_type=self.device_type):
+                    pred_token_logits, pred_rewards, pred_dones, _, _ = self.world_model(
+                        prev_tokens, actions, initial_hidden_state
+                    )
+                    # Reshape for loss calculation (remove sequence dimension)
+                    pred_token_logits = pred_token_logits.squeeze(1)
+                    pred_rewards = pred_rewards.squeeze(1)
+                    pred_dones = pred_dones.squeeze(1)
+
+                    token_loss = self.token_loss_fn(pred_token_logits.flatten(0, 1),
+                                                    next_tokens.flatten(0, 1))
+                    reward_loss = self.reward_loss_fn(pred_rewards, rewards)
+                    done_loss = self.done_loss_fn(pred_dones, dones)
+                    total_loss = token_loss + reward_loss + done_loss
+
+            total_losses.append(total_loss.item())
+            token_losses.append(token_loss.item())
+            reward_losses.append(reward_loss.item())
+            done_losses.append(done_loss.item())
+
+        if self.logger and total_losses:
+            self.logger.log_metrics({
+                'val/total_loss': sum(total_losses) / len(total_losses),
+                'val/token_loss': sum(token_losses) / len(token_losses),
+                'val/reward_loss': sum(reward_losses) / len(reward_losses),
+                'val/done_loss': sum(done_losses) / len(done_losses),
+            }, step=global_step)
+
+        log_str = (
+            f"\n  +-----------------+----------+"
+            f"\n  |   Validation    |  Value   |"
+            f"\n  +-----------------+----------+"
+            f"\n  | Step            | {global_step:8d} |"
+            f"\n  | Total Loss      | {sum(total_losses) / len(total_losses):.4f}    |"
+            f"\n  | Token Loss      | {sum(token_losses) / len(token_losses):.4f}    |"
+            f"\n  | Reward Loss     | {sum(reward_losses) / len(reward_losses):.4f}    |"
+            f"\n  | Done Loss       | {sum(done_losses) / len(done_losses):.4f}    |"
+            f"\n  +-----------------+----------+"
+        )
+        global_tqdm.write(log_str)
 
     def train_wm(self, global_tqdm, global_step):
         global_tqdm.write(f"\n--- Training {self.world_model_type.upper()} World Model ---")
@@ -537,16 +649,6 @@ class DynaTrainer:
                         grad_norm_item = grad_norm.item()
                     grad_norms.append(grad_norm_item)
 
-        # Log final metrics after training
-        # if self.logger and total_losses:
-        #     self.logger.log_metrics({
-        #         'train/mean_total_loss': sum(total_losses) / len(total_losses),
-        #         'train/mean_token_loss': sum(token_losses) / len(token_losses),
-        #         'train/mean_reward_loss': sum(reward_losses) / len(reward_losses),
-        #         'train/mean_done_loss': sum(done_losses) / len(done_losses),
-        #         'train/mean_grad_norm': sum(grad_norms) / len(grad_norms),
-        #     }, step=global_step)
-
         log_str = (
             f"\n  +-----------------+----------+\n"
             f"  |   Training      |  Value   |\n"
@@ -560,6 +662,7 @@ class DynaTrainer:
             f"  +-----------------+----------+\n"
         )
         global_tqdm.write(log_str)
+        self.evaluate_wm(global_tqdm, global_step=global_step)
         global_tqdm.write("--- World Model Training Finished ---")
 
     def train_agent_in_dream(self, global_tqdm):
@@ -696,13 +799,15 @@ if __name__ == "__main__":
                         help="Path to a pre-trained world model checkpoint.")
     parser.add_argument("--ppo-checkpoint", type=str, default=None, help="Path to a pre-trained PPO agent checkpoint.")
     parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
+    parser.add_argument("--val-data-path", type=str, default=None, help="Path to validation data for the world model.")
     args = parser.parse_args()
 
     config = get_combined_config(args.config)
     trainer = DynaTrainer(config, config_name=args.config, world_model_type=args.world_model_type,
                           wm_checkpoint_path=args.wm_checkpoint,
                           ppo_checkpoint=args.ppo_checkpoint,
-                          run_name=args.run_name)
+                          run_name=args.run_name,
+                          val_data_path=args.val_data_path)
 
     if "cuda" in str(config['device']):
         print(f"Using float32 matmul high precision for CUDA training.")
