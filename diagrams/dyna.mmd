@@ -1,10 +1,10 @@
 graph TD
     subgraph "Dyna-Style Training Loop"
         direction TB
-        Start((Start)) --> Collect[1. Collect Real Experience & Train Agent];
+        Start((Start)) --> Collect[Collect Real Experience & Train Agent];
         Collect -- "Real (obs, action, reward, done)" --> Buffer(Replay Buffer);
-        Buffer -- "Sample real data" --> TrainWM[2. Train World Model];
-        TrainWM -- "Updated World Model" --> Dream[3. Train Agent in Dream Environment];
+        Buffer -- "Sample real data" --> TrainWM[Train World Model];
+        TrainWM -- "Updated World Model" --> Dream[Train Agent in Dream Environment];
         Dream -- "Improved Agent" --> Collect;
 
         subgraph s1 ["Step 1: Real Interaction"]

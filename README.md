@@ -13,7 +13,7 @@ data.
 
 The system is composed of three main parts:
 
-1. **Visual Encoder (VQ-VAE):** A Vector-Quantized Variational Autoencoder is trained to compress raw 96x96 pixel
+1. **Visual Encoder (VQ-VAE):** A Vector-Quantized Variational Autoencoder is trained to compress raw pixel
    observations from the environment into a small, discrete 4x4 grid of tokens. This compressed representation serves as
    the state for the world models.
 2. **World Models (GRU & Transformer):**
@@ -89,7 +89,7 @@ The system is composed of three main parts:
 
 1. **Clone the repository:**
    ```bash
-   git clone <repository_url>
+   git clone git@github.com:Emtrixx/car-racing-world-model.git
    cd car-racing-world-model
    ```
 
@@ -106,23 +106,44 @@ The system is composed of three main parts:
 
 4. **Training Steps (Example Workflow):**
 
-    * **Step 1: Train the VQ-VAE.** You must first collect data and then train.
+   The recommended training process follows these steps:
+
+    * **Step 1: Train a Baseline PPO Agent.**
+      A capable PPO agent is first trained on the real environment. This agent's policy is then used to collect a
+      high-quality dataset of experiences, which is more effective for training the world models than using a random
+      policy.
+      ```bash
+      # Train the baseline PPO agent and save the model
+      python -m src.train_ppo_sb3 --config default
+      ```
+      This will save the best model in the `checkpoints/sb3_checkpoints/` directory. You will use this model in the next
+      step.
+
+    * **Step 2: Train the VQ-VAE.**
+      You must first collect data using your trained agent, and then train the VQ-VAE on that data.
       ```bash
       # Collect 1,000,000 frames from the environment and train the VQ-VAE
+      # TODO: This script needs to be adapted to take the agent from step 1
       python -m src.train_vq_vae --config default --collect
       ```
 
-    * **Step 2: Train a World Model (Optional, for separate evaluation).** You need a dataset first.
-      ```bash
-      # Collect data for the Transformer WM and train the GRU world model
-      python -m src.train_transformer_world_model --config default --save-data-to data/transformer_world_model_data
-      ```
+    * **Step 3: Train a World Model (Optional, for separate evaluation).**
+      You need a dataset first, which should be collected with the agent from Step 1.
+        ```bash
+        # Collect data for the Transformer WM and train the transformer world model
+        python -m src.train_transformer_world_model --config default --save-data-to data/transformer_world_model_data
+        ```
+        ```bash
+        # Collect data for the GRU WM and train the GRU world model
+        python -m src.train_world_model_parallel --config default --save-data-to data/gru_world_model_data
+        ```
 
-    * **Step 3: Run the full Dyna training.** This trains the agent and world model together from scratch.
+    * **Step 4: Run the full Dyna training.**
+      This trains the agent and world model together from scratch and is the final step.
       ```bash
       # Run Dyna training with the Transformer world model
       python -m src.train_dyn_transformer --world-model-type transformer --config default
-
+ 
       # Run Dyna training with the GRU world model
       python -m src.train_dyn_transformer --world-model-type gru --config default
       ```

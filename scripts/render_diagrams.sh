@@ -32,7 +32,7 @@ for diagram_file in "$DIAGRAMS_DIR"/*.mmd; do
         echo "Rendering $filename to $output_file..."
 
         # Execute the render command
-        $MMDC_COMMAND -i "$diagram_file" -o "$output_file" --backgroundColor transparent --scale 4 -p puppeteer-config.json
+        $MMDC_COMMAND -i "$diagram_file" -o "$output_file" --backgroundColor transparent --scale 6
         
         if [ $? -eq 0 ]; then
             echo "Successfully rendered $output_file"
