@@ -37,7 +37,8 @@ The system is composed of three main parts:
 - **VQ-VAE (`vq_conv_vae.py`):** Uses a deep convolutional encoder to create a latent map, which is then quantized using
   a codebook trained with Exponential Moving Average (EMA) updates. A corresponding decoder reconstructs images from the
   quantized latents. The training is stabilized with a perceptual (LPIPS) loss and a mechanism to reset dead codebook
-  vectors.
+  vectors. The latent space can be explored interactively
+  at [https://vqvae.jesseguenzl.com/](https://vqvae.jesseguenzl.com/)
 
   <details>
     <summary><strong>Observation Preprocessing and VQ-VAE Pipeline</strong></summary>
