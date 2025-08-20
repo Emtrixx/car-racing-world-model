@@ -1,0 +1,48 @@
+flowchart TD
+    subgraph GRU_World_Model_Dreamer_like
+        direction LR
+
+        subgraph Inputs [Time t]
+            A[Obs Tokens]
+            B[Action]
+            C[Hidden State h_t]
+        end
+
+        subgraph Encoder
+            A --> D{Obs Encoder};
+            D -- "Embeds tokens, adds 2D pos encoding, flattens & projects" --> E[Obs Embedding];
+        end
+        
+        B --> F{Action Embedding};
+        F --> G[Action Embedding];
+
+        subgraph RecurrentCore [RSSM]
+            E --> H(GRU Core);
+            G --> H;
+            C --> H;
+            H --> I[Deterministic State h_t+1];
+            H --> J[Final Hidden State];
+        end
+        
+        subgraph StochasticState
+            I --> K{Stochastic Predictor};
+            K -- "Predicts distribution" --> L(Sampled Stochastic State z_t+1);
+        end
+
+        subgraph PredictionHeads [Time t+1]
+            I --> M{Combined State};
+            L --> M;
+            M --> N[Token Head];
+            M --> O[Reward Head];
+            M --> P[Done Head];
+            N --> Q[Next Token Logits];
+            O --> R[Next Reward];
+            P --> S[Next Done Logit];
+        end
+    end
+
+style Inputs fill:#d4f0ff
+style Encoder fill:#d4f0ff
+style RecurrentCore fill:#e1f7d5
+style StochasticState fill:#e1f7d5
+style PredictionHeads fill:#fff2cc

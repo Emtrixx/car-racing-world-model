@@ -1,0 +1,31 @@
+graph TD
+    subgraph "Dyna-Style Training Loop"
+        direction TB
+        Start((Start)) --> Collect[1. Collect Real Experience & Train Agent];
+        Collect -- "Real (obs, action, reward, done)" --> Buffer(Replay Buffer);
+        Buffer -- "Sample real data" --> TrainWM[2. Train World Model];
+        TrainWM -- "Updated World Model" --> Dream[3. Train Agent in Dream Environment];
+        Dream -- "Improved Agent" --> Collect;
+
+        subgraph s1 ["Step 1: Real Interaction"]
+            Collect
+        end
+
+        subgraph s2 ["Step 2: World Model Update"]
+            TrainWM
+        end
+
+        subgraph s3 ["Step 3: Imagination / Dreaming"]
+            Dream
+        end
+    end
+
+    classDef buffer fill:#fdfae8,stroke:#f2e7b3,stroke-width:2px,color:#333;
+    classDef style1 fill:#e6f3ff,stroke:#b3d9ff,stroke-width:2px,color:#333;
+    classDef style2 fill:#e6ffe6,stroke:#b3ffb3,stroke-width:2px,color:#333;
+    classDef style3 fill:#fff0e6,stroke:#ffccb3,stroke-width:2px,stroke-dasharray: 5 5,color:#333;
+
+    class Buffer buffer;
+    class s1 style1;
+    class s2 style2;
+    class s3 style3;

@@ -107,6 +107,7 @@ class WorldModelGRU(nn.Module):
         gru_input = torch.cat([obs_embeddings, action_embeddings], dim=-1)
         deterministic_states, final_hidden_state = self.recurrent_core(gru_input, initial_hidden_state)
 
+        # Predicting log variance is more numerically stable than predicting variance directly, as it ensures the variance is always positive
         mean, log_var = self.stochastic_predictor(deterministic_states).chunk(2, dim=-1)
         std = torch.exp(0.5 * log_var)
         stochastic_dist = torch.distributions.Normal(mean, std)

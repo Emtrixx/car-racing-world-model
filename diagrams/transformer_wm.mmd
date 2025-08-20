@@ -1,0 +1,42 @@
+graph TD
+    subgraph Transformer World Model
+        subgraph s1["History, Time t-H+1 to t"]
+            A[Action History<br>B x H x ActionDim]
+            B[Token History<br>B x H x NumTokens]
+        end
+
+        subgraph s2["Memory Construction"]
+            A --> C[Action Embedding]
+            B --> D[Token Embedding]
+            D --> E[Add 2D Grid Positional Embedding]
+            E & C --> F[Interleave and Flatten]
+            F --> G[Memory Sequence<br>B x H x NumTokens + 1 x D_Model]
+            G --> H[Add 1D Temporal Positional Encoding]
+            H --> I[Final Memory Context]
+        end
+
+        subgraph s3["Parallel Prediction"]
+            J[Learnable Output Queries<br>1 x NumTokens + 1 x D_Model] --> K[Add 2D Grid Positional Embedding<br>to Token Queries]
+            K --> L[Add 1D Temporal Positional Encoding]
+            L -- " tgt query " --> M(Transformer Decoder)
+            I -- " memory key/value " --> M
+            M --> N[Decoder Output<br>B x NumTokens + 1 x D_Model]
+        end
+
+        subgraph s4["Prediction Heads [Time t+1]"]
+            N --> O[Split Token and Global Outputs]
+            O -- " Token Outputs " --> P(Token Head)
+            O -- " Global Output " --> Q(Reward and Done Heads)
+            P --> R[Next Token Logits<br>B x NumTokens x CodebookSize]
+            Q --> S[Next Reward and Done<br>B x 1]
+        end
+    end
+
+    classDef style1 fill: #d4f0ff
+    classDef style2 fill: #e1f7d5
+    classDef style3 fill: #fce8b2
+    classDef style4 fill: #fff2cc
+    class s1 style1
+    class s2 style2
+    class s3 style3
+    class s4 style4

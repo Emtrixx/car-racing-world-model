@@ -1,0 +1,36 @@
+flowchart TD
+    subgraph VQ-VAE Architecture
+        A["Input Image Batch<br/>(B, 3, 64, 64)"] --> B(Encoder);
+        B -- " Downsamples to 4x4 grid " --> C["Continuous Latent Map<br/>(B, 256, 4, 4)"];
+        C --> D(VectorQuantizerEMA);
+        subgraph Codebook
+            E["Embedding Vectors<br/>(512, 256)"];
+        end
+        D -- " Finds nearest vector for each grid cell " --> E;
+        D -- " Outputs quantized map & indices " --> F["Quantized Latent Map<br/>(B, 256, 4, 4)"];
+        F --> G(Decoder);
+        G -- " Upsamples to 64x64 " --> H["Reconstructed Image<br/>(B, 3, 64, 64)"];
+        subgraph Losses
+            L1["Reconstruction Loss<br/>(MSE + Perceptual)"];
+            L2["VQ Loss<br/>(Commitment Cost)"];
+        end
+
+        H -- " Compare " --> L1;
+        A -- " Compare " --> L1;
+        C -- " Compare " --> L2;
+        F -- " Compare " --> L2;
+    end
+
+
+    %% Styling
+    classDef io fill:#d4edda,stroke:#c3e6cb,stroke-width:2px,color:#155724;
+    classDef model fill:#cce5ff,stroke:#b8daff,stroke-width:2px,color:#004085;
+    classDef latent fill:#fff3cd,stroke:#ffeeba,stroke-width:2px,color:#856404;
+    classDef codebook fill:#e2d9f3,stroke:#d6c8f0,stroke-width:2px,color:#492b7c;
+    classDef loss fill:#f8d7da,stroke:#f5c6cb,stroke-width:2px,color:#721c24;
+
+    class A,H io;
+    class B,D,G model;
+    class C,F latent;
+    class E codebook;
+    class L1,L2 loss;
