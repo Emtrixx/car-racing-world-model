@@ -8,11 +8,20 @@ graph TD
         F --> G["Normalized Image<br>64x64x3, values in [0,1]"];
     end
 
-    subgraph s2 ["4. VQ-VAE Encoding"]
+    subgraph s2 ["VQ-VAE Encoding"]
         G --> H(Encoder CNN);
         H --> I[Latent Map<br>4x4 Grid of Continuous Vectors];
         I --> J(Vector Quantization);
         J --> K[Final Output for World Model<br>4x4 Grid of Discrete Token Indices];
+    end
+
+    subgraph s3 ["SB3 PPO Path (FrameStack + ImpalaCNN)"]
+        G --> L(FrameStack `NUM_STACK`=4);
+        L --> N["Stacked Observations<br>4×64×64×3"];
+        N --> O["Input to CustomCNN<br>(in\_channels=12, 64×64)"];
+        O --> P(ImpalaCNN Feature Extractor);
+        P --> Q[Feature Embedding<br>features_dim=1024];
+        Q --> R[PPO Policy / Value Networks];
     end
 
     classDef style1 fill:#e6f3ff,stroke:#b3d9ff,stroke-width:2px,color:#333;
@@ -20,3 +29,4 @@ graph TD
 
     class s1 style1;
     class s2 style2;
+    class s3 style2;
