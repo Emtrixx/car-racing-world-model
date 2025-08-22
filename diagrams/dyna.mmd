@@ -7,15 +7,15 @@ graph TD
         TrainWM -- "Updated World Model" --> Dream[Train Agent in Dream Environment];
         Dream -- "Improved Agent" --> Collect;
 
-        subgraph s1 ["Step 1: Real Interaction"]
+        subgraph s1 ["1: Real Interaction"]
             Collect
         end
 
-        subgraph s2 ["Step 2: World Model Update"]
+        subgraph s2 ["2: World Model Update"]
             TrainWM
         end
 
-        subgraph s3 ["Step 3: Imagination / Dreaming"]
+        subgraph s3 ["3: Imagination / Dreaming"]
             Dream
         end
     end
