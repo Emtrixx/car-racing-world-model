@@ -1,0 +1,44 @@
+
+body {
+    font-family: sans-serif;
+    background-color: #f0f0f0;
+    color: #333;
+    margin: 0;
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+}
+
+h1 {
+    margin-bottom: 20px;
+}
+
+.container {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 20px;
+}
+
+.controls {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+#dream-container {
+    width: 512px;
+    height: 512px;
+    border: 1px solid #ccc;
+    background-color: #fff;
+}
+
+#dream-canvas {
+    width: 100%;
+    height: 100%;
+}
+
+.instructions p {
+    font-style: italic;
+}

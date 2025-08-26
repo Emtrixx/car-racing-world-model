@@ -1,0 +1,29 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Racing World Model</title>
+    <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+<h1>Car Racing World Model</h1>
+<div class="container">
+    <div class="controls">
+        <label for="model-select">Select Model:</label>
+        <select id="model-select">
+            <option value="gru">GRU</option>
+            <option value="transformer">Transformer</option>
+        </select>
+        <button id="start-btn">Start Dream</button>
+    </div>
+    <div id="dream-container">
+        <canvas id="dream-canvas" width="512" height="512"></canvas>
+    </div>
+    <div class="instructions">
+        <p>Use Arrow Keys to Drive</p>
+    </div>
+</div>
+<script src="/static/script.js"></script>
+</body>
+</html>
