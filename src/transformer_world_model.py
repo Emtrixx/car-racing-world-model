@@ -1,4 +1,5 @@
 import math
+import matplotlib.pyplot as plt
 
 import torch
 from torch import nn
@@ -66,6 +67,7 @@ class WorldModelTransformer(nn.Module):
         self.action_dim = action_dim
         self.dropout = nn.Dropout(dropout_rate)
         self.vqvae_embed_dim = vqvae_embed_dim
+        self.attention_weights = None  # To store attention weights from hooks
 
         # --- Embedding Layers ---
         # This embedding layer will receive the copied weights from VQ-VAE
@@ -102,6 +104,72 @@ class WorldModelTransformer(nn.Module):
         self.next_latent_head = nn.Linear(embed_dim, codebook_size)
         self.reward_head = nn.Linear(embed_dim, 1)
         self.done_head = nn.Linear(embed_dim, 1)
+
+    def _attention_hook(self, module, input, output):
+        # The attention weights are the second output of the MHA module
+        self.attention_weights = output[1]
+
+    def get_attention_maps(self, action_history, latent_token_history, layer_index=-1):
+        """
+        Runs a forward pass and returns the cross-attention maps from a specific decoder layer.
+        """
+        self.attention_weights = None
+
+        # Correctly handle negative indexing for layer_index
+        if layer_index < 0:
+            layer_index = len(self.transformer_decoder.layers) + layer_index
+
+        # Register a hook on the multi-head attention module of the specified decoder layer
+        target_layer = self.transformer_decoder.layers[layer_index]
+        hook_handle = target_layer.multihead_attn.register_forward_hook(
+            self._attention_hook)
+
+        with torch.no_grad():
+            # --- Replicate data preparation from the main forward pass ---
+            batch_size, history_len = action_history.shape[0], action_history.shape[1]
+
+            state_history_emb = self.input_projection(self.token_embedding(latent_token_history))
+            state_history_emb = state_history_emb + self.grid_pos_embedding.unsqueeze(1)
+            action_history_emb = self.action_embedding(action_history).unsqueeze(2)
+            memory_interleaved = torch.cat([state_history_emb, action_history_emb], dim=2)
+            memory = memory_interleaved.view(batch_size, history_len * (self.num_tokens + 1), self.embed_dim)
+            memory = self.pos_encoder(memory)
+            memory = self.dropout(memory)
+
+            decoder_input = self.output_token_queries.expand(batch_size, -1, -1)
+            decoder_input_tokens = decoder_input[:, :-1, :] + self.grid_pos_embedding
+            decoder_input_global = decoder_input[:, -1, :].unsqueeze(1)
+            tgt = torch.cat([decoder_input_tokens, decoder_input_global], dim=1)
+            tgt = self.pos_encoder(tgt, offset=0)
+
+            # --- Manually iterate through decoder layers ---
+            output = tgt
+            for i, mod in enumerate(self.transformer_decoder.layers):
+                if i == layer_index:
+                    # Replicate the forward pass of the target layer to get attention
+                    # 1. Self-attention block
+                    sa_output = mod.self_attn(mod.norm1(output), mod.norm1(output), mod.norm1(output))[0]
+                    output = output + mod.dropout1(sa_output)
+
+                    # 2. Cross-attention block (where we need weights)
+                    # This call will trigger the hook
+                    mha_output = mod.multihead_attn(mod.norm2(output), memory, memory, need_weights=True)[0]
+                    output = output + mod.dropout2(mha_output)
+
+                    # 3. Feed-forward block
+                    ff_output = mod.linear2(mod.dropout(mod.activation(mod.linear1(mod.norm3(output)))))
+                    output = output + mod.dropout3(ff_output)
+                else:
+                    # For all other layers, run a standard forward pass
+                    output = mod(output, memory)
+
+            if self.transformer_decoder.norm:
+                output = self.transformer_decoder.norm(output)
+
+        # Remove the hook so it doesn't affect other operations
+        hook_handle.remove()
+
+        return self.attention_weights
 
     def forward(
             self,
@@ -259,3 +327,37 @@ if __name__ == '__main__':
     assert gen_tokens.shape == expected_tokens_shape, "Generated tokens shape mismatch!"
     print("Generated tokens shape: CORRECT")
     print("--- History-Aware Test PASSED ---")
+
+    # --- Test: Get Attention Map ---
+    print("\n--- Test: Get Attention Map ---")
+    # Get attention from the last decoder layer (index -1)
+    # The hook is inside the get_attention_maps method
+    attention_maps = world_model_tf.get_attention_maps(action_hist, tokens_hist, layer_index=-1)
+
+    print(f"Attention map shape: {attention_maps.shape}")
+    # Expected shape: [Batch, Num_Query_Tokens, Num_Memory_Tokens]
+    # e.g., [4, 17, 136] for this example config
+
+    # --- Visualize the attention map ---
+    # We'll visualize the map for the first item in the batch
+    # Let's look at the attention from the first query token to the entire memory sequence
+    first_item_map = attention_maps[0].cpu().numpy()  # [Num_Query_Tokens, Num_Memory_Tokens]
+    query_token_index = 0  # The first token used to predict the next state
+    attention_for_one_query = first_item_map[query_token_index, :]
+
+    # Reshape the attention scores to match the history layout
+    # Memory layout is [state_0, action_0, state_1, action_1, ...]
+    # Each state is num_tokens, each action is 1 token
+    attention_grid = attention_for_one_query.reshape(HISTORY_LEN, NUM_TOKENS_EXAMPLE + 1)
+
+    fig, ax = plt.subplots(figsize=(10, 5))
+    im = ax.imshow(attention_grid, cmap='viridis', aspect='auto')
+    ax.set_title(f"Attention from Query Token {query_token_index} to Memory History")
+    ax.set_xlabel("Tokens within Timestep (State Tokens + 1 Action Token)")
+    ax.set_ylabel("Timestep in History")
+    fig.colorbar(im, ax=ax)
+    plt.tight_layout()
+    # To save the plot instead of showing it:
+    # plt.savefig('attention_map.png')
+    print("Displaying attention map plot...")
+    plt.show()

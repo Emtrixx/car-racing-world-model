@@ -111,7 +111,7 @@ class WorldModelGRU(nn.Module):
         mean, log_var = self.stochastic_predictor(deterministic_states).chunk(2, dim=-1)
         std = torch.exp(0.5 * log_var)
         stochastic_dist = torch.distributions.Normal(mean, std)
-        stochastic_states = stochastic_dist.rsample()
+        stochastic_states = stochastic_dist.rsample()  # rsample for reparameterization
 
         combined_states = torch.cat([deterministic_states, stochastic_states], dim=-1)
 
