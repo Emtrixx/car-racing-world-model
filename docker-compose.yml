@@ -3,6 +3,7 @@ services:
     build:
       context: .
       dockerfile: src/web/Dockerfile.web
+    restart: unless-stopped
     image: car-racing-web
     ports:
       - "8000:8000"
@@ -58,7 +59,7 @@ services:
   db:
     image: postgres:13
     container_name: optuna_db
-    restart: always
+    restart: unless-stopped
     environment:
       - POSTGRES_USER=optuna
       - POSTGRES_PASSWORD=optuna
