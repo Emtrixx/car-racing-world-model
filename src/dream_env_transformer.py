@@ -87,20 +87,24 @@ class DreamEnvTransformer(gym.Env):
         action_tensor = torch.from_numpy(action).float().to(self.device).unsqueeze(0)
         self.action_history.append(action_tensor.squeeze(0).cpu())
 
-        with torch.no_grad():
-            action_hist_tensor = torch.stack(list(self.action_history)).to(self.device).unsqueeze(0)
-            token_hist_tensor = torch.stack(list(self.token_history)).to(self.device).unsqueeze(0)
+        # Ensure the model is in evaluation mode for efficient inference
+        self.world_model.eval()
 
-            pred_logits, pred_reward, pred_done_logits, _ = self.world_model(action_hist_tensor, token_hist_tensor)
+        # History tensors are expected to be [B, H, ...], so we add a batch dim of 1
+        action_hist_tensor = torch.stack(list(self.action_history)).to(self.device).unsqueeze(0)
+        token_hist_tensor = torch.stack(list(self.token_history)).to(self.device).unsqueeze(0)
 
-            # Sample the next latent state from the predicted logits
-            pred_probs = torch.softmax(pred_logits.view(-1, self.world_model.codebook_size), dim=-1)
-            next_tokens_flat = torch.multinomial(pred_probs, 1).squeeze()
-            self.token_history.append(next_tokens_flat.cpu())
+        # Use the efficient generate method for single-step inference
+        next_tokens, reward_tensor, done_tensor = self.world_model.generate(action_hist_tensor, token_hist_tensor)
 
-        obs = self._decode_latent_to_obs(next_tokens_flat.view(self.world_model.grid_size, self.world_model.grid_size))
-        reward = pred_reward.item()
-        done = torch.sigmoid(pred_done_logits).item() > 0.5
+        # next_tokens is [B, num_tokens], reward is [B, 1], done is [B, 1]
+        # We remove the batch dimension (which is 1) for processing
+        next_tokens_no_batch = next_tokens.squeeze(0)
+        self.token_history.append(next_tokens_no_batch.cpu())
+
+        obs = self._decode_latent_to_obs(next_tokens_no_batch.view(self.world_model.grid_size, self.world_model.grid_size))
+        reward = reward_tensor.item()
+        done = done_tensor.item()
 
         self.current_step += 1
         truncated = self.current_step >= self.horizon

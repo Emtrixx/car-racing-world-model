@@ -1,6 +1,4 @@
 import math
-import matplotlib.pyplot as plt
-
 import torch
 from torch import nn
 
@@ -36,8 +34,6 @@ class PositionalEncoding(nn.Module):
         Returns:
             torch.Tensor: Tensor with added positional encoding.
         """
-        # self.pe is [1, max_len, d_model]
-        # x is [batch_size, seq_len, d_model]
         seq_len = x.size(1)
         if offset + seq_len > self.pe.size(1):
             raise IndexError(f"Offset {offset} + seq_len {seq_len} is out of range for "
@@ -57,211 +53,227 @@ class WorldModelTransformer(nn.Module):
             ff_dim: int = TRANSFORMER_FF_DIM,
             grid_size: int = GRID_SIZE,
             dropout_rate: float = TRANSFORMER_DROPOUT_RATE,
-            max_seq_len: int = TRANSFORMER_MAX_SEQ_LEN,  # Maximum sequence length for positional encoding
+            max_seq_len: int = TRANSFORMER_MAX_SEQ_LEN,
     ):
         super().__init__()
         self.embed_dim = embed_dim
         self.grid_size = grid_size
-        self.num_tokens = grid_size * grid_size
+        self.num_tokens_per_state = grid_size * grid_size
+        self.num_queries_per_step = self.num_tokens_per_state + 1  # +1 for global token
         self.codebook_size = codebook_size
         self.action_dim = action_dim
         self.dropout = nn.Dropout(dropout_rate)
         self.vqvae_embed_dim = vqvae_embed_dim
-        self.attention_weights = None  # To store attention weights from hooks
 
         # --- Embedding Layers ---
-        # This embedding layer will receive the copied weights from VQ-VAE
         self.token_embedding = nn.Embedding(codebook_size, vqvae_embed_dim)
-        # Projection layer if VQ-VAE's dim is different from Transformer's internal dim
         self.input_projection = nn.Linear(vqvae_embed_dim, embed_dim) if vqvae_embed_dim != embed_dim else nn.Identity()
         self.action_embedding = nn.Linear(action_dim, embed_dim)
         self.pos_encoder = PositionalEncoding(embed_dim, max_len=max_seq_len)
 
-        # --- Learnable 2D Positional Encoding for the Grid ---
-        # This provides spatial information to the token grid.
-        self.grid_pos_embedding = nn.Parameter(torch.randn(1, self.num_tokens, embed_dim))
-
-        # --- Learnable Query Tokens for BTF ---
-        # These are the queries fed into the decoder to predict the next state tokens in parallel.
-        self.output_token_queries = nn.Parameter(torch.randn(1, self.num_tokens + 1, embed_dim))
+        # --- Learnable Embeddings ---
+        self.grid_pos_embedding = nn.Parameter(torch.randn(1, self.num_tokens_per_state, embed_dim))
+        self.output_token_queries = nn.Parameter(torch.randn(1, self.num_queries_per_step, embed_dim))
 
         # --- Transformer Decoder ---
-        # The decoder will be used to predict the next state tokens based on the memory context.
         decoder_layer = nn.TransformerDecoderLayer(
-            d_model=embed_dim,
-            nhead=num_heads,
-            dim_feedforward=ff_dim,
-            dropout=dropout_rate,
-            batch_first=True
+            d_model=embed_dim, nhead=num_heads, dim_feedforward=ff_dim,
+            dropout=dropout_rate, batch_first=True
         )
-        self.transformer_decoder = nn.TransformerDecoder(
-            decoder_layer,
-            num_layers=num_layers
-        )
+        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
 
         # --- Output Prediction Heads ---
-        # Operate on the output of the Transformer decoder
         self.next_latent_head = nn.Linear(embed_dim, codebook_size)
         self.reward_head = nn.Linear(embed_dim, 1)
         self.done_head = nn.Linear(embed_dim, 1)
 
-    def _attention_hook(self, module, input, output):
-        # The attention weights are the second output of the MHA module
-        self.attention_weights = output[1]
+        # --- Mask Cache ---
+        self._mask_cache = {}
 
-    def get_attention_maps(self, action_history, latent_token_history, layer_index=-1):
+    def _generate_tbtf_masks(self, history_len: int, device: torch.device):
         """
-        Runs a forward pass and returns the cross-attention maps from a specific decoder layer.
+        Generates the self-attention and cross-attention masks for Temporal Block Teacher Forcing (T-BTF).
+        Caches the masks for performance.
         """
-        self.attention_weights = None
+        if history_len in self._mask_cache:
+            return self._mask_cache[history_len]
 
-        # Correctly handle negative indexing for layer_index
-        if layer_index < 0:
-            layer_index = len(self.transformer_decoder.layers) + layer_index
+        total_query_len = history_len * self.num_queries_per_step
+        total_memory_len = history_len * (self.num_tokens_per_state + 1)
 
-        # Register a hook on the multi-head attention module of the specified decoder layer
-        target_layer = self.transformer_decoder.layers[layer_index]
-        hook_handle = target_layer.multihead_attn.register_forward_hook(
-            self._attention_hook)
+        # Self-Attention Mask (tgt_mask)
+        # Prevents queries for step t from attending to queries for step t+1.
+        # Allows full attention within a block of queries for a single step.
+        tgt_mask = torch.ones(total_query_len, total_query_len, device=device)
+        for i in range(history_len):
+            for j in range(history_len):
+                if j > i:
+                    tgt_mask[
+                        i * self.num_queries_per_step:(i + 1) * self.num_queries_per_step,
+                        j * self.num_queries_per_step:(j + 1) * self.num_queries_per_step
+                    ] = 0
+        tgt_mask = torch.log(tgt_mask)  # Log-transform for PyTorch
 
-        with torch.no_grad():
-            # --- Replicate data preparation from the main forward pass ---
-            batch_size, history_len = action_history.shape[0], action_history.shape[1]
+        # Cross-Attention Mask (memory_mask)
+        # Prevents queries for step t from attending to memory from step t+1 onwards.
+        mem_mask = torch.ones(total_query_len, total_memory_len, device=device)
+        for i in range(history_len):  # Target time step
+            # Queries for step i can see memory up to and including step i.
+            # So, we mask out memory from step i+1 onwards.
+            start_col_to_mask = (i + 1) * (self.num_tokens_per_state + 1)
+            mem_mask[
+                i * self.num_queries_per_step:(i + 1) * self.num_queries_per_step,
+                start_col_to_mask:
+            ] = 0
+        memory_mask = torch.log(mem_mask)
 
-            state_history_emb = self.input_projection(self.token_embedding(latent_token_history))
-            state_history_emb = state_history_emb + self.grid_pos_embedding.unsqueeze(1)
-            action_history_emb = self.action_embedding(action_history).unsqueeze(2)
-            memory_interleaved = torch.cat([state_history_emb, action_history_emb], dim=2)
-            memory = memory_interleaved.view(batch_size, history_len * (self.num_tokens + 1), self.embed_dim)
-            memory = self.pos_encoder(memory)
-            memory = self.dropout(memory)
+        # Cache the masks
+        self._mask_cache[history_len] = (tgt_mask, memory_mask)
+        return tgt_mask, memory_mask
 
-            decoder_input = self.output_token_queries.expand(batch_size, -1, -1)
-            decoder_input_tokens = decoder_input[:, :-1, :] + self.grid_pos_embedding
-            decoder_input_global = decoder_input[:, -1, :].unsqueeze(1)
-            tgt = torch.cat([decoder_input_tokens, decoder_input_global], dim=1)
-            tgt = self.pos_encoder(tgt, offset=0)
-
-            # --- Manually iterate through decoder layers ---
-            output = tgt
-            for i, mod in enumerate(self.transformer_decoder.layers):
-                if i == layer_index:
-                    # Replicate the forward pass of the target layer to get attention
-                    # 1. Self-attention block
-                    sa_output = mod.self_attn(mod.norm1(output), mod.norm1(output), mod.norm1(output))[0]
-                    output = output + mod.dropout1(sa_output)
-
-                    # 2. Cross-attention block (where we need weights)
-                    # This call will trigger the hook
-                    mha_output = mod.multihead_attn(mod.norm2(output), memory, memory, need_weights=True)[0]
-                    output = output + mod.dropout2(mha_output)
-
-                    # 3. Feed-forward block
-                    ff_output = mod.linear2(mod.dropout(mod.activation(mod.linear1(mod.norm3(output)))))
-                    output = output + mod.dropout3(ff_output)
-                else:
-                    # For all other layers, run a standard forward pass
-                    output = mod(output, memory)
-
-            if self.transformer_decoder.norm:
-                output = self.transformer_decoder.norm(output)
-
-        # Remove the hook so it doesn't affect other operations
-        hook_handle.remove()
-
-        return self.attention_weights
-
-    def forward(
-            self,
-            action_history: torch.Tensor,
-            latent_token_history: torch.Tensor,
-    ):
+    def forward(self, action_history: torch.Tensor, latent_token_history: torch.Tensor):
         """
-        Predicts the next state given a HISTORY of actions and latent tokens.
+        Performs Temporal Block Teacher Forcing (T-BTF).
+        For a history of length H, predicts the next state, reward, and done for every step from 1 to H.
 
         Args:
             action_history (torch.Tensor): Shape [B, H, action_dim]
-            latent_token_history (torch.Tensor): Shape [B, H, num_tokens]
+            latent_token_history (torch.Tensor): Shape [B, H, num_tokens_per_state]
+        """
+        batch_size, history_len = action_history.shape[0], action_history.shape[1]
+        device = action_history.device
+
+        # --- Prepare Memory Sequence (History) ---
+        state_hist_emb = self.input_projection(self.token_embedding(latent_token_history))
+        state_hist_emb = state_hist_emb + self.grid_pos_embedding.unsqueeze(1)
+        action_hist_emb = self.action_embedding(action_history).unsqueeze(2)
+        memory_interleaved = torch.cat([state_hist_emb, action_hist_emb], dim=2)
+
+        # Reshape memory to a single long sequence: [B, H * (num_tokens+1), D]
+        memory_seq = memory_interleaved.view(batch_size, history_len * (self.num_tokens_per_state + 1), self.embed_dim)
+        memory_seq = self.pos_encoder(memory_seq)
+        memory_seq = self.dropout(memory_seq)
+
+        # --- Prepare Target Sequence (Parallel Queries) ---
+        # Repeat the learnable queries for each step in the history
+        tgt_seq = self.output_token_queries.repeat(1, history_len, 1)  # [1, H * num_queries, D]
+
+        # Add spatial pos encoding to the token queries part of each block
+        tgt_reshaped = tgt_seq.view(1, history_len, self.num_queries_per_step, self.embed_dim)
+        tgt_tokens = tgt_reshaped[:, :, :-1, :] + self.grid_pos_embedding.unsqueeze(1)
+        tgt_global = tgt_reshaped[:, :, -1, :].unsqueeze(2)
+        tgt_with_spatial_pos = torch.cat([tgt_tokens, tgt_global], dim=2)
+        tgt_seq = tgt_with_spatial_pos.view(1, history_len * self.num_queries_per_step, self.embed_dim)
+
+        # Add temporal pos encoding and expand for batch
+        tgt_seq = self.pos_encoder(tgt_seq)
+        tgt_seq = tgt_seq.expand(batch_size, -1, -1)  # [B, H * num_queries, D]
+        tgt_seq = self.dropout(tgt_seq)
+
+        # --- Generate Masks ---
+        tgt_mask, memory_mask = self._generate_tbtf_masks(history_len, device)
+
+        # --- Run Decoder ---
+        decoder_output = self.transformer_decoder(
+            tgt=tgt_seq,
+            memory=memory_seq,
+            tgt_mask=tgt_mask,
+            memory_mask=memory_mask,
+        )  # Shape: [B, H * num_queries, D]
+
+        # --- Extract Predictions ---
+        # Reshape output to separate the time dimension from the query dimension
+        output_reshaped = decoder_output.view(batch_size, history_len, self.num_queries_per_step, self.embed_dim)
+
+        # Predictions for each step in the history
+        global_token_output = output_reshaped[:, :, -1, :]  # [B, H, D]
+        predicted_rewards = self.reward_head(global_token_output)  # [B, H, 1]
+        predicted_dones = self.done_head(global_token_output)  # [B, H, 1]
+
+        token_queries_output = output_reshaped[:, :, :-1, :]  # [B, H, num_tokens, D]
+        predicted_latent_logits = self.next_latent_head(token_queries_output)  # [B, H, num_tokens, codebook_size]
+
+        # Reshape logits to match the grid structure for loss calculation
+        predicted_latent_logits_grid = predicted_latent_logits.view(
+            batch_size, history_len, self.grid_size, self.grid_size, self.codebook_size
+        )
+
+        # For inference, we only care about the prediction from the final step
+        final_step_logits = predicted_latent_logits[:, -1, :, :]  # [B, num_tokens, codebook_size]
+        generated_tokens_indices = torch.argmax(final_step_logits, dim=-1)  # [B, num_tokens]
+
+        return predicted_latent_logits_grid, predicted_rewards, predicted_dones, generated_tokens_indices
+
+    @torch.no_grad()
+    def generate(
+            self,
+            action_history: torch.Tensor,  # Shape: [B, H, action_dim]
+            latent_token_history: torch.Tensor  # Shape: [B, H, num_tokens_per_state]
+    ):
+        """
+        Efficiently generates the prediction for the single next step.
+        This is used for inference/dreaming, where T-BTF is not needed.
+        Args:
+            action_history: The history of actions.
+            latent_token_history: The history of VQ-VAE token grids.
+        Returns:
+            A tuple of (next_token_indices, reward, done).
         """
         batch_size, history_len = action_history.shape[0], action_history.shape[1]
 
-        # Embed the history of states and actions
-        # [B, H, num_tokens] -> [B, H, num_tokens, vqvae_embed_dim]
-        state_history_emb = self.token_embedding(latent_token_history)
-        # [B, H, num_tokens, vqvae_embed_dim] -> [B, H, num_tokens, embed_dim]
-        state_history_emb = self.input_projection(state_history_emb)
+        # --- Prepare Memory Sequence (same as in forward) ---
+        state_hist_emb = self.input_projection(self.token_embedding(latent_token_history))
+        state_hist_emb = state_hist_emb + self.grid_pos_embedding.unsqueeze(1)
+        action_hist_emb = self.action_embedding(action_history).unsqueeze(2)
+        memory_interleaved = torch.cat([state_hist_emb, action_hist_emb], dim=2)
+        memory_seq = memory_interleaved.view(batch_size, history_len * (self.num_tokens_per_state + 1), self.embed_dim)
+        memory_seq = self.pos_encoder(memory_seq)
+        # Note: No dropout during inference
 
-        # --- Add 2D spatial positional encoding to the grid tokens ---
-        # self.grid_pos_embedding is [1, num_tokens, embed_dim]
-        # state_history_emb is [B, H, num_tokens, embed_dim]
-        state_history_emb = state_history_emb + self.grid_pos_embedding.unsqueeze(1)
+        # --- Prepare Target Sequence (single query block) ---
+        # Unlike in forward(), we only need one set of queries for the single next step.
+        tgt_seq = self.output_token_queries.expand(batch_size, -1, -1)
+        decoder_input_tokens = tgt_seq[:, :-1, :] + self.grid_pos_embedding
+        decoder_input_global = tgt_seq[:, -1, :].unsqueeze(1)
+        tgt_seq = torch.cat([decoder_input_tokens, decoder_input_global], dim=1)
+        tgt_seq = self.pos_encoder(tgt_seq, offset=0)
 
-        # [B, H, action_dim] -> [B, H, 1, embed_dim]
-        action_history_emb = self.action_embedding(action_history).unsqueeze(2)
-
-        # Interleave states and actions to form the memory context
-        # This creates a sequence of [state_t, action_t, state_t+1, action_t+1, ...]
-        # Shape: [B, H, num_tokens + 1, embed_dim]
-        memory_interleaved = torch.cat([state_history_emb, action_history_emb], dim=2)
-
-        # Reshape for the transformer into a single long sequence per batch item
-        # [B, H, num_tokens + 1, embed_dim] -> [B, H * (num_tokens + 1), embed_dim]
-        memory = memory_interleaved.view(batch_size, history_len * (self.num_tokens + 1), self.embed_dim)
-
-        # Apply 1D temporal positional encoding and dropout to the entire history
-        memory = self.pos_encoder(memory)
-        memory = self.dropout(memory)
-
-        # Predict Next State Tokens in Parallel (BTF mechanism)
-        # The decoder input (queries) remains the same.
-        # [1, num_tokens + 1, embed_dim] -> [B, num_tokens + 1, embed_dim]
-        decoder_input = self.output_token_queries.expand(batch_size, -1, -1)
-
-        # --- Add 2D spatial positional encoding to the query tokens ---
-        # The last query token is for the global features (reward/done), so we don't add grid encoding to it.
-        decoder_input_tokens = decoder_input[:, :-1, :] + self.grid_pos_embedding
-        decoder_input_global = decoder_input[:, -1, :].unsqueeze(1)
-        decoder_input = torch.cat([decoder_input_tokens, decoder_input_global], dim=1)
-
-        # Note: 1D temporal positional encoding for the decoder queries starts from 0, as it's a "fresh" prediction.
-        decoder_input = self.pos_encoder(decoder_input, offset=0)
-
-        # The decoder attends to the entire historical `memory` to generate the next state.
-        # Output: [B, num_tokens + 1, embed_dim]
+        # --- Run Decoder (no masks needed for single-step prediction) ---
         decoder_output = self.transformer_decoder(
-            tgt=decoder_input,
-            memory=memory,
-            tgt_mask=None,  # No mask needed for parallel decoding queries
+            tgt=tgt_seq,
+            memory=memory_seq,
+            tgt_mask=None,
+            memory_mask=None,
         )
 
-        # The reward and done predictions are based on the extra global token
-        # [B, num_tokens, embed_dim] -> [B, 1]
-        global_token_output = decoder_output[:, -1, :]  # This is now a dedicated global token
-        predicted_reward = self.reward_head(global_token_output)
-        predicted_done = self.done_head(global_token_output)
+        # --- Extract Predictions ---
+        global_token_output = decoder_output[:, -1, :]  # [B, D]
+        predicted_reward = self.reward_head(global_token_output)  # [B, 1]
+        predicted_done_logits = self.done_head(global_token_output)  # [B, 1]
 
-        # Get logits for all next-state tokens at once
-        # [B, num_tokens, codebook_size]
-        predicted_latent_logits = self.next_latent_head(decoder_output[:, :-1, :])
+        token_queries_output = decoder_output[:, :-1, :]  # [B, num_tokens, D]
+        predicted_latent_logits = self.next_latent_head(token_queries_output)  # [B, num_tokens, codebook_size]
 
-        # Reshape logits to match the grid structure
-        # [B, H, W, codebook_size]
-        predicted_latent_logits_grid = predicted_latent_logits.view(
-            batch_size, self.grid_size, self.grid_size, self.codebook_size
-        )
+        # --- Sample next tokens ---
+        # We sample from the distribution, not just argmax, for stochasticity in dreaming.
+        probs = torch.softmax(predicted_latent_logits, dim=-1)
+        # Reshape for multinomial sampling: [B * num_tokens, codebook_size]
+        probs_flat = probs.view(-1, self.codebook_size)
+        next_tokens_flat = torch.multinomial(probs_flat, 1)
+        # Reshape back to [B, num_tokens]
+        generated_tokens_indices = next_tokens_flat.view(batch_size, self.num_tokens_per_state)
 
-        # For inference: get the predicted token indices
-        # [B, num_tokens]
-        generated_tokens_indices = torch.argmax(predicted_latent_logits, dim=-1)
+        # Sigmoid on done logits to get probability
+        predicted_done = torch.sigmoid(predicted_done_logits) > 0.5
 
-        return predicted_latent_logits_grid, predicted_reward, predicted_done, generated_tokens_indices
+        return generated_tokens_indices, predicted_reward, predicted_done
 
 
 # --- Usage Example ---
 if __name__ == '__main__':
     # --- Configuration ---
     BATCH_SIZE = 4
-    HISTORY_LEN = 8  # We are now using a history of 8 steps
+    HISTORY_LEN = 8
     ACTION_DIM_EXAMPLE = 3
     CODEBOOK_SIZE_EXAMPLE = 512
     GRID_SIZE_EXAMPLE = 4
@@ -274,7 +286,7 @@ if __name__ == '__main__':
     NUM_HEADS_EXAMPLE = 4
     NUM_LAYERS_EXAMPLE = 2
 
-    print(f"--- Running WorldModelTransformer Example ---")
+    print(f"--- Running WorldModelTransformer T-BTF Example ---")
     print(f"Device: {DEVICE_EXAMPLE}")
 
     # --- Model Initialization ---
@@ -287,13 +299,12 @@ if __name__ == '__main__':
         num_layers=NUM_LAYERS_EXAMPLE,
         grid_size=GRID_SIZE_EXAMPLE,
     ).to(DEVICE_EXAMPLE)
-    world_model_tf.eval()
+    world_model_tf.train()  # Set to train mode to check shapes
     num_params = sum(p.numel() for p in world_model_tf.parameters() if p.requires_grad)
     print(f"Number of parameters: {num_params:,}")
 
-    # --- Test: Inference with History ---
-    print("\n--- Test: Inference with History ---")
-    # Note the new HISTORY_LEN dimension
+    # --- Test: Training Forward Pass ---
+    print("\n--- Test: Training Forward Pass ---")
     action_hist = torch.randn(BATCH_SIZE, HISTORY_LEN, ACTION_DIM_EXAMPLE).to(DEVICE_EXAMPLE)
     tokens_hist = torch.randint(
         0, CODEBOOK_SIZE_EXAMPLE,
@@ -303,61 +314,37 @@ if __name__ == '__main__':
     print(f"Input action history shape: {action_hist.shape}")
     print(f"Input token history shape: {tokens_hist.shape}")
 
-    with torch.no_grad():
-        logits, reward, done, gen_tokens = world_model_tf(action_hist, tokens_hist)
+    # The model now returns predictions for every step in the history
+    logits_grid, rewards, dones, _ = world_model_tf(action_hist, tokens_hist)
 
-    print("\n--- Output Shapes ---")
-    print(f"Predicted logits shape: {logits.shape}")
-    print(f"Predicted reward shape: {reward.shape}")
-    print(f"Predicted done shape: {done.shape}")
-    print(f"Generated tokens shape: {gen_tokens.shape}")
+    print("\n--- Output Shapes (Training) ---")
+    print(f"Predicted logits grid shape: {logits_grid.shape}")
+    print(f"Predicted rewards shape: {rewards.shape}")
+    print(f"Predicted dones shape: {dones.shape}")
 
     # Verification
-    expected_logits_shape = (BATCH_SIZE, GRID_SIZE_EXAMPLE, GRID_SIZE_EXAMPLE, CODEBOOK_SIZE_EXAMPLE)
-    assert logits.shape == expected_logits_shape, "Logits shape mismatch!"
+    expected_logits_shape = (BATCH_SIZE, HISTORY_LEN, GRID_SIZE_EXAMPLE, GRID_SIZE_EXAMPLE, CODEBOOK_SIZE_EXAMPLE)
+    assert logits_grid.shape == expected_logits_shape, "Logits shape mismatch!"
     print("Logits shape: CORRECT")
 
-    expected_reward_done_shape = (BATCH_SIZE, 1)
-    assert reward.shape == expected_reward_done_shape, "Reward shape mismatch!"
-    print("Reward shape: CORRECT")
-    assert done.shape == expected_reward_done_shape, "Done shape mismatch!"
-    print("Done shape: CORRECT")
+    expected_rewards_shape = (BATCH_SIZE, HISTORY_LEN, 1)
+    assert rewards.shape == expected_rewards_shape, "Rewards shape mismatch!"
+    print("Rewards shape: CORRECT")
 
+    expected_dones_shape = (BATCH_SIZE, HISTORY_LEN, 1)
+    assert dones.shape == expected_dones_shape, "Dones shape mismatch!"
+    print("Dones shape: CORRECT")
+    print("--- T-BTF Training Test PASSED ---")
+
+    # --- Test: Inference ---
+    # For inference, we still pass the full history, but typically only use the last prediction
+    print("\n--- Test: Inference ---")
+    world_model_tf.eval()
+    with torch.no_grad():
+        _, _, _, gen_tokens_inference = world_model_tf(action_hist, tokens_hist)
+
+    print(f"Generated tokens shape (inference): {gen_tokens_inference.shape}")
     expected_tokens_shape = (BATCH_SIZE, NUM_TOKENS_EXAMPLE)
-    assert gen_tokens.shape == expected_tokens_shape, "Generated tokens shape mismatch!"
+    assert gen_tokens_inference.shape == expected_tokens_shape, "Generated tokens shape mismatch!"
     print("Generated tokens shape: CORRECT")
-    print("--- History-Aware Test PASSED ---")
-
-    # --- Test: Get Attention Map ---
-    print("\n--- Test: Get Attention Map ---")
-    # Get attention from the last decoder layer (index -1)
-    # The hook is inside the get_attention_maps method
-    attention_maps = world_model_tf.get_attention_maps(action_hist, tokens_hist, layer_index=-1)
-
-    print(f"Attention map shape: {attention_maps.shape}")
-    # Expected shape: [Batch, Num_Query_Tokens, Num_Memory_Tokens]
-    # e.g., [4, 17, 136] for this example config
-
-    # --- Visualize the attention map ---
-    # We'll visualize the map for the first item in the batch
-    # Let's look at the attention from the first query token to the entire memory sequence
-    first_item_map = attention_maps[0].cpu().numpy()  # [Num_Query_Tokens, Num_Memory_Tokens]
-    query_token_index = 0  # The first token used to predict the next state
-    attention_for_one_query = first_item_map[query_token_index, :]
-
-    # Reshape the attention scores to match the history layout
-    # Memory layout is [state_0, action_0, state_1, action_1, ...]
-    # Each state is num_tokens, each action is 1 token
-    attention_grid = attention_for_one_query.reshape(HISTORY_LEN, NUM_TOKENS_EXAMPLE + 1)
-
-    fig, ax = plt.subplots(figsize=(10, 5))
-    im = ax.imshow(attention_grid, cmap='viridis', aspect='auto')
-    ax.set_title(f"Attention from Query Token {query_token_index} to Memory History")
-    ax.set_xlabel("Tokens within Timestep (State Tokens + 1 Action Token)")
-    ax.set_ylabel("Timestep in History")
-    fig.colorbar(im, ax=ax)
-    plt.tight_layout()
-    # To save the plot instead of showing it:
-    # plt.savefig('attention_map.png')
-    print("Displaying attention map plot...")
-    plt.show()
+    print("--- Inference Test PASSED ---")

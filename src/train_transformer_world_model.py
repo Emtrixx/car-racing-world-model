@@ -32,7 +32,7 @@ NUM_STEPS = 1_000_000
 WM_EPOCHS = 20
 WM_BATCH_SIZE = 256
 WM_LEARNING_RATE = 1e-4
-HISTORY_LENGTH = 32  # Renamed from SEQUENCE_LENGTH
+HISTORY_LENGTH = 12  # Renamed from SEQUENCE_LENGTH
 MAX_GRAD_NORM = 1.0
 
 # Parallelism Configuration
@@ -79,7 +79,7 @@ def get_config(name="default"):
         "epochs": 3,
         "batch_size": 4,
         "val_freq": 200,
-        "history_length": 4,  # Shorter history for testing
+        "history_length": 3,  # Shorter history for testing
         "num_collection_workers": 2,
         "num_loader_workers": 2,
         "dropout_rate": 0.1,
@@ -132,21 +132,21 @@ class TransformerHistoryDataset(Dataset):
         start_idx = self.valid_indices[idx]
         end_idx = start_idx + self.history_length
 
-        # History of actions and previous states
+        # History of actions and previous states (inputs to the model)
         action_history = self.data['actions'][start_idx:end_idx]
         token_history = self.data['prev_tokens'][start_idx:end_idx]
 
-        # The target is the outcome of the last action in the history
-        target_next_tokens = self.data['next_tokens'][end_idx - 1]
-        target_reward = self.data['rewards'][end_idx - 1]
-        target_done = self.data['dones'][end_idx - 1]
+        # Targets for each step in the history
+        target_next_tokens = self.data['next_tokens'][start_idx:end_idx]
+        target_rewards = self.data['rewards'][start_idx:end_idx]
+        target_dones = self.data['dones'][start_idx:end_idx]
 
         return {
             'action_history': action_history,
             'latent_token_history': token_history,
             'target_next_tokens': target_next_tokens,
-            'target_reward': target_reward,
-            'target_done': target_done,
+            'target_rewards': target_rewards,
+            'target_dones': target_dones,
         }
 
 
@@ -176,22 +176,44 @@ class WorldModelTransformerTrainer:
         self.scaler = GradScaler(enabled=self.use_amp)
 
     def _run_batch(self, batch, is_train=True):
-        """Runs a single batch through the model and computes loss."""
+        """Runs a single batch through the model and computes loss across the entire history."""
         for key in batch:
             batch[key] = batch[key].to(self.device)
 
         action_hist = batch['action_history']
         token_hist = batch['latent_token_history']
         target_tokens = batch['target_next_tokens']
-        target_reward = batch['target_reward']
-        target_done = batch['target_done']
+        target_rewards = batch['target_rewards']
+        target_dones = batch['target_dones']
+
+        b, h, grid_h, grid_w, c = 0, 0, 0, 0, 0
 
         with autocast(enabled=self.use_amp, device_type=self.device_type):
-            pred_logits, pred_reward, pred_done_logits, _ = self.world_model(action_hist, token_hist)
-            b, h, w, c = pred_logits.shape
-            token_loss = self.token_loss_fn(pred_logits.view(b * h * w, c), target_tokens.view(b * h * w))
-            reward_loss = self.reward_loss_fn(pred_reward, target_reward)
-            done_loss = self.done_loss_fn(pred_done_logits, target_done)
+            # Model now returns predictions for each step in the history
+            # pred_logits_grid: [B, H, G, G, Codebook]
+            # pred_rewards: [B, H, 1]
+            # pred_dones: [B, H, 1]
+            pred_logits_grid, pred_rewards, pred_dones, _ = self.world_model(action_hist, token_hist)
+
+            b, h, grid_h, grid_w, c = pred_logits_grid.shape
+            num_tokens = grid_h * grid_w
+
+            # Reshape for loss calculation
+            # Flatten batch and history dimensions
+            pred_logits_flat = pred_logits_grid.view(b * h, grid_h * grid_w, c)
+            target_tokens_flat = target_tokens.view(b * h, num_tokens)
+
+            pred_rewards_flat = pred_rewards.view(b * h, 1)
+            target_rewards_flat = target_rewards.view(b * h, 1)
+
+            pred_dones_flat = pred_dones.view(b * h, 1)
+            target_dones_flat = target_dones.view(b * h, 1)
+
+            # Calculate loss across the flattened batch * history dimension
+            token_loss = self.token_loss_fn(pred_logits_flat.permute(0, 2, 1), target_tokens_flat)
+            reward_loss = self.reward_loss_fn(pred_rewards_flat, target_rewards_flat)
+            done_loss = self.done_loss_fn(pred_dones_flat, target_dones_flat)
+
             total_loss = token_loss + reward_loss + done_loss
 
         if is_train:

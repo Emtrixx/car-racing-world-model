@@ -428,14 +428,26 @@ class DynaTrainer:
                     batch[key] = batch[key].to(self.device)
 
                 with torch.amp.autocast(enabled="cuda" in str(self.device), device_type=self.device_type):
-                    pred_logits, pred_reward, pred_done_logits, _ = self.world_model(
+                    pred_logits_grid, pred_rewards, pred_dones, _ = self.world_model(
                         batch['action_history'], batch['latent_token_history']
                     )
-                    b, h, w, c = pred_logits.shape
-                    token_loss = self.token_loss_fn(pred_logits.view(b * h * w, c),
-                                                    batch['target_next_tokens'].view(b * h * w))
-                    reward_loss = self.reward_loss_fn(pred_reward, batch['target_reward'])
-                    done_loss = self.done_loss_fn(pred_done_logits, batch['target_done'])
+                    b, h, grid_h, grid_w, c = pred_logits_grid.shape
+                    num_tokens = grid_h * grid_w
+
+                    # Reshape for loss calculation
+                    pred_logits_flat = pred_logits_grid.view(b * h, grid_h * grid_w, c)
+                    target_tokens_flat = batch['target_next_tokens'].view(b * h, num_tokens)
+
+                    pred_rewards_flat = pred_rewards.view(b * h, 1)
+                    target_rewards_flat = batch['target_rewards'].view(b * h, 1)
+
+                    pred_dones_flat = pred_dones.view(b * h, 1)
+                    target_dones_flat = batch['target_dones'].view(b * h, 1)
+
+                    # Calculate loss across the flattened batch * history dimension
+                    token_loss = self.token_loss_fn(pred_logits_flat.permute(0, 2, 1), target_tokens_flat)
+                    reward_loss = self.reward_loss_fn(pred_rewards_flat, target_rewards_flat)
+                    done_loss = self.done_loss_fn(pred_dones_flat, target_dones_flat)
                     total_loss = token_loss + reward_loss + done_loss
 
             elif self.world_model_type == 'gru':
@@ -526,14 +538,26 @@ class DynaTrainer:
                 for i, batch in enumerate(progress):
                     for key in batch: batch[key] = batch[key].to(self.device)
                     with torch.amp.autocast(enabled="cuda" in str(self.device), device_type=self.device_type):
-                        pred_logits, pred_reward, pred_done_logits, _ = self.world_model(
+                        pred_logits_grid, pred_rewards, pred_dones, _ = self.world_model(
                             batch['action_history'], batch['latent_token_history']
                         )
-                        b, h, w, c = pred_logits.shape
-                        token_loss = self.token_loss_fn(pred_logits.view(b * h * w, c),
-                                                        batch['target_next_tokens'].view(b * h * w))
-                        reward_loss = self.reward_loss_fn(pred_reward, batch['target_reward'])
-                        done_loss = self.done_loss_fn(pred_done_logits, batch['target_done'])
+                        b, h, grid_h, grid_w, c = pred_logits_grid.shape
+                        num_tokens = grid_h * grid_w
+
+                        # Reshape for loss calculation
+                        pred_logits_flat = pred_logits_grid.view(b * h, grid_h * grid_w, c)
+                        target_tokens_flat = batch['target_next_tokens'].view(b * h, num_tokens)
+
+                        pred_rewards_flat = pred_rewards.view(b * h, 1)
+                        target_rewards_flat = batch['target_rewards'].view(b * h, 1)
+
+                        pred_dones_flat = pred_dones.view(b * h, 1)
+                        target_dones_flat = batch['target_dones'].view(b * h, 1)
+
+                        # Calculate loss across the flattened batch * history dimension
+                        token_loss = self.token_loss_fn(pred_logits_flat.permute(0, 2, 1), target_tokens_flat)
+                        reward_loss = self.reward_loss_fn(pred_rewards_flat, target_rewards_flat)
+                        done_loss = self.done_loss_fn(pred_dones_flat, target_dones_flat)
                         total_loss = token_loss + reward_loss + done_loss
 
                     self.wm_optimizer.zero_grad(set_to_none=True)
