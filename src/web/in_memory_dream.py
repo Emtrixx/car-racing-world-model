@@ -1,18 +1,17 @@
 import os
-import torch
-import numpy as np
-import cv2
 from collections import deque
-from pathlib import Path
 
+import cv2
+import torch
+
+from src.transformer_world_model import WorldModelTransformer
 from src.utils import (
     WM_CHECKPOINT_FILENAME_GRU, VQ_VAE_CHECKPOINT_FILENAME, ACTION_DIM, DATA_DIR,
     WM_CHECKPOINT_FILENAME_TRANSFORMER, preprocess_observation
 )
+from src.utils_rendering import get_starting_state_from_sequence
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
 from src.world_model import WorldModelGRU
-from src.transformer_world_model import WorldModelTransformer
-from src.dreaming_render import get_starting_state_from_sequence
 
 
 class Dreamer:

@@ -1,7 +1,6 @@
 import multiprocessing as mp
 import os
 import time
-from collections import deque
 from pathlib import Path
 
 import numpy as np
@@ -10,7 +9,7 @@ from stable_baselines3 import PPO
 from tqdm import tqdm
 
 from src.play_game_sb3 import SB3_MODEL_PATH
-from src.utils import make_env_sb3, ENV_NAME, NUM_STACK, DEVICE, VQ_VAE_CHECKPOINT_FILENAME
+from src.utils import make_env_sb3, NUM_STACK, VQ_VAE_CHECKPOINT_FILENAME
 from src.vq_conv_vae import VQVAE
 
 

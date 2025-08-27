@@ -9,7 +9,7 @@ from src.utils import (
 )
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
 from src.world_model import WorldModelGRU
-from src.dreaming_render import get_starting_state_from_sequence
+from src.utils_rendering import get_starting_state_from_sequence
 
 
 # --- Function to draw key presses ---
