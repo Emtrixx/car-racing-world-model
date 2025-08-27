@@ -351,7 +351,8 @@ class WorldModelTransformerTrainer:
                 if global_step % checkpoint_freq == 0 and not trial:
                     model_state = self.world_model.module.state_dict() if isinstance(self.world_model, \
                                                                                      nn.DataParallel) else self.world_model.state_dict()
-                    torch.save(model_state, TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_step_{global_step}.pth")
+                    torch.save(model_state,
+                               TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_t_btf_step_{global_step}.pth")
                     tqdm.write(f"Saved model checkpoint at step {global_step}.")
 
                 if profiler:
