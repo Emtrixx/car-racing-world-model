@@ -29,10 +29,10 @@ from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM, VQVAE
 # --- Configuration ---
 # Training Hyperparameters
 NUM_STEPS = 1_000_000
-WM_EPOCHS = 20
+WM_EPOCHS = 16
 WM_BATCH_SIZE = 256
 WM_LEARNING_RATE = 1e-4
-HISTORY_LENGTH = 12  # Renamed from SEQUENCE_LENGTH
+HISTORY_LENGTH = 18  # Renamed from SEQUENCE_LENGTH
 MAX_GRAD_NORM = 1.0
 
 # Parallelism Configuration
