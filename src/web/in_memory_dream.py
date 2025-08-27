@@ -39,19 +39,18 @@ class Dreamer:
                 latent_dim=VQVAE_EMBEDDING_DIM,
                 action_dim=ACTION_DIM,
             ).to(self.device)
-            self.world_model = torch.compile(self.world_model)  # todo: check if needed for checkpoint
+            self.world_model = torch.compile(self.world_model)
             self.world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=self.device))
         elif self.model_type == 'transformer':
             self.world_model = WorldModelTransformer(
                 vqvae_embed_dim=VQVAE_EMBEDDING_DIM,
                 action_dim=ACTION_DIM,
             ).to(self.device)
-            # self.world_model = torch.compile(self.world_model) # todo: check if needed for checkpoint
+            self.world_model = torch.compile(self.world_model)
             self.world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_TRANSFORMER, map_location=self.device))
         else:
             raise ValueError(f"Invalid model type: {self.model_type}")
 
-        self.world_model = torch.compile(self.world_model)
         self.world_model.eval()
 
     def start(self):
@@ -160,5 +159,6 @@ class Dreamer:
         image_np = (tensor.squeeze(0).permute(1, 2, 0) * 255).clamp(0, 255).to(torch.uint8).cpu().numpy()
         if image_np.shape[2] == 1:
             image_np = cv2.cvtColor(image_np, cv2.COLOR_GRAY2RGB)
+        image_np = cv2.cvtColor(image_np, cv2.COLOR_RGB2BGR)
         _, buffer = cv2.imencode('.jpg', image_np)
         return buffer.tobytes()
