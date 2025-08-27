@@ -5,19 +5,26 @@ document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('dream-canvas');
     const ctx = canvas.getContext('2d');
 
-    let dreamInterval = null;
+    let dreaming = false;
+    let keysPressed = {};
+    const image = new Image();
+
+    let lastFrameTime = 0;
+    const frameInterval = 1000 / 8; // 8 FPS
+
+    image.onload = () => {
+        ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+    };
 
     startBtn.addEventListener('click', async () => {
-        if (dreamInterval) {
-            clearInterval(dreamInterval);
-        }
-
+        dreaming = false; // Stop any previous loop
         const modelType = modelSelect.value;
         const response = await fetch(`/api/v1/dream/start/${modelType}`, { method: 'POST' });
         const data = await response.json();
         image.src = `data:image/jpeg;base64,${data.frame}`;
-        
-        dreamInterval = setInterval(gameLoop, 1000 / 8); // 8 FPS
+        dreaming = true;
+        lastFrameTime = performance.now();
+        requestAnimationFrame(gameLoop);
     });
 
     document.addEventListener('keydown', (e) => {
@@ -28,27 +35,37 @@ document.addEventListener('DOMContentLoaded', () => {
         keysPressed[e.key] = false;
     });
 
-    async function gameLoop() {
-        const steer = (keysPressed['ArrowLeft'] ? -1.0 : 0.0) + (keysPressed['ArrowRight'] ? 1.0 : 0.0);
-        const gas = keysPressed['ArrowUp'] ? 0.8 : -1.0;
-        const brake = keysPressed['ArrowDown'] ? 0.2 : -1.0;
+    async function gameLoop(currentTime) {
+        if (!dreaming) return;
 
-        const action = [steer, gas, brake];
+        const elapsed = currentTime - lastFrameTime;
 
-        const response = await fetch('/api/v1/dream/step', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({ action })
-        });
+        if (elapsed > frameInterval) {
+            lastFrameTime = currentTime - (elapsed % frameInterval);
 
-        if (response.ok) {
-            const data = await response.json();
-            image.src = `data:image/jpeg;base64,${data.frame}`;
-        } else {
-            clearInterval(dreamInterval);
-            console.error("Error during dream step");
+            const steer = (keysPressed['ArrowLeft'] ? -1.0 : 0.0) + (keysPressed['ArrowRight'] ? 1.0 : 0.0);
+            const gas = keysPressed['ArrowUp'] ? 0.8 : -1.0;
+            const brake = keysPressed['ArrowDown'] ? 0.2 : -1.0;
+
+            const action = [steer, gas, brake];
+
+            const response = await fetch('/api/v1/dream/step', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ action })
+            });
+
+            if (response.ok) {
+                const data = await response.json();
+                image.src = `data:image/jpeg;base64,${data.frame}`;
+            } else {
+                dreaming = false;
+                console.error("Error during dream step");
+            }
         }
+        
+        requestAnimationFrame(gameLoop);
     }
 });
