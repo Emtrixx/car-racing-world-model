@@ -533,7 +533,7 @@ def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data
 
     if not trial:
         TRANSFORMER_WM_CHECKPOINTS_DIR.mkdir(exist_ok=True)
-        final_filename = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_{config_name}.pth"
+        final_filename = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_t_btf_{config_name}.pth"
         torch.save(world_model.state_dict(), final_filename)
         print(f"Final model saved to {final_filename}")
 
