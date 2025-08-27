@@ -58,7 +58,7 @@ def get_config_sb3(name="default"):
             ),
 
             # Training parameters
-            "total_timesteps": 1_000_000,
+            "total_timesteps": 5_000_000,
             "num_envs": 24,  # Number of parallel environments
             "save_freq": 50_000,  # Timesteps, not updates
             "eval_freq": 20480,  # Timesteps per eval environment
