@@ -42,8 +42,8 @@ def get_config_sb3(name="default"):
             "gae_lambda": 0.95,  # Factor for trade-off of bias vs variance for Generalized Advantage Estimation
             "clip_range": 0.2,
             "ent_coef": 0.02,  # Corresponds to INITIAL_ENTROPY_COEF (fixed for now)
-            "vf_coef": 0.4,
-            "max_grad_norm": 2.3,
+            "vf_coef": 0.4,  # Controls the importance of the value function loss
+            "max_grad_norm": 1.2,  # Controls the clipping of the gradient norm
             "target_kl": 0.015,  # For early stopping in PPO updates
             "sde_sample_freq": -1,  # Set to -1 to disable SDE for standard PPO
 
@@ -53,7 +53,7 @@ def get_config_sb3(name="default"):
                 features_extractor_kwargs=dict(features_dim=1024),
                 net_arch=dict(pi=[256, 128], vf=[256, 128]),
                 activation_fn=torch.nn.Tanh,
-                log_std_init=-1.0,  # Matches custom Actor's initial log_std bias
+                log_std_init=-0.9,  # standard deviation at start of training, SB3 default is -1
                 ortho_init=True,  # SB3 default, can be False if issues arise
             ),
 
@@ -85,7 +85,7 @@ def get_config_sb3(name="default"):
             features_extractor_kwargs=dict(features_dim=512),  # Test with a smaller feature dim
             net_arch=dict(pi=[64], vf=[64]),  # Test specific architecture
             activation_fn=torch.nn.Tanh,  # Inherited or explicitly set
-            log_std_init=-1.0,  # Inherited or explicitly set
+            log_std_init=-0.97,  # Inherited or explicitly set
             ortho_init=True,  # Inherited or explicitly set
         ),
     })
