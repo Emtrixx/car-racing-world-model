@@ -12,6 +12,7 @@ from src.utils import (
 from src.utils_rendering import get_starting_state_from_sequence
 from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM, VQVAE_NUM_EMBEDDINGS
 from src.world_model import WorldModelGRU
+from src.train_transformer_world_model import HISTORY_LENGTH
 
 
 class Dreamer:
@@ -92,11 +93,11 @@ class Dreamer:
 
         initial_tokens = initial_tokens.view(-1)
 
-        self.action_history = deque(maxlen=32)
-        self.token_history = deque(maxlen=32)
+        self.action_history = deque(maxlen=HISTORY_LENGTH)
+        self.token_history = deque(maxlen=HISTORY_LENGTH)
         zero_action = torch.zeros(ACTION_DIM, device=self.device)
 
-        for _ in range(32):
+        for _ in range(HISTORY_LENGTH):
             self.action_history.append(zero_action)
             self.token_history.append(initial_tokens)
 
@@ -138,20 +139,20 @@ class Dreamer:
             action_history_tensor = torch.stack(list(self.action_history)).unsqueeze(0)
             token_history_tensor = torch.stack(list(self.token_history)).unsqueeze(0)
 
-            pred_logits, _, _, generated_tokens = self.world_model(
+            tokens_for_decoding, _predicted_reward, _predicted_done = self.world_model.generate(
                 action_history_tensor, token_history_tensor
             )
 
-            b, h, w, c = pred_logits.shape
-            pred_probs = torch.softmax(pred_logits.view(-1, c), dim=-1)
-            tokens_for_decoding = torch.multinomial(pred_probs, num_samples=1).squeeze(1)
-
             quantized_vectors = self.vq_vae.vq_layer.embeddings[tokens_for_decoding]
-            quantized_grid = quantized_vectors.view(h, w, -1)
-            quantized_grid_permuted = quantized_grid.permute(2, 0, 1).unsqueeze(0)
+
+            b = tokens_for_decoding.shape[0]
+            h = w = self.world_model.grid_size
+
+            quantized_grid = quantized_vectors.view(b, h, w, -1)
+            quantized_grid_permuted = quantized_grid.permute(0, 3, 1, 2)
             decoded_image = self.vq_vae.decoder(quantized_grid_permuted)
 
-            self.token_history.append(generated_tokens.squeeze(0))
+            self.token_history.append(tokens_for_decoding.squeeze(0))
             return self._tensor_to_image(decoded_image)
 
     def _tensor_to_image(self, tensor):
