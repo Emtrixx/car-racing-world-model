@@ -84,7 +84,7 @@ if __name__ == '__main__':
                         help="Total number of steps to dream for.")
     parser.add_argument('--horizon', type=int, default=100,
                         help="Maximum steps per dream episode before truncation.")
-    parser.add_argument('--history_len', type=int, default=8,
+    parser.add_argument('--history_len', type=int, default=18,
                         help="History length for the Transformer model.")
     parser.add_argument('--real_buffer_size', type=int, default=500,
                         help="Size of the real experience buffer for initialization.")

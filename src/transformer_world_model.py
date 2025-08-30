@@ -41,6 +41,73 @@ class PositionalEncoding(nn.Module):
         return x + self.pe[:, offset: offset + seq_len, :]
 
 
+class CustomTransformerDecoder(nn.Module):
+    """
+    Custom Transformer Decoder that can return attention weights.
+    """
+
+    def __init__(self, decoder_layer, num_layers, norm=None):
+        super().__init__()
+        self.layers = nn.ModuleList([
+            type(decoder_layer)(
+                d_model=decoder_layer.self_attn.embed_dim,
+                nhead=decoder_layer.self_attn.num_heads,
+                dim_feedforward=decoder_layer.linear1.out_features,
+                dropout=decoder_layer.dropout.p,
+                activation=decoder_layer.activation,
+                batch_first=True,
+                norm_first=False
+            ) for _ in range(num_layers)
+        ])
+        self.num_layers = num_layers
+        self.norm = norm
+
+    def forward(self, tgt, memory, tgt_mask=None, memory_mask=None, need_weights=False, average_attn_weights=False):
+        """
+        Forward pass for the decoder.
+
+        This implementation manually performs the forward pass of each decoder layer
+        when `need_weights` is True. This is necessary because the standard
+        `nn.TransformerDecoderLayer` does not return attention weights from its
+        `forward` method. By replicating the layer's logic, we can capture both
+        self-attention and cross-attention weights for visualization and analysis.
+        """
+        output = tgt
+        self_attns = []
+        cross_attns = []
+
+        for mod in self.layers:
+            if need_weights:
+                # Manually perform forward of layer to get weights
+                sa_output, sa_weights = mod.self_attn(
+                    output, output, output,
+                    attn_mask=tgt_mask,
+                    need_weights=True, average_attn_weights=average_attn_weights
+                )
+                output = mod.norm1(output + mod.dropout1(sa_output))
+
+                mha_output, mha_weights = mod.multihead_attn(
+                    output, memory, memory,
+                    attn_mask=memory_mask,
+                    need_weights=True, average_attn_weights=average_attn_weights
+                )
+                output = mod.norm2(output + mod.dropout2(mha_output))
+                output = mod.norm3(output + mod._ff_block(output))
+
+                self_attns.append(sa_weights)
+                cross_attns.append(mha_weights)
+            else:
+                output = mod(output, memory, tgt_mask=tgt_mask, memory_mask=memory_mask)
+
+        if self.norm is not None:
+            output = self.norm(output)
+
+        if need_weights:
+            return output, {'self': self_attns, 'cross': cross_attns}
+        else:
+            return output, None
+
+
 class WorldModelTransformer(nn.Module):
     def __init__(
             self,
@@ -78,9 +145,11 @@ class WorldModelTransformer(nn.Module):
         # --- Transformer Decoder ---
         decoder_layer = nn.TransformerDecoderLayer(
             d_model=embed_dim, nhead=num_heads, dim_feedforward=ff_dim,
-            dropout=dropout_rate, batch_first=True
+            dropout=dropout_rate, batch_first=True, norm_first=False
         )
-        self.transformer_decoder = nn.TransformerDecoder(decoder_layer, num_layers=num_layers)
+        # decoder_norm = nn.LayerNorm(embed_dim) if num_layers > 0 else None
+        decoder_norm = None  # todo: maybe retrain with layernorm
+        self.transformer_decoder = CustomTransformerDecoder(decoder_layer, num_layers, norm=decoder_norm)
 
         # --- Output Prediction Heads ---
         self.next_latent_head = nn.Linear(embed_dim, codebook_size)
@@ -174,7 +243,7 @@ class WorldModelTransformer(nn.Module):
         tgt_mask, memory_mask = self._generate_tbtf_masks(history_len, device)
 
         # --- Run Decoder ---
-        decoder_output = self.transformer_decoder(
+        decoder_output, _ = self.transformer_decoder(
             tgt=tgt_seq,
             memory=memory_seq,
             tgt_mask=tgt_mask,
@@ -208,7 +277,8 @@ class WorldModelTransformer(nn.Module):
     def generate(
             self,
             action_history: torch.Tensor,  # Shape: [B, H, action_dim]
-            latent_token_history: torch.Tensor  # Shape: [B, H, num_tokens_per_state]
+            latent_token_history: torch.Tensor,  # Shape: [B, H, num_tokens_per_state]
+            get_attention: bool = False
     ):
         """
         Efficiently generates the prediction for the single next step.
@@ -216,8 +286,9 @@ class WorldModelTransformer(nn.Module):
         Args:
             action_history: The history of actions.
             latent_token_history: The history of VQ-VAE token grids.
+            get_attention: If True, returns attention maps from the decoder.
         Returns:
-            A tuple of (next_token_indices, reward, done).
+            A tuple of (next_token_indices, reward, done, attention_maps).
         """
         batch_size, history_len = action_history.shape[0], action_history.shape[1]
 
@@ -239,11 +310,13 @@ class WorldModelTransformer(nn.Module):
         tgt_seq = self.pos_encoder(tgt_seq, offset=0)
 
         # --- Run Decoder (no masks needed for single-step prediction) ---
-        decoder_output = self.transformer_decoder(
+        decoder_output, attention_maps = self.transformer_decoder(
             tgt=tgt_seq,
             memory=memory_seq,
             tgt_mask=None,
             memory_mask=None,
+            need_weights=get_attention,
+            average_attn_weights=False
         )
 
         # --- Extract Predictions ---
@@ -266,7 +339,7 @@ class WorldModelTransformer(nn.Module):
         # Sigmoid on done logits to get probability
         predicted_done = torch.sigmoid(predicted_done_logits) > 0.5
 
-        return generated_tokens_indices, predicted_reward, predicted_done
+        return generated_tokens_indices, predicted_reward, predicted_done, attention_maps
 
 
 # --- Usage Example ---
@@ -336,15 +409,42 @@ if __name__ == '__main__':
     print("Dones shape: CORRECT")
     print("--- T-BTF Training Test PASSED ---")
 
-    # --- Test: Inference ---
-    # For inference, we still pass the full history, but typically only use the last prediction
-    print("\n--- Test: Inference ---")
+    # --- Test: Inference with generate() ---
+    print("\n--- Test: Inference with generate() ---")
     world_model_tf.eval()
     with torch.no_grad():
-        _, _, _, gen_tokens_inference = world_model_tf(action_hist, tokens_hist)
-
-    print(f"Generated tokens shape (inference): {gen_tokens_inference.shape}")
-    expected_tokens_shape = (BATCH_SIZE, NUM_TOKENS_EXAMPLE)
-    assert gen_tokens_inference.shape == expected_tokens_shape, "Generated tokens shape mismatch!"
-    print("Generated tokens shape: CORRECT")
+        gen_tokens, gen_reward, gen_done, _ = world_model_tf.generate(action_hist, tokens_hist)
+    print(f"Generated tokens shape: {gen_tokens.shape}")
+    print(f"Generated reward shape: {gen_reward.shape}")
+    print(f"Generated done shape: {gen_done.shape}")
+    assert gen_tokens.shape == (BATCH_SIZE, NUM_TOKENS_EXAMPLE)
     print("--- Inference Test PASSED ---")
+
+    # --- Test: Inference with Attention Maps ---
+    print("\n--- Test: Inference with Attention Maps ---")
+    world_model_tf.eval()
+    with torch.no_grad():
+        _, _, _, attention_maps = world_model_tf.generate(action_hist, tokens_hist, get_attention=True)
+
+    assert attention_maps is not None
+    print(f"Attention maps keys: {attention_maps.keys()}")
+    print(f"Number of self-attention maps (layers): {len(attention_maps['self'])}")
+    print(f"Number of cross-attention maps (layers): {len(attention_maps['cross'])}")
+
+    # Check shape of one attention map (per-head attention)
+    # Shape: [B, num_heads, query_len, key_len]
+    self_attn_shape = attention_maps['self'][0].shape
+    cross_attn_shape = attention_maps['cross'][0].shape
+    print(f"Self-attention map shape (layer 0): {self_attn_shape}")
+    print(f"Cross-attention map shape (layer 0): {cross_attn_shape}")
+
+    expected_self_attn_shape = (BATCH_SIZE, NUM_HEADS_EXAMPLE, world_model_tf.num_queries_per_step,
+                                world_model_tf.num_queries_per_step)
+    assert self_attn_shape == expected_self_attn_shape, "Self-attention shape mismatch!"
+    print("Self-attention shape: CORRECT")
+
+    expected_cross_attn_shape = (BATCH_SIZE, NUM_HEADS_EXAMPLE, world_model_tf.num_queries_per_step,
+                                 HISTORY_LEN * (NUM_TOKENS_EXAMPLE + 1))
+    assert cross_attn_shape == expected_cross_attn_shape, "Cross-attention shape mismatch!"
+    print("Cross-attention shape: CORRECT")
+    print("--- Attention Map Test PASSED ---")
