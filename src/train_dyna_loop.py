@@ -71,14 +71,15 @@ def get_combined_config(name="default"):
         "policy": "CnnPolicy",
         "ppo_learning_rate": 45e-5,
         "n_steps": 2048,  # Steps per batch (per environment)
-        "ppo_batch_size": 1024,
+        "ppo_batch_size": 64,
+        "ppo_dream_batch_size": 1024,
         "n_epochs": 15,
         "gamma": 0.99,
         "gae_lambda": 0.9,
         "clip_range": 0.2,
         "ent_coef": 0.01,
         "vf_coef": 1.0,
-        "ppo_max_grad_norm": 0.5,
+        "ppo_max_grad_norm": 0.8,
         "target_kl": 0.015,
         "eval_freq": 32_000,
         "n_eval_episodes": 5,
@@ -125,6 +126,7 @@ def get_combined_config(name="default"):
         "num_envs": 2,
         "n_steps": 128,
         "ppo_batch_size": 32,
+        "ppo_dream_batch_size": 256,
         "policy_kwargs": dict(
             features_extractor_class=CustomCNN,
             features_extractor_kwargs=dict(features_dim=256),
@@ -736,12 +738,20 @@ class DynaTrainer:
         original_env = self.ppo_agent.env
         self.ppo_agent.set_env(dream_env)
 
+        # Store and set new batch size for dream training
+        original_batch_size = self.ppo_agent.batch_size
+        dream_batch_size = self.config.get('ppo_dream_batch_size', original_batch_size)
+        self.ppo_agent.batch_size = dream_batch_size
+        global_tqdm.write(f"Temporarily setting PPO batch size to {dream_batch_size} for dream training.")
+
         # Use the system metrics callback during dream training
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
         self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
                              callback=[metrics_callback, self.eval_callback])
 
-        # Restore the original environment
+        # Restore the original PPO batch size and environment
+        self.ppo_agent.batch_size = original_batch_size
+        global_tqdm.write(f"Restored PPO batch size to {original_batch_size}.")
         self.ppo_agent.set_env(original_env)
 
         dream_env.close()
