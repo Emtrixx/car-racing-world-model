@@ -37,9 +37,9 @@ ONE_SHOT_IMAGE_PATH = DATA_DIR / "one_shot_example.png"
 PROMPT_TEXT = """
 Your Role: You are an expert F1 racing analyst and data labeler. Your task is to analyze a single top-down image from a racing simulator and classify the car and track state into discrete categories.
 
-Input: A single image frame showing a red race car on a track.
+You will be given an example analysis of a first image, followed by a second image which you must analyze.
 
-Output Instructions: Analyze the provided image and return only a single JSON object with the exact structure and fields defined below. Choose the most appropriate category for each field. Do not include any explanatory text, markdown formatting, or anything other than the JSON object itself.
+First, here are the definitions for the JSON schema you must use.
 
 JSON Schema and Field Definitions
 Output Structure:
@@ -91,12 +91,13 @@ Allowed values: ["immediate", "near", "far", "none"]
 - "far": A turn is visible in the distance, at the end of a straight.
 - "none": No turn is visible on the horizon.
 
-Example (One-Shot Learning)
-Input Image:
-[This is where the first image you send will be placed]
+---
+## Example Analysis (First Image)
 
-Required Output:
+Here is the first image:
+[Image 1: Example]
 
+The correct JSON output for the first image is:
 {
   "car_state": {
     "position": "left",
@@ -109,8 +110,14 @@ Required Output:
     "distance_to_turn": "near"
   }
 }
-Your Task
-Now, analyze the following new image and provide the corresponding JSON output.
+
+---
+## Your Task (Second Image)
+
+Now, analyze the second image:
+[Image 2: To be analyzed]
+
+Provide the JSON output for the second image using the same schema.
 """
 
 from pydantic import BaseModel, Field
