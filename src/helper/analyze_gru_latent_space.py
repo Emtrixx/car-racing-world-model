@@ -35,44 +35,61 @@ ONE_SHOT_IMAGE_PATH = DATA_DIR / "one_shot_example.png"
 
 # Your well-crafted prompt
 PROMPT_TEXT = """
-Your Role: You are an expert F1 racing analyst and data labeler. Your task is to analyze a single top-down image from a racing simulator and output a precise, quantitative state description in a JSON format.
+Your Role: You are an expert F1 racing analyst and data labeler. Your task is to analyze a single top-down image from a racing simulator and classify the car and track state into discrete categories.
 
 Input: A single image frame showing a red race car on a track.
 
-Output Instructions: Analyze the provided image and return only a single JSON object with the exact structure and fields defined below. Do not include any explanatory text, markdown formatting, or anything other than the JSON object itself.
+Output Instructions: Analyze the provided image and return only a single JSON object with the exact structure and fields defined below. Choose the most appropriate category for each field. Do not include any explanatory text, markdown formatting, or anything other than the JSON object itself.
 
 JSON Schema and Field Definitions
 Output Structure:
 
 {
   "car_state": {
-    "position_normalized": 0.0,
-    "angle_relative_to_track_deg": 0.0,
-    "wheels_off_track": 0
+    "position": "center",
+    "angle": "straight",
+    "is_off_track": false
   },
   "track_state": {
-    "curvature_current": 0.0,
-    "curvature_upcoming": 0.0,
-    "distance_to_next_turn_m": 0.0
+    "curvature_current": "straight",
+    "curvature_upcoming": "straight",
+    "distance_to_turn": "none"
   }
 }
 Field Definitions:
 
 car_state:
 
-position_normalized (Number): The car's lateral position, where 0.0 is the track's centerline. -1.0 is the center of the car on the track's left edge, and 1.0 is the right edge. Crucially, if the car is off-track, this value should extrapolate beyond this range. For example, a car halfway into the grass on the right would be 1.5. The "track" includes the red-and-white kerbs.
+position (String): The car's lateral position on the track.
+Allowed values: ["far_left", "left", "center", "right", "far_right"]
+- "center": Car is on the track's centerline.
+- "left" / "right": Car is between the centerline and the edge of the track (including kerbs).
+- "far_left" / "far_right": The car is mostly on or beyond the edge of the track.
 
-angle_relative_to_track_deg (Number): The car's angle in degrees relative to the track's centerline. 0.0 is perfectly aligned. A positive value means the car is pointing to the right of the track's direction (e.g., 15.0). A negative value means it is pointing to the left (e.g., -10.0).
+angle (String): The car's angle relative to the track's direction.
+Allowed values: ["sharp_left", "left", "straight", "right", "sharp_right"]
+- "straight": Car is aligned with the track.
+- "left" / "right": Car has a slight angle.
+- "sharp_left" / "sharp_right": Car has a significant angle (e.g., in a drift or spin).
 
-wheels_off_track (Integer): The number of wheels (0, 1, 2, 3, or 4) that are on the green grass area.
+is_off_track (Boolean): A simple flag indicating if the car is off-track.
+- true: One or more wheels are on the green grass.
+- false: All four wheels are on the track or kerbs.
 
 track_state:
 
-curvature_current (Number): The curvature of the track segment the car is currently on, from -1.0 (sharpest left turn) to 1.0 (sharpest right turn). A straight section is 0.0.
+curvature_current (String): The curvature of the track segment the car is currently on.
+Allowed values: ["sharp_left", "left", "straight", "right", "sharp_right"]
 
-curvature_upcoming (Number): The curvature of the next track segment visible ahead of the car. Use the same -1.0 to 1.0 scale. If the track ahead is straight, this should be 0.0.
+curvature_upcoming (String): The curvature of the next track segment visible ahead of the car.
+Allowed values: ["sharp_left", "left", "straight", "right", "sharp_right"]
 
-distance_to_next_turn_m (Number): Your best estimate of the distance in meters to the beginning of the next turn or the end of the current one. Assume the car is about 4 meters long for scale.
+distance_to_turn (String): The estimated distance to the next turn.
+Allowed values: ["immediate", "near", "far", "none"]
+- "immediate": The car is at the very start of the turn.
+- "near": The turn is clearly visible and coming up soon.
+- "far": A turn is visible in the distance, at the end of a straight.
+- "none": No turn is visible on the horizon.
 
 Example (One-Shot Learning)
 Input Image:
@@ -82,14 +99,14 @@ Required Output:
 
 {
   "car_state": {
-    "position_normalized": -0.7,
-    "angle_relative_to_track_deg": -8.0,
-    "wheels_off_track": 0
+    "position": "left",
+    "angle": "left",
+    "is_off_track": false
   },
   "track_state": {
-    "curvature_current": -0.7,
-    "curvature_upcoming": 0.0,
-    "distance_to_next_turn_m": 10.0
+    "curvature_current": "sharp_left",
+    "curvature_upcoming": "straight",
+    "distance_to_turn": "near"
   }
 }
 Your Task
@@ -97,28 +114,24 @@ Now, analyze the following new image and provide the corresponding JSON output.
 """
 
 from pydantic import BaseModel, Field
+from typing import Literal
 
 
 class CarState(BaseModel):
     """
     Defines the state of the car at a specific frame.
     """
-    position_normalized: float = Field(
+    position: Literal["far_left", "left", "center", "right", "far_right"] = Field(
         ...,
-        description=(
-            "The car's lateral position, where 0.0 is the track's centerline. "
-            "-1.0 is the left edge, 1.0 is the right edge. Can extrapolate beyond this range."
-        )
+        description="The car's lateral position on the track."
     )
-    angle_relative_to_track_deg: float = Field(
+    angle: Literal["sharp_left", "left", "straight", "right", "sharp_right"] = Field(
         ...,
-        description="The car's angle in degrees relative to the track's centerline. Positive is right, negative is left."
+        description="The car's angle relative to the track's direction."
     )
-    wheels_off_track: int = Field(
+    is_off_track: bool = Field(
         ...,
-        ge=0,
-        le=4,
-        description="The number of wheels (0, 1, 2, 3, or 4) that are on the grass."
+        description="A simple flag indicating if the car is off-track."
     )
 
 
@@ -126,21 +139,17 @@ class TrackState(BaseModel):
     """
     Defines the state of the track relevant to the car.
     """
-    curvature_current: float = Field(
+    curvature_current: Literal["sharp_left", "left", "straight", "right", "sharp_right"] = Field(
         ...,
-        ge=-1.0,
-        le=1.0,
-        description="Curvature of the current track segment from -1.0 (sharpest left) to 1.0 (sharpest right)."
+        description="Curvature of the current track segment."
     )
-    curvature_upcoming: float = Field(
+    curvature_upcoming: Literal["sharp_left", "left", "straight", "right", "sharp_right"] = Field(
         ...,
-        ge=-1.0,
-        le=1.0,
-        description="Curvature of the next visible track segment using the same -1.0 to 1.0 scale."
+        description="Curvature of the next visible track segment."
     )
-    distance_to_next_turn_m: float = Field(
+    distance_to_turn: Literal["immediate", "near", "far", "none"] = Field(
         ...,
-        description="Estimated distance in meters to the beginning of the next turn."
+        description="Estimated distance to the next turn."
     )
 
 
