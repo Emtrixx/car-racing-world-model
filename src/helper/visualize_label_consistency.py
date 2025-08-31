@@ -61,43 +61,14 @@ def get_average_image(image_paths: pd.Series):
 def visualize_label_consistency(
         df: pd.DataFrame,
         label_col: str,
-        output_dir: Path,
-        is_continuous: bool = False
+        output_dir: Path
 ):
     """Generates a side-by-side comparison plot for a given label."""
     print(f"--- Visualizing consistency for: {label_col} ---")
 
     groups = {}
-    binned_col = f'{label_col}_bin'
-
-    if is_continuous:
-        # For continuous data, we create bins
-        if label_col == 'track_curvature_current':
-            bins = [-1.1, -0.7, -0.2, 0.2, 0.7, 1.1]
-            labels = ["Sharp Left", "Left", "Straight", "Right", "Sharp Right"]
-            df[binned_col] = pd.cut(df[label_col], bins=bins, labels=labels, right=False)
-        elif label_col == 'car_position_normalized':
-            bins = [-np.inf, -0.8, -0.3, 0.3, 0.8, np.inf]
-            labels = ["Far Left", "Left", "Center", "Right", "Far Right"]
-            df[binned_col] = pd.cut(df[label_col], bins=bins, labels=labels, right=False)
-        elif label_col == 'car_angle_relative_to_track_deg':
-            bins = [-np.inf, -15, -5, 5, 15, np.inf]
-            labels = ["Sharp Left", "Left", "Straight", "Right", "Sharp Right"]
-            df[binned_col] = pd.cut(df[label_col], bins=bins, labels=labels, right=False)
-        else:
-            # Default to 5 quintiles for other continuous vars
-            try:
-                df[binned_col] = pd.qcut(df[label_col], 5, labels=False, duplicates='drop')
-            except ValueError as e:
-                print(f"Could not create bins for {label_col}: {e}. Skipping.")
-                return
-
-        # The FutureWarning from pandas can be ignored, it's not the cause of the error.
-        grouped = df.groupby(binned_col, observed=False)
-
-    else:
-        # For discrete data, group by unique values
-        grouped = df.groupby(label_col)
+    # Group by the unique categorical values in the column
+    grouped = df.groupby(label_col)
 
     for name, group in grouped:
         print(f"  Processing group: '{name}' ({len(group)} images)")
@@ -109,15 +80,20 @@ def visualize_label_consistency(
         print("No images found or processed. Skipping plot.")
         return
 
+    # Sort groups by name for consistent plot order (optional but good practice)
+    sorted_groups = sorted(groups.items(), key=lambda item: str(item[0]))
+
+    n_groups = len(sorted_groups)
+    if n_groups == 0:
+        return
+
     # Create and save plot
-    n_groups = len(groups)
     fig, axes = plt.subplots(1, n_groups, figsize=(5 * n_groups, 6), squeeze=False)
     fig.suptitle(f"Label Consistency Check for '{label_col}'", fontsize=20)
 
-    for i, (name, avg_img) in enumerate(groups.items()):
+    for i, (name, avg_img) in enumerate(sorted_groups):
         ax = axes[0, i]
         ax.imshow(avg_img)
-        # Get the actual number of images that were successfully averaged
         num_images_in_group = grouped.get_group(name).shape[0]
         ax.set_title(f"Group: {name}\n({num_images_in_group} images)", fontsize=14)
         ax.axis('off')
@@ -140,16 +116,19 @@ def main(metadata_path: Path, image_base_dir: Path, output_dir: Path):
         return
 
     # --- Define which labels to check ---
-    labels_to_check = {
-        'car_wheels_off_track': False,  # Discrete
-        'track_curvature_current': True,  # Continuous
-        'car_position_normalized': True,  # Continuous
-        'car_angle_relative_to_track_deg': True  # Continuous
-    }
+    # All new labels are discrete categories
+    labels_to_check = [
+        'car_position',
+        'car_angle',
+        'car_is_off_track',
+        'track_curvature_current',
+        'track_curvature_upcoming',
+        'track_distance_to_turn'
+    ]
 
-    for label, is_continuous in labels_to_check.items():
+    for label in labels_to_check:
         if label in df.columns:
-            visualize_label_consistency(df.copy(), label, output_dir, is_continuous)
+            visualize_label_consistency(df.copy(), label, output_dir)
         else:
             print(f"Warning: Label column '{label}' not found in data. Skipping.")
 

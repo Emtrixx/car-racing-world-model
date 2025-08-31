@@ -5,11 +5,11 @@ from pathlib import Path
 import matplotlib.pyplot as plt
 import numpy as np
 import pandas as pd
-import seaborn as sns
-from sklearn.linear_model import LinearRegression
-from sklearn.metrics import mean_squared_error, r2_score
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import accuracy_score, classification_report, ConfusionMatrixDisplay
 from sklearn.model_selection import train_test_split
-from sklearn.neural_network import MLPRegressor
+from sklearn.neural_network import MLPClassifier
+from sklearn.preprocessing import LabelEncoder
 
 from src.utils import DATA_DIR
 
@@ -47,7 +47,6 @@ def load_data(metadata_path: Path):
         print(f"Reshaped latent state to: {latent_states.shape}")
 
     labels = [flatten_label(r['label']) for r in records]
-
     df_labels = pd.DataFrame(labels)
 
     print(f"Loaded {len(latent_states)} data points.")
@@ -55,70 +54,79 @@ def load_data(metadata_path: Path):
     return latent_states, df_labels
 
 
-def run_probe(
+def run_classification_probe(
         X: np.ndarray,
         y: pd.Series,
         target_name: str,
         output_dir: Path,
         model_type: str
 ):
-    """
-    Trains a regression model for a single target, evaluates it,
-    and saves a visualization.
-    """
-    probe_type = "MLP" if model_type == 'mlp' else "Linear"
+    """Trains a classification model, evaluates it, and saves a confusion matrix."""
+    probe_type = "MLP" if model_type == 'mlp' else "Linear (Logistic)"
     print(f"--- {probe_type} Probing for: {target_name} ---")
 
+    # Drop rows where target is None/NaN
+    valid_indices = y.notna()
+    X = X[valid_indices]
+    y = y[valid_indices]
+
+    if len(y.unique()) < 2:
+        print(f"  Skipping {target_name} because it has fewer than 2 unique classes.")
+        return
+
+    # Encode string labels to integers for model training
+    le = LabelEncoder()
+    y_encoded = le.fit_transform(y)
+
     # Split data
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=0.2, random_state=42
+    X_train, X_test, y_train_encoded, y_test_encoded = train_test_split(
+        X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
     )
 
     # Select and train model
     if model_type == 'linear':
-        model = LinearRegression()
+        model = LogisticRegression(random_state=42, max_iter=1000)
     else:  # mlp
-        # Using a 2-layer MLP. For better results, this could be tuned.
-        model = MLPRegressor(hidden_layer_sizes=(128, 128), random_state=42, max_iter=500, early_stopping=True)
-        print("  (Using MLPRegressor with 2 hidden layers of size 128)")
+        model = MLPClassifier(hidden_layer_sizes=(100, 100), random_state=42, max_iter=500, early_stopping=True)
 
-    model.fit(X_train, y_train)
+    print(f"  Training {model.__class__.__name__}...")
+    model.fit(X_train, y_train_encoded)
 
     # Evaluate model
-    y_pred = model.predict(X_test)
-    mse = mean_squared_error(y_test, y_pred)
-    r2 = r2_score(y_test, y_pred)
+    y_pred_encoded = model.predict(X_test)
+    accuracy = accuracy_score(y_test_encoded, y_pred_encoded)
 
-    print(f"  R-squared (R²): {r2:.4f}")
-    print(f"  Mean Squared Error (MSE): {mse:.4f}")
+    # Use original string labels for the classification report for readability
+    y_test_labels = le.inverse_transform(y_test_encoded)
+    y_pred_labels = le.inverse_transform(y_pred_encoded)
+    report = classification_report(y_test_labels, y_pred_labels, labels=le.classes_)
 
-    # Create and save plot
-    plt.style.use('seaborn-v0_8-whitegrid')
-    fig, ax = plt.subplots(figsize=(8, 6))
-    sns.scatterplot(x=y_test, y=y_pred, ax=ax, alpha=0.6, edgecolor='k')
-    # Add the y=x line for reference
-    lims = [
-        min(ax.get_xlim()[0], ax.get_ylim()[0]),
-        max(ax.get_xlim()[1], ax.get_ylim()[1]),
-    ]
-    ax.plot(lims, lims, 'r--', alpha=0.75, zorder=0, label="Perfect Prediction")
-    ax.set_xlabel("True Values")
-    ax.set_ylabel("Predicted Values")
-    ax.set_title(f"{probe_type} Probe: '{target_name}'\n$R^2 = {r2:.3f}$ | MSE = {mse:.3f}")
-    ax.legend()
-    ax.set_aspect('equal', adjustable='box')
+    print(f"  Accuracy: {accuracy:.4f}")
+    print("  Classification Report:")
+    print("    " + report.replace('\n', '\n    '))
 
-    plot_path = output_dir / f"{model_type}_probe_{target_name}.png"
-    plt.savefig(plot_path, dpi=300, bbox_inches='tight')
-    plt.close(fig)
-    print(f"  Saved plot to {plot_path}")
+    # Create and save plot (Confusion Matrix)
+    try:
+        plt.style.use('seaborn-v0_8-whitegrid')
+        fig, ax = plt.subplots(figsize=(10, 8))
+        ConfusionMatrixDisplay.from_estimator(
+            model, X_test, y_test_encoded, ax=ax, xticks_rotation='vertical',
+            cmap='Blues', display_labels=le.classes_
+        )
+        ax.set_title(f"{probe_type} Probe: '{target_name}'\nAccuracy = {accuracy:.3f}")
+
+        plot_path = output_dir / f"{model_type}_probe_confusion_matrix_{target_name}.png"
+        plt.savefig(plot_path, dpi=150, bbox_inches='tight')
+        plt.close(fig)
+        print(f"  Saved confusion matrix to {plot_path}")
+    except Exception as e:
+        print(f"Could not generate plot for {target_name}: {e}")
 
 
 def main(metadata_path: Path, output_dir: Path, model_type: str):
     """
-    Main function to run the linear probing analysis.
+    Main function to run the probing analysis.
     """
-    # Adjust output dir based on model type
     output_dir = output_dir / model_type
     output_dir.mkdir(parents=True, exist_ok=True)
     print(f"Output will be saved to {output_dir}")
@@ -132,14 +140,14 @@ def main(metadata_path: Path, output_dir: Path, model_type: str):
 
     for column in df_labels.columns:
         y = df_labels[column]
-        run_probe(X, y, column, output_dir, model_type)
+        run_classification_probe(X, y, column, output_dir, model_type)
 
     print("\nAnalysis complete.")
 
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(
-        description="Perform linear or non-linear (MLP) probing on a GRU World Model's latent space."
+        description="Perform linear or non-linear classification probing on a GRU World Model's latent space."
     )
     parser.add_argument(
         "--metadata-path",
@@ -158,7 +166,7 @@ if __name__ == "__main__":
         type=str,
         choices=['linear', 'mlp'],
         default='linear',
-        help="Type of model to use for probing: 'linear' for Linear Regression, 'mlp' for a non-linear MLP."
+        help="Type of model to use for probing: 'linear' for Logistic Regression, 'mlp' for MLPClassifier."
     )
     args = parser.parse_args()
 
