@@ -28,7 +28,7 @@ from src.world_model import WorldModelGRU, D_MODEL, GRU_NUM_LAYERS
 
 # --- Configuration ---
 # OLLAMA_API_URL = "http://192.168.2.39:11435/api/generate"
-OLLAMA_API_URL = "http://ollama:11435/api/generate"
+OLLAMA_API_URL = "http://host.docker.internal:11435/api/generate"
 # MODEL_NAME = "gemma3:12b"
 MODEL_NAME = "gemma3:27b"
 ONE_SHOT_IMAGE_PATH = DATA_DIR / "one_shot_example.png"
