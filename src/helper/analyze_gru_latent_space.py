@@ -1,18 +1,17 @@
 import argparse
+import base64
+import io
 import json
-import random
 from pathlib import Path
 
 import cv2
 import numpy as np
-import torch
-from stable_baselines3 import PPO
-from tqdm import tqdm
-import base64
-import io
 import requests
+import torch
 from PIL import Image
 from pydantic import ValidationError
+from stable_baselines3 import PPO
+from tqdm import tqdm
 
 from src.play_game_sb3 import SB3_MODEL_PATH
 from src.train_dyna_loop import get_vq_indices
@@ -28,8 +27,10 @@ from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM
 from src.world_model import WorldModelGRU, D_MODEL, GRU_NUM_LAYERS
 
 # --- Configuration ---
-OLLAMA_API_URL = "http://192.168.2.39:11435/api/generate"
-MODEL_NAME = "gemma3:12b"
+# OLLAMA_API_URL = "http://192.168.2.39:11435/api/generate"
+OLLAMA_API_URL = "http://ollama:11435/api/generate"
+# MODEL_NAME = "gemma3:12b"
+MODEL_NAME = "gemma3:27b"
 ONE_SHOT_IMAGE_PATH = DATA_DIR / "one_shot_example.png"
 
 # Your well-crafted prompt
@@ -166,7 +167,7 @@ def get_label(image_array: np.ndarray, one_shot_image_base64: str) -> dict | Non
     gets a JSON response, validates it, and returns it as a dictionary.
     """
     print("Encoding image...")
-    base64_image = image_to_base64(image_array)
+    image_to_label_base64 = image_to_base64(image_array)
 
     payload = {
         "model": MODEL_NAME,
@@ -298,6 +299,17 @@ def analyze_latent_space(
                 frame_rgb = (latest_frame * 255).astype(np.uint8)
                 # Get label from the multi-modal model
                 label = get_label(frame_rgb, one_shot_base64)
+
+                if label is None:
+                    print(f"Warning: No valid label obtained for step {step}. Skipping this frame.")
+                    action, _ = ppo_agent.predict(obs, deterministic=False)
+                    next_obs, reward, done, truncated, info = env.step(action)
+                    if done or truncated:
+                        print(f"Rollout ended early at step {step}.")
+                        break
+                    obs = next_obs
+                    latest_frame = obs[-1]
+                    continue
 
                 print(f"Label for step {step}: {label}")
 
