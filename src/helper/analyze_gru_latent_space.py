@@ -214,7 +214,8 @@ def analyze_latent_space(
         wm_path: str,
         output_dir: str,
         num_rollouts: int,
-        steps_per_rollout: int
+        steps_per_rollout: int,
+        start_from_number: int = 0
 ):
     """
     Generates rollouts, extracts latent states from a GRU World Model,
@@ -264,7 +265,7 @@ def analyze_latent_space(
 
     # --- Main Loop ---
     with open(metadata_path, 'w') as metadata_file:
-        for rollout_id in range(num_rollouts):
+        for rollout_id in range(start_from_number, start_from_number + num_rollouts):
             print(f"--- Starting Rollout {rollout_id + 1}/{num_rollouts} ---")
             rollout_frames_path = rollouts_path / f"rollout_{rollout_id:03d}"
             rollout_frames_path.mkdir(exist_ok=True)
@@ -359,6 +360,10 @@ if __name__ == "__main__":
         help="Number of rollouts to generate."
     )
     parser.add_argument(
+        "--num-rollout-start", type=int, default=0,
+        help="Starting index for rollout numbering."
+    )
+    parser.add_argument(
         "--steps-per-rollout", type=int, default=250,
         help="Maximum number of steps per rollout."
     )
@@ -383,5 +388,6 @@ if __name__ == "__main__":
         wm_path=args.wm_path,
         output_dir=args.output_dir,
         num_rollouts=args.num_rollouts,
-        steps_per_rollout=args.steps_per_rollout
+        steps_per_rollout=args.steps_per_rollout,
+        start_from_number=args.num_rollout_start
     )
