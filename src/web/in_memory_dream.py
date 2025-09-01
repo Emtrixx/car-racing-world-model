@@ -16,42 +16,19 @@ from src.train_transformer_world_model import HISTORY_LENGTH
 
 
 class Dreamer:
-    def __init__(self, model_type='gru', device=None):
+    def __init__(self, model_type, world_model, vq_vae, device):
         self.model_type = model_type
-        self.device = device if device else torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        self.vq_vae = None
-        self.world_model = None
+        self.device = device
+        self.vq_vae = vq_vae
+        self.world_model = world_model
         self.hidden_state = None
         self.current_tokens = None
         self.action_history = None
         self.token_history = None
 
-        self._load_models()
+        print(f"Dreamer instance created for model type: {self.model_type} on device: {self.device}")
 
-    def _load_models(self):
-        print(f"Loading models for {self.model_type}...")
-        self.vq_vae = VQVAE(embedding_dim=VQVAE_EMBEDDING_DIM, num_embeddings=VQVAE_NUM_EMBEDDINGS).to(self.device)
-        self.vq_vae.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=self.device))
-        self.vq_vae.eval()
-
-        if self.model_type == 'gru':
-            self.world_model = WorldModelGRU(
-                latent_dim=VQVAE_EMBEDDING_DIM,
-                action_dim=ACTION_DIM,
-            ).to(self.device)
-            self.world_model = torch.compile(self.world_model)
-            self.world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_GRU, map_location=self.device))
-        elif self.model_type == 'transformer':
-            self.world_model = WorldModelTransformer(
-                vqvae_embed_dim=VQVAE_EMBEDDING_DIM,
-                action_dim=ACTION_DIM,
-            ).to(self.device)
-            self.world_model = torch.compile(self.world_model)
-            self.world_model.load_state_dict(torch.load(WM_CHECKPOINT_FILENAME_TRANSFORMER, map_location=self.device))
-        else:
-            raise ValueError(f"Invalid model type: {self.model_type}")
-
-        self.world_model.eval()
+    
 
     def start(self):
         if self.model_type == 'gru':
@@ -139,7 +116,7 @@ class Dreamer:
             action_history_tensor = torch.stack(list(self.action_history)).unsqueeze(0)
             token_history_tensor = torch.stack(list(self.token_history)).unsqueeze(0)
 
-            tokens_for_decoding, _predicted_reward, _predicted_done = self.world_model.generate(
+            tokens_for_decoding, _predicted_reward, _predicted_done, _attention_maps = self.world_model.generate(
                 action_history_tensor, token_history_tensor
             )
 
