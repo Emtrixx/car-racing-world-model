@@ -28,8 +28,6 @@ class Dreamer:
 
         print(f"Dreamer instance created for model type: {self.model_type} on device: {self.device}")
 
-    
-
     def start(self):
         if self.model_type == 'gru':
             return self._start_gru()
@@ -53,7 +51,8 @@ class Dreamer:
         return self._tensor_to_image(initial_frame_tensor)
 
     def _start_transformer(self):
-        init_image_path = DATA_DIR / "init_frames/frame_0001.png"
+        random_frame_index = torch.randint(1, 9, (1,)).item()
+        init_image_path = DATA_DIR / "init_frames/frame_000{}.png".format(random_frame_index)
         if not os.path.exists(init_image_path):
             raise FileNotFoundError(f"Initial image not found at {init_image_path}")
 

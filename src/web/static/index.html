@@ -7,31 +7,32 @@
     <link rel="stylesheet" href="/static/style.css">
 </head>
 <body>
-    <div class="main-container">
-        <h1>Car Racing World Model</h1>
-        <div class="container">
-            <div class="controls">
-                <label for="model-select">Select Model:</label>
-                <select id="model-select">
-                    <option value="gru">GRU</option>
-                    <option value="transformer">Transformer</option>
-                </select>
-                <button id="start-btn">Start Dream</button>
-                <button id="reset-btn" disabled>Reset</button>
-            </div>
-            <div id="dream-container">
-                <canvas id="dream-canvas" width="512" height="512"></canvas>
-                <div id="loader" class="hidden">
-                    <div class="spinner"></div>
-                    <p>Loading...</p>
-                </div>
-            </div>
-            <div id="status-message"></div>
-            <div class="instructions">
-                <p>Use Arrow Keys to Drive</p>
+<div class="main-container">
+    <h1>Car Racing World Model</h1>
+    <div class="container">
+        <div class="controls">
+            <label for="model-select">Select Model:</label>
+            <select id="model-select">
+                <option value="gru">GRU</option>
+                <option value="transformer">Transformer</option>
+            </select>
+            <button id="start-btn">Start Dream</button>
+            <button id="reset-btn" disabled>Reset</button>
+        </div>
+        
+        <div id="dream-container">
+            <canvas id="dream-canvas" width="512" height="512"></canvas>
+            <div id="loader" class="hidden">
+                <div class="spinner"></div>
+                <p>Loading...</p>
             </div>
         </div>
+        <div id="status-message"></div>
+        <div class="instructions">
+            <p>Use Arrow Keys to Drive</p>
+        </div>
     </div>
-    <script src="/static/script.js"></script>
+</div>
+<script src="/static/script.js"></script>
 </body>
 </html>

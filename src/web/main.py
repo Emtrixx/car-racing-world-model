@@ -1,4 +1,5 @@
 import base64
+import os
 import uuid
 from contextlib import asynccontextmanager
 
@@ -19,6 +20,7 @@ from src.world_model import WorldModelGRU
 models = {}
 sessions = {}
 device = None
+IS_DEBUG_MODE = os.getenv('DEBUG', 'false').lower() == 'true'
 
 
 @asynccontextmanager
@@ -109,6 +111,9 @@ async def websocket_endpoint(websocket: WebSocket, session_id: str):
 
         while True:
             data = await websocket.receive_json()
+            if IS_DEBUG_MODE:
+                print(f"DEBUG [session:{session_id}]: Received data: {data}")
+
             if data['type'] == 'step':
                 action = data['action']
                 next_frame = dreamer.step(action)

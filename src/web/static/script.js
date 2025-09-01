@@ -9,23 +9,33 @@ document.addEventListener('DOMContentLoaded', () => {
 
     let keysPressed = {};
     const image = new Image();
-    let sessionId = null;
     let ws = null;
+    let gameLoopId = null;
 
     let lastFrameTime = 0;
     const frameInterval = 1000 / 8; // 8 FPS
 
+    // This is the most reliable place to handle UI changes after a frame is ready.
     image.onload = () => {
         ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+
+        // If loader is visible, hide it. This is the core fix.
+        if (!loader.classList.contains('hidden')) {
+            showLoader(false);
+            setControlsEnabled(true);
+            setStatus('Dream started! Use arrow keys to drive.');
+        }
     };
 
     function showLoader(show) {
         loader.classList.toggle('hidden', !show);
+        // loader.hidden = !show;
     }
 
-    function setControlsEnabled(enabled) {
-        startBtn.disabled = !enabled;
-        modelSelect.disabled = !enabled;
+    function setControlsEnabled(isRunning) {
+        startBtn.disabled = isRunning;
+        // modelSelect is always enabled
+        resetBtn.disabled = !isRunning;
     }
 
     function setStatus(message, isError = false) {
@@ -33,47 +43,97 @@ document.addEventListener('DOMContentLoaded', () => {
         statusMessage.style.color = isError ? '#d93025' : '#606770';
     }
 
+    function stopGameLoop() {
+        if (gameLoopId) {
+            cancelAnimationFrame(gameLoopId);
+            gameLoopId = null;
+        }
+    }
+
+    function startGameLoop() {
+        stopGameLoop(); // Ensure no multiple loops are running
+        lastFrameTime = performance.now();
+
+        function loop(currentTime) {
+            gameLoopId = requestAnimationFrame(loop);
+
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                return;
+            }
+
+            const elapsed = currentTime - lastFrameTime;
+            if (elapsed > frameInterval) {
+                lastFrameTime = currentTime - (elapsed % frameInterval);
+
+                let steer = 0.0;
+                let gas = -1.0;
+                let brake = -1.0;
+
+                if (keysPressed['ArrowUp']) {
+                    gas = 0.8;
+                }
+                if (keysPressed['ArrowDown']) {
+                    brake = 0.2;
+                }
+                if (keysPressed['ArrowLeft']) {
+                    steer = -1.0;
+                }
+                if (keysPressed['ArrowRight']) {
+                    steer = 1.0;
+                }
+
+                const action = [steer, gas, brake];
+
+                ws.send(JSON.stringify({type: 'step', action: action}));
+            }
+        }
+
+        gameLoopId = requestAnimationFrame(loop);
+    }
+
     function connectWebSocket(sessionId) {
         const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
-        ws = new WebSocket(`${protocol}//${window.location.host}/ws/${sessionId}`);
+        const wsUrl = `${protocol}//${window.location.host}/ws/${sessionId}`;
+        ws = new WebSocket(wsUrl);
 
         ws.onopen = () => {
             setStatus('Connection established. Starting dream...');
-            // The server will send the first frame automatically.
         };
 
         ws.onmessage = (event) => {
             const data = JSON.parse(event.data);
             if (data.frame) {
+                // This triggers the image.onload handler where the magic happens
                 image.src = `data:image/jpeg;base64,${data.frame}`;
             }
-            if (loader.style.display !== 'none') {
-                showLoader(false);
-                setStatus('Dream started! Use arrow keys to drive.');
+
+            if (!gameLoopId) {
+                startGameLoop();
             }
         };
 
         ws.onclose = () => {
             setStatus('Dream has ended. Please start a new one.', true);
-            setControlsEnabled(true);
-            resetBtn.disabled = true;
+            setControlsEnabled(false);
+            stopGameLoop();
             ws = null;
         };
 
         ws.onerror = (error) => {
             console.error('WebSocket error:', error);
             setStatus('An error occurred with the connection.', true);
-            setControlsEnabled(true);
-            resetBtn.disabled = true;
+            setControlsEnabled(false);
+            stopGameLoop();
         };
     }
 
-    startBtn.addEventListener('click', async () => {
+    async function startNewDream() {
         if (ws) {
             ws.close();
         }
+        stopGameLoop();
         setControlsEnabled(false);
-        resetBtn.disabled = true;
+        resetBtn.disabled = true; // Disable reset explicitly
         showLoader(true);
         setStatus('Initializing session...');
 
@@ -85,21 +145,20 @@ document.addEventListener('DOMContentLoaded', () => {
                 throw new Error(errorData.detail || 'Failed to start session');
             }
             const data = await response.json();
-            sessionId = data.session_id;
-            resetBtn.disabled = false;
-            connectWebSocket(sessionId);
-            lastFrameTime = performance.now();
-            requestAnimationFrame(gameLoop);
+            connectWebSocket(data.session_id);
         } catch (error) {
             console.error('Start error:', error);
             setStatus(`Error: ${error.message}`, true);
-            setControlsEnabled(true);
+            setControlsEnabled(false);
             showLoader(false);
         }
-    });
+    }
+
+    startBtn.addEventListener('click', startNewDream);
 
     resetBtn.addEventListener('click', () => {
         if (ws) {
+            stopGameLoop();
             ws.send(JSON.stringify({type: 'reset'}));
             showLoader(true);
             setStatus('Resetting dream...');
@@ -120,23 +179,13 @@ document.addEventListener('DOMContentLoaded', () => {
         }
     });
 
-    function gameLoop(currentTime) {
-        if (!ws || ws.readyState !== WebSocket.OPEN) {
-            return;
+    // Explicitly hide loader on initial page load to prevent it from showing briefly.
+    showLoader(false);
+
+    modelSelect.addEventListener('change', () => {
+        // If a game is currently running, changing the model triggers a restart with the new model.
+        if (ws && ws.readyState === WebSocket.OPEN) {
+            startNewDream();
         }
-
-        requestAnimationFrame(gameLoop);
-
-        const elapsed = currentTime - lastFrameTime;
-        if (elapsed > frameInterval) {
-            lastFrameTime = currentTime - (elapsed % frameInterval);
-
-            const steer = (keysPressed['ArrowLeft'] ? -1.0 : 0.0) + (keysPressed['ArrowRight'] ? 1.0 : 0.0);
-            const gas = keysPressed['ArrowUp'] ? 1.0 : 0.0;
-            const brake = keysPressed['ArrowDown'] ? 0.8 : 0.0;
-            const action = [steer, gas, brake];
-
-            ws.send(JSON.stringify({type: 'step', action: action}));
-        }
-    }
+    });
 });
