@@ -20,6 +20,9 @@ DETERMINISTIC_PLAY = True  # Use deterministic actions for playback
 # --- Define Model Path ---
 # SB3_MODEL_FILENAME = f"cnn_sb3_test_carracing-v3_final.zip"
 SB3_MODEL_FILENAME = f"cnn_sb3_default_carracing-v3_final.zip"
+# SB3_MODEL_FILENAME = f"cnn_sb3_default_carracing-v3_final_1_000_000.zip"
+# SB3_MODEL_FILENAME = f"dyn_transformer_default_carracing-v3_final.zip"
+# SB3_MODEL_FILENAME = f"ppo_model_1835008_steps.zip"
 # SB3_MODEL_FILENAME = f"cnn_sb3_default_carracing-v3_best/best_model.zip"  # best
 # SB3_MODEL_FILENAME = f"cnn_sb3_default_carracing-v3/ppo_model_5000000_steps.zip"  # specific step
 SB3_MODEL_PATH = pathlib.Path(SB3_CHECKPOINTS_DIR / SB3_MODEL_FILENAME)

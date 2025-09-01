@@ -57,11 +57,17 @@ VQ_VAE_CHECKPOINT_BEST_FILENAME = VQVAE_CHECKPOINTS_DIR / f"{ENV_NAME}_vqvae_ld{
 WM_MODEL_SUFFIX_GRU = f"ld{VQVAE_EMBEDDING_DIM}_ac{ACTION_DIM}_dm{D_MODEL}_ly{GRU_NUM_LAYERS}"
 WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / f"{ENV_NAME}_worldmodel_gru_{WM_MODEL_SUFFIX_GRU}.pth"
 # WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / "world_model_step_45000.pth"
-# placeholder (todo: add suffix)
+# WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / "dyn_default_wm_step_1835008.pth"
+WM_CHECKPOINT_FILENAME_GRU = GRU_WM_CHECKPOINTS_DIR / "CarRacing-v3_worldmodel_gru_ld256_ac3_dm1024_ly3.pth"
 # WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_default.pth"
+WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_t_btf_default.pth"
+
+
+# WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_test.pth"
 # WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_test.pth"
 # WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_step_10000.pth"
-WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_default_wm_step_958464.pth"
+# WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_default_wm_step_958464.pth"
+# WM_CHECKPOINT_FILENAME_TRANSFORMER = TRANSFORMER_WM_CHECKPOINTS_DIR / f"dyn_default_carracing-v3_wm_final.pth"
 
 
 # --- Preprocessing Function ---
@@ -378,6 +384,10 @@ def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, s
     vq_vae = vq_vae.to(device)
     vq_vae.eval()
     vq_vae = torch.compile(vq_vae)
+
+    if "cuda" in str(config['device']):
+        print(f"Using float32 matmul high precision for CUDA training.")
+        torch.set_float32_matmul_precision('high')
 
     if world_model_type == 'transformer':
         world_model = WorldModelTransformer(
