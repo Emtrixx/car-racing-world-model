@@ -352,7 +352,7 @@ class DynaTrainer:
         print(
             f"Total parameters in World Model: {fmt_int(world_model_param_count)}")
         ppo_param_count = sum(p.numel() for p in self.ppo_agent.policy.parameters())
-        print(f"Total trainable parameters in PPO policy: {fmt_int(ppo_param_count)}")
+        print(f"Total parameters in PPO policy: {fmt_int(ppo_param_count)}")
         vqvae_param_count = sum(p.numel() for p in self.vq_vae.parameters())
         print(f"Total parameters in VQ-VAE: {fmt_int(vqvae_param_count)}")
 

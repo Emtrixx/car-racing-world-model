@@ -153,7 +153,8 @@ class TransformerHistoryDataset(Dataset):
 class WorldModelTransformerTrainer:
     """Trainer for the history-aware Transformer World Model."""
 
-    def __init__(self, world_model, vq_vae_model, config, train_dataloader, val_dataloader=None, logger=None):
+    def __init__(self, world_model, vq_vae_model, config, train_dataloader, val_dataloader=None, logger=None,
+                 run_id=None):
         self.world_model = world_model
         self.vq_vae_model = vq_vae_model
         self.config = config
@@ -163,7 +164,7 @@ class WorldModelTransformerTrainer:
         self.val_dataloader = val_dataloader
         self.logger = logger
         self.use_amp = "cuda" in str(self.device)
-        self.id = int(time.time())
+        self.id = run_id
 
         # Use fused Adam optimizer for performance on CUDA
         self.optimizer = torch.optim.Adam(
@@ -501,14 +502,16 @@ def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data
     vq_vae_model.load_state_dict(torch.load(VQ_VAE_CHECKPOINT_FILENAME, map_location=config['device']))
     vq_vae_model.eval()
 
+    run_id = int(time.time())
+    print(f"Run ID: {run_id}")
     logger = ExperimentLogger(log_dir="logs", experiment_name="transformer_wm_training")
     run_name = run_name_arg
     if not run_name:
-        run_name = f"{config_name}_{int(time.time())}"
+        run_name = f"{config_name}_{run_id}"
     logger.start_run(run_name=run_name, config=config)
 
     trainer = WorldModelTransformerTrainer(
-        world_model, vq_vae_model, config, train_loader, val_loader, logger
+        world_model, vq_vae_model, config, train_loader, val_loader, logger, run_id
     )
 
     best_val_loss = float('inf')
