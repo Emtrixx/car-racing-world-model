@@ -163,6 +163,7 @@ class WorldModelTransformerTrainer:
         self.val_dataloader = val_dataloader
         self.logger = logger
         self.use_amp = "cuda" in str(self.device)
+        self.id = int(time.time())
 
         # Use fused Adam optimizer for performance on CUDA
         self.optimizer = torch.optim.Adam(
@@ -352,7 +353,7 @@ class WorldModelTransformerTrainer:
                     model_state = self.world_model.module.state_dict() if isinstance(self.world_model, \
                                                                                      nn.DataParallel) else self.world_model.state_dict()
                     torch.save(model_state,
-                               TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_t_btf_step_{global_step}.pth")
+                               TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_{self.id}_step_{global_step}.pth")
                     tqdm.write(f"Saved model checkpoint at step {global_step}.")
 
                 if profiler:
@@ -534,7 +535,7 @@ def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data
 
     if not trial:
         TRANSFORMER_WM_CHECKPOINTS_DIR.mkdir(exist_ok=True)
-        final_filename = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_world_model_t_btf_{config_name}.pth"
+        final_filename = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_{trainer.id}_{config_name}.pth"
         torch.save(world_model.state_dict(), final_filename)
         print(f"Final model saved to {final_filename}")
 
