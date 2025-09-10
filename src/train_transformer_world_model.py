@@ -352,8 +352,9 @@ class WorldModelTransformerTrainer:
                 if global_step % checkpoint_freq == 0 and not trial:
                     model_state = self.world_model.module.state_dict() if isinstance(self.world_model, \
                                                                                      nn.DataParallel) else self.world_model.state_dict()
-                    torch.save(model_state,
-                               TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_{self.id}_step_{global_step}.pth")
+                    save_dir = TRANSFORMER_WM_CHECKPOINTS_DIR / f"{self.id}"
+                    save_dir.mkdir(exist_ok=True)
+                    torch.save(model_state, save_dir / f"transformer_wm_step_{global_step}.pth")
                     tqdm.write(f"Saved model checkpoint at step {global_step}.")
 
                 if profiler:
@@ -534,8 +535,9 @@ def train_transformer_wm(config_name: str, trial: optuna.Trial = None, save_data
         logger.end_run()
 
     if not trial:
-        TRANSFORMER_WM_CHECKPOINTS_DIR.mkdir(exist_ok=True)
-        final_filename = TRANSFORMER_WM_CHECKPOINTS_DIR / f"transformer_wm_{trainer.id}_{config_name}.pth"
+        save_dir = TRANSFORMER_WM_CHECKPOINTS_DIR / f"{trainer.id}"
+        save_dir.mkdir(exist_ok=True)
+        final_filename = save_dir / f"transformer_wm_{config_name}_final.pth"
         torch.save(world_model.state_dict(), final_filename)
         print(f"Final model saved to {final_filename}")
 
