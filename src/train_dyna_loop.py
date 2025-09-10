@@ -24,7 +24,7 @@ from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED
     TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE, TRANSFORMER_MAX_SEQ_LEN
 from src.utils import (
     DEVICE, ENV_NAME, ACTION_DIM, NUM_STACK, VQ_VAE_CHECKPOINT_FILENAME,
-    TRANSFORMER_WM_CHECKPOINTS_DIR, SB3_LOG_DIR, _create_dream_env, GRU_WM_CHECKPOINTS_DIR
+    TRANSFORMER_WM_CHECKPOINTS_DIR, SB3_LOG_DIR, _create_dream_env, GRU_WM_CHECKPOINTS_DIR, fmt_int
 )
 from src.utils import _init_env_fn_sb3
 from src.vq_conv_vae import VQVAE, GRID_SIZE, VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM
@@ -347,6 +347,14 @@ class DynaTrainer:
         if ppo_checkpoint:
             print(f"Loading PPO agent from {ppo_checkpoint}")
             self.ppo_agent.load(ppo_checkpoint, env=self.real_env)
+
+        world_model_param_count = sum(p.numel() for p in self.world_model.parameters())
+        print(
+            f"Total parameters in World Model: {fmt_int(world_model_param_count)}")
+        ppo_param_count = sum(p.numel() for p in self.ppo_agent.policy.parameters())
+        print(f"Total trainable parameters in PPO policy: {fmt_int(ppo_param_count)}")
+        vqvae_param_count = sum(p.numel() for p in self.vq_vae.parameters())
+        print(f"Total parameters in VQ-VAE: {fmt_int(vqvae_param_count)}")
 
         self.replay_buffer = deque(maxlen=config['wm_buffer_size'])
         self.wm_optimizer = torch.optim.Adam(self.world_model.parameters(), lr=config['wm_learning_rate'])

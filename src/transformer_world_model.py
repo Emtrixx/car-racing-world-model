@@ -7,7 +7,7 @@ from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS, GRID_SIZE
 # --- Default Hyperparameters ---
 TRANSFORMER_EMBED_DIM = 512
 TRANSFORMER_NUM_HEADS = 8
-TRANSFORMER_NUM_LAYERS = 4
+TRANSFORMER_NUM_LAYERS = 10
 TRANSFORMER_FF_DIM = 2048  # Typically 4 * embed_dim
 TRANSFORMER_DROPOUT_RATE = 0.1
 TRANSFORMER_MAX_SEQ_LEN = 4096  # Maximum sequence length for positional encoding

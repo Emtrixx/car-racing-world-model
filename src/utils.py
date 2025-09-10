@@ -432,3 +432,8 @@ def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, s
         **env_kwargs
     )
     return FrameStackWrapper(dream_env, num_stack=NUM_STACK)
+
+
+def fmt_int(n: int) -> str:
+    # 1_000_000 style grouping
+    return f"{int(n):_}"
