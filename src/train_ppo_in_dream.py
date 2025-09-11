@@ -83,7 +83,7 @@ def get_dream_config(name="default"):
     dream_config = {
         "total_timesteps": 2_000_000,
         "dream_horizon": 32,
-        "num_envs": 32,
+        "num_envs": 8,
         "seed": random.randint(0, 2 ** 31 - 1),
         "device": DEVICE,
         "action_dim": ACTION_DIM,
