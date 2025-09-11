@@ -132,7 +132,7 @@ class OptunaPruningCallback(BaseCallback):
         return True
 
 
-def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.Trial = None) -> float:
+def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.Trial = None, run_name: str = None, seed: int = None) -> float:
     """
     Train a PPO agent using Stable Baselines3 with the specified configuration.
     """
@@ -182,9 +182,12 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         config["num_envs"] = 12  # Use fewer envs for HPO to reduce overhead
 
     # generate seed and print it
-    seed = config["seed"]
+    if seed is None:
+        seed = config["seed"]
     print(f"Using seed: {seed}")
-    set_random_seed(config["seed"])
+    set_random_seed(seed)
+    config["seed"] = seed # Set the seed in the config for env creation
+    
 
     # Prepare parameters for environment creation
     env_params_for_creation = {
@@ -209,7 +212,8 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
     # Learning rate schedule
     lr_schedule = linear_schedule(config["learning_rate"])
 
-    run_name = config_name
+    if run_name is None:
+        run_name = config_name
     if trial:
         run_name = f"{config_name}-trial-{trial.number}"
 
@@ -364,6 +368,18 @@ if __name__ == "__main__":
              "the model will be loaded and training will continue from that point."
     )
     parser.add_argument(
+        "--run-name",
+        type=str,
+        default=None,
+        help="Name for the logging run."
+    )
+    parser.add_argument(
+        "--seed",
+        type=int,
+        default=None,
+        help="Random seed for reproducibility."
+    )
+    parser.add_argument(
         "--optimize",
         action="store_true",
         help="Enable hyperparameter optimization with Optuna."
@@ -428,4 +444,4 @@ if __name__ == "__main__":
             print(f"    {key}: {value}")
 
     else:
-        train_ppo_sb3(args.config, checkpoint_path=args.checkpoint)
+        train_ppo_sb3(args.config, checkpoint_path=args.checkpoint, run_name=args.run_name, seed=args.seed)

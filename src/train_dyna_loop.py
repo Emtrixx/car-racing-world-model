@@ -234,13 +234,15 @@ class SystemMetricsCallback(BaseCallback):
 
 class DynaTrainer:
     def __init__(self, config, config_name, world_model_type, wm_checkpoint_path=None, ppo_checkpoint=None,
-                 run_name=None, val_data_path=None):
+                 run_name=None, val_data_path=None, seed: int = None):
         self.config = config
         self.config_name = config_name
         self.world_model_type = world_model_type
         self.device = torch.device(config['device'])
         self.device_type = str(self.device).split(':')[0]
-        seed = config.get('seed', None)
+        if seed is None:
+            seed = config.get('seed', None)
+        self.config['seed'] = seed
         print(f"Seed for this run: {seed}")
         set_random_seed(seed)
 
@@ -842,6 +844,7 @@ if __name__ == "__main__":
     parser.add_argument("--ppo-checkpoint", type=str, default=None, help="Path to a pre-trained PPO agent checkpoint.")
     parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
     parser.add_argument("--val-data-path", type=str, default=None, help="Path to validation data for the world model.")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
     args = parser.parse_args()
 
     config = get_combined_config(args.config)
@@ -849,7 +852,8 @@ if __name__ == "__main__":
                           wm_checkpoint_path=args.wm_checkpoint,
                           ppo_checkpoint=args.ppo_checkpoint,
                           run_name=args.run_name,
-                          val_data_path=args.val_data_path)
+                          val_data_path=args.val_data_path,
+                          seed=args.seed)
 
     if "cuda" in str(config['device']):
         print(f"Using float32 matmul high precision for CUDA training.")

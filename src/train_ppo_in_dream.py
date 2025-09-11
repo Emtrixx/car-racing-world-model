@@ -107,12 +107,15 @@ def get_dream_config(name="default"):
 
 
 def train_ppo_in_dream(config_name: str, model_type: str, wm_checkpoint_path: str, ppo_checkpoint_path: str,
-                       buffer_path: str, run_name: str):
+                       buffer_path: str, run_name: str, seed: int = None):
     """
     Train a PPO agent inside the world model's dream.
     """
     config = get_dream_config(config_name)
-    seed = config.get('seed', None)
+    if seed is None:
+        seed = config.get('seed', None)
+    config['seed'] = seed
+
     print(f"Starting PPO training in dream with config: {config_name}, model: {model_type}, seed: {seed}...")
     set_random_seed(seed)
     start_time = time.time()
@@ -266,6 +269,7 @@ if __name__ == "__main__":
     parser.add_argument("--ppo-checkpoint", type=str, default=None,
                         help="Path to a pre-trained PPO agent checkpoint to continue training.")
     parser.add_argument("--run-name", type=str, default=None, help="Name for the logging run.")
+    parser.add_argument("--seed", type=int, default=None, help="Random seed for reproducibility.")
 
     args = parser.parse_args()
 
@@ -279,5 +283,6 @@ if __name__ == "__main__":
         wm_checkpoint_path=args.wm_checkpoint,
         ppo_checkpoint_path=args.ppo_checkpoint,
         buffer_path=args.buffer,
-        run_name=args.run_name
+        run_name=args.run_name,
+        seed=args.seed
     )
