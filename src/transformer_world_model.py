@@ -131,6 +131,7 @@ class WorldModelTransformer(nn.Module):
         self.action_dim = action_dim
         self.dropout = nn.Dropout(dropout_rate)
         self.vqvae_embed_dim = vqvae_embed_dim
+        self.attention_maps = None  # For storing attention maps if needed
 
         # --- Embedding Layers ---
         self.token_embedding = nn.Embedding(codebook_size, vqvae_embed_dim)
@@ -288,7 +289,7 @@ class WorldModelTransformer(nn.Module):
             latent_token_history: The history of VQ-VAE token grids.
             get_attention: If True, returns attention maps from the decoder.
         Returns:
-            A tuple of (next_token_indices, reward, done, attention_maps).
+            A tuple of (next_token_indices, reward, done).
         """
         batch_size, history_len = action_history.shape[0], action_history.shape[1]
 
@@ -318,6 +319,8 @@ class WorldModelTransformer(nn.Module):
             need_weights=get_attention,
             average_attn_weights=False
         )
+        if get_attention:
+            self.attention_maps = attention_maps
 
         # --- Extract Predictions ---
         global_token_output = decoder_output[:, -1, :]  # [B, D]
@@ -339,7 +342,7 @@ class WorldModelTransformer(nn.Module):
         # Sigmoid on done logits to get probability
         predicted_done = torch.sigmoid(predicted_done_logits) > 0.5
 
-        return generated_tokens_indices, predicted_reward, predicted_done, attention_maps
+        return generated_tokens_indices, predicted_reward, predicted_done
 
 
 # --- Usage Example ---
@@ -424,7 +427,8 @@ if __name__ == '__main__':
     print("\n--- Test: Inference with Attention Maps ---")
     world_model_tf.eval()
     with torch.no_grad():
-        _, _, _, attention_maps = world_model_tf.generate(action_hist, tokens_hist, get_attention=True)
+        _, _, _ = world_model_tf.generate(action_hist, tokens_hist, get_attention=True)
+        attention_maps = world_model_tf.attention_maps
 
     assert attention_maps is not None
     print(f"Attention maps keys: {attention_maps.keys()}")

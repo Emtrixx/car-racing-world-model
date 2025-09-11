@@ -21,6 +21,7 @@ from src.vq_conv_vae import VQVAE, VQVAE_EMBEDDING_DIM
 from src.world_model import WorldModelGRU
 from src.play_game_sb3 import SB3_MODEL_PATH
 from src.vq_conv_vae import VQVAE_NUM_EMBEDDINGS
+from src.train_transformer_world_model import HISTORY_LENGTH
 
 
 def generate_video(frames, output_path, fps=8):
@@ -84,7 +85,7 @@ if __name__ == '__main__':
                         help="Total number of steps to dream for.")
     parser.add_argument('--horizon', type=int, default=100,
                         help="Maximum steps per dream episode before truncation.")
-    parser.add_argument('--history_len', type=int, default=18,
+    parser.add_argument('--history_len', type=int, default=HISTORY_LENGTH,
                         help="History length for the Transformer model.")
     parser.add_argument('--real_buffer_size', type=int, default=500,
                         help="Size of the real experience buffer for initialization.")

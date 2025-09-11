@@ -95,14 +95,16 @@ class DreamEnvTransformer(gym.Env):
         token_hist_tensor = torch.stack(list(self.token_history)).to(self.device).unsqueeze(0)
 
         # Use the efficient generate method for single-step inference
-        next_tokens, reward_tensor, done_tensor = self.world_model.generate(action_hist_tensor, token_hist_tensor)
+        next_tokens, reward_tensor, done_tensor = self.world_model.generate(action_hist_tensor,
+                                                                            token_hist_tensor)
 
         # next_tokens is [B, num_tokens], reward is [B, 1], done is [B, 1]
         # We remove the batch dimension (which is 1) for processing
         next_tokens_no_batch = next_tokens.squeeze(0)
         self.token_history.append(next_tokens_no_batch.cpu())
 
-        obs = self._decode_latent_to_obs(next_tokens_no_batch.view(self.world_model.grid_size, self.world_model.grid_size))
+        obs = self._decode_latent_to_obs(
+            next_tokens_no_batch.view(self.world_model.grid_size, self.world_model.grid_size))
         reward = reward_tensor.item()
         done = done_tensor.item()
 

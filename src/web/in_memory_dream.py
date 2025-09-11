@@ -115,7 +115,7 @@ class Dreamer:
             action_history_tensor = torch.stack(list(self.action_history)).unsqueeze(0)
             token_history_tensor = torch.stack(list(self.token_history)).unsqueeze(0)
 
-            tokens_for_decoding, _predicted_reward, _predicted_done, _attention_maps = self.world_model.generate(
+            tokens_for_decoding, _predicted_reward, _predicted_done = self.world_model.generate(
                 action_history_tensor, token_history_tensor
             )
 
