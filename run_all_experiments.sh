@@ -5,9 +5,11 @@
 
 # --- Configuration ---
 # Define the seeds you want to run for each experiment
-SEEDS=(123 456 789) # Using 3 seeds as an example. For robust results, 5-10 seeds are recommended.
+#SEEDS=(1984429864)
+SEEDS=(1984429864 746667280 1417083052 681937155 1297093550 1665867878 795033078 1671797940 480750043 2084906989)
 
 # Set the config to use ('test' is for quick checks, 'default' for full runs)
+#CONFIG="test"
 CONFIG="default"
 
 # --- Pre-requisites for Dream and Dyna Agents ---
@@ -15,10 +17,13 @@ CONFIG="default"
 # train a world model using `train_transformer_world_model.py` or `train_world_model_parallel.py` (for GRU)
 # and generate a buffer by running the PPO agent for a while and saving the buffer.
 
-# NOTE: Replace these with actual paths to your files
-WM_TRANSFORMER_CHECKPOINT="checkpoints/transformer_wm_checkpoints/default_transformer_wm_step_200000.pth"
-WM_GRU_CHECKPOINT="checkpoints/gru_wm_checkpoints/default_gru_wm_step_200000.pth"
-REPLAY_BUFFER="data/replay_buffer_200k.pt" # Example path
+#WM_TRANSFORMER_CHECKPOINT="checkpoints/transformer_wm_checkpoints/transformer_wm_default_final.pth"
+#WM_GRU_CHECKPOINT="checkpoints/gru_wm_checkpoints/CarRacing-v3_worldmodel_gru_ld256_ac3_dm1024_ly3.pth"
+#REPLAY_BUFFER="data/transformer_world_model_data"
+
+# WM_TRANSFORMER_CHECKPOINT="checkpoints/transformer_wm_checkpoints/1757523194/transformer_wm_default_final.pth"
+WM_GRU_CHECKPOINT="checkpoints/gru_wm_checkpoints/CarRacing-v3_worldmodel_gru_ld256_ac3_dm1024_ly3.pth"
+REPLAY_BUFFER="data/transformer_world_model_data"
 
 # Check if prerequisite files exist
 if [ ! -f "$WM_TRANSFORMER_CHECKPOINT" ]; then

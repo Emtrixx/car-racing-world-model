@@ -132,7 +132,8 @@ class OptunaPruningCallback(BaseCallback):
         return True
 
 
-def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.Trial = None, run_name: str = None, seed: int = None) -> float:
+def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.Trial = None, run_name: str = None,
+                  seed: int = None) -> float:
     """
     Train a PPO agent using Stable Baselines3 with the specified configuration.
     """
@@ -186,8 +187,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
         seed = config["seed"]
     print(f"Using seed: {seed}")
     set_random_seed(seed)
-    config["seed"] = seed # Set the seed in the config for env creation
-    
+    config["seed"] = seed  # Set the seed in the config for env creation
 
     # Prepare parameters for environment creation
     env_params_for_creation = {
@@ -311,7 +311,7 @@ def train_ppo_sb3(config_name: str, checkpoint_path: str = None, trial: optuna.T
     finally:
         if not trial:
             # Save the final model only on regular runs
-            final_model_path = SB3_SAVE_DIR / f"cnn_sb3_{config_name}_{ENV_NAME.lower()}_final.zip"
+            final_model_path = SB3_SAVE_DIR / f"cnn_sb3_{run_name}_{ENV_NAME.lower()}_final.zip"
             model.save(final_model_path)
             print(f"Final model saved to {final_model_path}")
 
