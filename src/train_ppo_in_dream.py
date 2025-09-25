@@ -24,6 +24,62 @@ from src.world_model import WorldModelGRU, GRU_NUM_LAYERS, D_MODEL as GRU_D_MODE
 from src.train_transformer_world_model import HISTORY_LENGTH
 
 
+def _create_start_state_pool(replay_buffer_data: dict, model_type: str, history_length: int, pool_size: int = 10000) -> list:
+    """
+    Scans the replay buffer to find valid starting points for dream sequences and creates a smaller, random pool.
+    This is done once in the main process to save memory in the subprocesses.
+    """
+    num_transitions = replay_buffer_data['actions'].shape[0]
+    is_first_step_key = 'is_first_steps' if 'is_first_steps' in replay_buffer_data else 'is_first_step'
+    is_first_steps = replay_buffer_data[is_first_step_key]
+    dones = replay_buffer_data['dones']
+    valid_indices = []
+
+    print(f"Scanning {num_transitions} transitions to find valid start states for {model_type} model...")
+
+    if model_type == 'transformer':
+        # For the transformer, a valid start is an index `i` such that the sequence
+        # from `i` to `i + history_length` does not cross an episode boundary.
+        for i in range(num_transitions - history_length):
+            # The sequence is invalid if 'is_first_step' is true for any step after the first one,
+            # or if a 'done' is true for any step before the last one.
+            if not torch.any(is_first_steps[i + 1:i + history_length]) and not torch.any(dones[i:i + history_length - 1]):
+                valid_indices.append(i)
+    elif model_type == 'gru':
+        # For the GRU, any non-terminal state is a valid starting point.
+        # We look for indices `i` where the *previous* state was not a 'done' state.
+        # This ensures the state at `i` is a valid start.
+        for i in range(num_transitions):
+            if i == 0 or not dones[i - 1]:
+                valid_indices.append(i)
+    else:
+        raise ValueError(f"Unknown model type: {model_type}")
+
+    print(f"Found {len(valid_indices)} potential start indices.")
+
+    # Create a random subset of the valid indices
+    random.shuffle(valid_indices)
+    pool_indices = valid_indices[:pool_size]
+    print(f"Creating a pool of {len(pool_indices)} start states.")
+
+    # From the selected indices, extract the necessary data to form the pool
+    start_state_pool = []
+    if model_type == 'transformer':
+        for i in pool_indices:
+            start_state_pool.append({
+                'action_history': replay_buffer_data['actions'][i:i + history_length],
+                'token_history': replay_buffer_data['prev_tokens'][i:i + history_length],
+                'initial_obs_tokens': replay_buffer_data['prev_tokens'][i + history_length]
+            })
+    elif model_type == 'gru':
+        for i in pool_indices:
+            start_state_pool.append({
+                'initial_tokens': replay_buffer_data['prev_tokens'][i]
+            })
+
+    return start_state_pool
+
+
 def get_dream_config(name="default"):
     """
     Provides configurations for training PPO in the dream environment.
@@ -150,11 +206,12 @@ def train_ppo_in_dream(config_name: str, model_type: str, wm_checkpoint_path: st
     world_model.load_state_dict(torch.load(wm_checkpoint_path, map_location=DEVICE))
     world_model.eval()
 
-    # Load replay buffer
+    # Load replay buffer and create a smaller pool of start states to save memory
     print(f"Loading replay buffer from {buffer_path}")
     replay_buffer_data = torch.load(buffer_path, map_location='cpu')
-    replay_buffer = convert_dict_to_deque(replay_buffer_data)
-    print(f"Loaded {len(replay_buffer)} transitions from replay buffer.")
+    history_length = config['history_length'] if model_type == 'transformer' else 0
+    start_state_pool = _create_start_state_pool(replay_buffer_data, model_type, history_length)
+    del replay_buffer_data  # Free up memory
 
     # Create Dream Environment
     print("Creating dream environment...")
@@ -164,14 +221,14 @@ def train_ppo_in_dream(config_name: str, model_type: str, wm_checkpoint_path: st
     if config["num_envs"] > 1:
         env_fns = [
             (lambda i=i: _create_dream_env(
-                config, wm_state_dict, vq_vae_state_dict, replay_buffer, config['seed'] + i,
+                config, wm_state_dict, vq_vae_state_dict, start_state_pool, config['seed'] + i,
                 model_type
             )) for i in range(config['num_envs'])
         ]
         dream_env = SubprocVecEnv(env_fns, start_method='spawn')
     else:
         dream_env = DummyVecEnv([lambda: _create_dream_env(
-            config, wm_state_dict, vq_vae_state_dict, replay_buffer, config['seed'],
+            config, wm_state_dict, vq_vae_state_dict, start_state_pool, config['seed'],
             model_type
         )])
 

@@ -413,8 +413,10 @@ def convert_dict_to_deque(data_dict: dict) -> deque:
     print(f"Number of transitions {num_transitions}")
 
     # The key for 'is_first_step' might be inconsistent. Let's find the correct one.
-    # is_first_step_key = 'is_first_steps' if 'is_first_steps' in data_dict else 'is_first_step'
-    is_first_step_key = 'is_first_steps'
+    is_first_step_key = 'is_first_steps' if 'is_first_steps' in data_dict else 'is_first_step'
+    if is_first_step_key not in data_dict:
+        raise KeyError(f"Replay buffer is missing both 'is_first_steps' and 'is_first_step' keys.")
+
 
     replay_buffer = deque(
         (
@@ -424,7 +426,7 @@ def convert_dict_to_deque(data_dict: dict) -> deque:
                 'reward': data_dict['rewards'][i],
                 'done': data_dict['dones'][i],
                 'next_tokens': data_dict['next_tokens'][i],
-                'is_first_step': data_dict['is_first_steps'][i],
+                'is_first_step': data_dict[is_first_step_key][i],
             }
             for i in range(num_transitions)
         ),

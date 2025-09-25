@@ -373,10 +373,10 @@ def _init_env_fn_sb3(rank: int, seed: int = 0, config_env_params: dict = None):
     return env
 
 
-def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, seed, world_model_type):
+def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, start_state_pool, seed, world_model_type):
     """
     A pickleable function to create the dream environment in a subprocess.
-    It reconstructs the models from their state_dicts.
+    It reconstructs the models from their state_dicts and uses a pre-computed pool of start states.
     """
     device = torch.device(config['device'])
 
@@ -430,7 +430,7 @@ def _create_dream_env(config, wm_state_dict, vq_vae_state_dict, replay_buffer, s
         device=device,
         seed=seed,
         horizon=config['dream_horizon'],
-        real_buffer=replay_buffer,
+        start_state_pool=start_state_pool,
         **env_kwargs
     )
     return FrameStackWrapper(dream_env, num_stack=NUM_STACK)

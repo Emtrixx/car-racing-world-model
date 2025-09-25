@@ -15,7 +15,7 @@ class GruDreamEnv(gym.Env):
     The agent interacts with the world model's "dream" instead of the real environment.
     """
 
-    def __init__(self, world_model: WorldModelGRU, vq_vae: VQVAE, device, seed, horizon, real_buffer):
+    def __init__(self, world_model: WorldModelGRU, vq_vae: VQVAE, device, seed, horizon, start_state_pool: list):
         super(GruDreamEnv, self).__init__()
 
         self.world_model = world_model
@@ -23,7 +23,7 @@ class GruDreamEnv(gym.Env):
         self.device = device
         self.seed = seed
         self.horizon = horizon
-        self.real_buffer = real_buffer
+        self.start_state_pool = start_state_pool
 
         self.action_space = spaces.Box(low=-1.0, high=1.0, shape=(3,), dtype=np.float32)
         self.observation_space = spaces.Box(low=0.0, high=1.0, shape=(64, 64, 3), dtype=np.float32)
@@ -31,29 +31,16 @@ class GruDreamEnv(gym.Env):
         self.hidden_state = None
         self.current_latent_codes = None
         self.current_step = 0
-        self.valid_start_indices = []
-
-    def _find_valid_start_indices(self):
-        """
-        Scans the real buffer to find all indices that can start a valid dream sequence.
-        A valid start is any state that is not a terminal state.
-        """
-        self.valid_start_indices = [
-            i for i, transition in enumerate(self.real_buffer)
-            if not transition['done']
-        ]
 
     def reset(self, seed=None, options=None):
         super().reset(seed=seed if seed is not None else self.seed)
 
-        self._find_valid_start_indices()
+        if not self.start_state_pool:
+            raise ValueError("Start state pool is empty. Cannot reset dream environment.")
 
-        if not self.valid_start_indices:
-            raise ValueError("No valid start indices found in the replay buffer. "
-                             "Buffer might be empty or contain only terminal states.")
-
-        start_idx = random.choice(self.valid_start_indices)
-        initial_tokens = self.real_buffer[start_idx]['prev_tokens'].to(self.device)
+        # Choose a random starting state from the pre-computed pool
+        start_state = random.choice(self.start_state_pool)
+        initial_tokens = start_state['initial_tokens'].to(self.device)
 
         # Squeeze to [grid_size, grid_size]
         self.current_latent_codes = initial_tokens.view(self.world_model.grid_size, self.world_model.grid_size)
