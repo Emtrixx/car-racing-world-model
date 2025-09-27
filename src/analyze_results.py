@@ -93,16 +93,16 @@ def main():
     # Assumes a directory structure like: `logs/sb3_logs/{run_name}_eval/evaluations.npz`
     # The `run_name` should be consistent across runs of the same algorithm type.
     log_patterns = {
-        # "PPO_SB3": str(LOG_DIR / "ppo_sb3_*_eval/evaluations.npz"),
-        # "Dream_GRU": str(LOG_DIR / "ppo_dream_gru_*_eval/evaluations.npz"),
-        # "Dream_Transformer": str(LOG_DIR / "ppo_dream_transformer_*_eval/evaluations.npz"),
-        # "Dyna_GRU": str(LOG_DIR / "dyn_gru_*_eval/evaluations.npz"),
-        # "Dyna_Transformer": str(LOG_DIR / "dyn_transformer_*_eval/evaluations.npz"),
-        "PPO_SB3": str(LOG_DIR / "*/evaluations.npz"),
-        "Dream_GRU": str(LOG_DIR / "*/evaluations.npz"),
-        "Dream_Transformer": str(LOG_DIR / "*/evaluations.npz"),
-        "Dyna_GRU": str(LOG_DIR / "*/evaluations.npz"),
-        "Dyna_Transformer": str(LOG_DIR / "*/evaluations.npz"),
+        "PPO_SB3": str(LOG_DIR / "cnn_sb3_ppo_*_eval/evaluations.npz"),
+        "Dream_GRU": str(LOG_DIR / "ppo_dream_gru_*_eval/evaluations.npz"),
+        "Dream_Transformer": str(LOG_DIR / "ppo_dream_transformer_*_eval/evaluations.npz"),
+        "Dyna_GRU": str(LOG_DIR / "dyn_gru_*_eval/evaluations.npz"),
+        "Dyna_Transformer": str(LOG_DIR / "dyn_transformer_*_eval/evaluations.npz"),
+        # "PPO_SB3": str(LOG_DIR / "*/evaluations.npz"),
+        # "Dream_GRU": str(LOG_DIR / "*/evaluations.npz"),
+        # "Dream_Transformer": str(LOG_DIR / "*/evaluations.npz"),
+        # "Dyna_GRU": str(LOG_DIR / "*/evaluations.npz"),
+        # "Dyna_Transformer": str(LOG_DIR / "*/evaluations.npz"),
     }
 
     # --- Load and Process Data ---
@@ -126,9 +126,9 @@ def main():
     # Set plot style
     sns.set_style("whitegrid")
 
-    # 1. Aggregate Learning Curves (Sample Efficiency Curves)
+    # 1. Aggregate Learning Curves (Sample Efficiency Curves) - COMPARISON PLOT
     algorithms_to_plot = list(scores.keys())
-    # Calculate IQM and CIs for plot
+    # Calculate IQM and CIs for plot (for all algorithms together)
     iqm_fn = lambda x: np.array([metrics.aggregate_iqm(x[..., i]) for i in range(x.shape[-1])])
     iqm_scores, iqm_cis = rly.get_interval_estimates(scores, iqm_fn, reps=50000)
 
@@ -141,13 +141,58 @@ def main():
         ylabel="IQM Episode Reward",
         figsize=(10, 6),
     )
-    plt.title("Sample Efficiency Curves")
+    plt.title("Sample Efficiency Curves (All Algorithms)")
     plt.tight_layout()
-    save_path = RESULTS_DIR / "sample_efficiency_curves.png"
+    save_path = RESULTS_DIR / "sample_efficiency_curves_all.png"
     fig = ax.get_figure()
     plt.savefig(save_path, dpi=300)
-    print(f"Saved sample efficiency curves to {save_path}")
+    print(f"Saved combined sample efficiency curves to {save_path}")
     plt.close(fig)
+
+    # 1b. INDIVIDUAL ALGORITHM PLOTS
+    print("Generating individual algorithm plots...")
+    for alg in algorithms_to_plot:
+        # Skip if somehow missing
+        if alg not in iqm_scores:
+            continue
+        single_iqm_scores = {alg: iqm_scores[alg]}
+        single_iqm_cis = {alg: iqm_cis[alg]}
+        ax_single = plot_utils.plot_sample_efficiency_curve(
+            common_timesteps,
+            single_iqm_scores,
+            single_iqm_cis,
+            algorithms=[alg],
+            xlabel="Timesteps",
+            ylabel="IQM Episode Reward",
+            figsize=(8, 5),
+        )
+        plt.title(f"Sample Efficiency Curve - {alg}")
+        plt.tight_layout()
+        indiv_path = RESULTS_DIR / f"sample_efficiency_curve_{alg}.png"
+        fig_single = ax_single.get_figure()
+        plt.savefig(indiv_path, dpi=300)
+        print(f"  Saved {alg} IQM curve to {indiv_path}")
+        plt.close(fig_single)
+
+        # Additional plot: all runs + mean + IQM for more detailed per-algorithm inspection
+        runs_array = scores[alg]  # shape (num_runs, num_points)
+        if runs_array.shape[0] > 0:
+            fig_runs, ax_runs = plt.subplots(figsize=(8, 5))
+            for i, run_curve in enumerate(runs_array):
+                ax_runs.plot(common_timesteps, run_curve, color='gray', alpha=0.25)
+            mean_curve = runs_array.mean(axis=0)
+            ax_runs.plot(common_timesteps, mean_curve, label='Mean', color='blue', linewidth=2)
+            iqm_curve = single_iqm_scores[alg]
+            ax_runs.plot(common_timesteps, iqm_curve, label='IQM', color='orange', linewidth=2, linestyle='--')
+            ax_runs.set_title(f"Runs, Mean & IQM - {alg}")
+            ax_runs.set_xlabel("Timesteps")
+            ax_runs.set_ylabel("Episode Reward")
+            ax_runs.legend()
+            plt.tight_layout()
+            runs_path = RESULTS_DIR / f"runs_mean_iqm_{alg}.png"
+            plt.savefig(runs_path, dpi=300)
+            print(f"  Saved {alg} runs + mean + IQM plot to {runs_path}")
+            plt.close(fig_runs)
 
     # 2. Calculate and Print Aggregate Metrics
     # This calculates a single IQM score over all runs and timesteps for a final summary
