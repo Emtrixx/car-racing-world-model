@@ -313,10 +313,11 @@ class DynaTrainer:
         eval_env = DummyVecEnv([lambda: _init_env_fn_sb3(rank=config["num_envs"], seed=config["seed"] + 1000,
                                                          config_env_params=eval_env_params)])
 
+        run_name_for_logging = f"dyna_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}_{seed}"
         self.eval_callback = EvalCallback(
             eval_env,
-            best_model_save_path=str(SB3_SAVE_DIR / f"dyn_{self.world_model_type}_{self.config_name}_best"),
-            log_path=str(SB3_LOG_DIR / f"dyn_{self.world_model_type}_{self.config_name}_eval"),
+            best_model_save_path=str(SB3_SAVE_DIR / f"{run_name_for_logging}_best"),
+            log_path=str(SB3_LOG_DIR / f"{run_name_for_logging}_eval"),
             eval_freq=max(config["eval_freq"] // config["num_envs"], 1),
             n_eval_episodes=config["n_eval_episodes"],
             deterministic=True,
@@ -324,7 +325,6 @@ class DynaTrainer:
         )
 
         print("Initializing PPO agent...")
-        run_name_for_logging = f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}_{int(time.time())}"
         self.ppo_agent = PPO(
             policy=config["policy"],
             env=self.real_env,

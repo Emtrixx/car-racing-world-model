@@ -24,7 +24,8 @@ from src.world_model import WorldModelGRU, GRU_NUM_LAYERS, D_MODEL as GRU_D_MODE
 from src.train_transformer_world_model import HISTORY_LENGTH
 
 
-def _create_start_state_pool(replay_buffer_data: dict, model_type: str, history_length: int, pool_size: int = 10000) -> list:
+def _create_start_state_pool(replay_buffer_data: dict, model_type: str, history_length: int,
+                             pool_size: int = 10000) -> list:
     """
     Scans the replay buffer to find valid starting points for dream sequences and creates a smaller, random pool.
     This is done once in the main process to save memory in the subprocesses.
@@ -43,7 +44,8 @@ def _create_start_state_pool(replay_buffer_data: dict, model_type: str, history_
         for i in range(num_transitions - history_length):
             # The sequence is invalid if 'is_first_step' is true for any step after the first one,
             # or if a 'done' is true for any step before the last one.
-            if not torch.any(is_first_steps[i + 1:i + history_length]) and not torch.any(dones[i:i + history_length - 1]):
+            if not torch.any(is_first_steps[i + 1:i + history_length]) and not torch.any(
+                    dones[i:i + history_length - 1]):
                 valid_indices.append(i)
     elif model_type == 'gru':
         # For the GRU, any non-terminal state is a valid starting point.
@@ -235,7 +237,7 @@ def train_ppo_in_dream(config_name: str, model_type: str, wm_checkpoint_path: st
     # PPO Agent
     print("Initializing PPO agent...")
     if run_name is None:
-        run_name = f"ppo_dream_{model_type}_{config_name}_{int(time.time())}"
+        run_name = f"ppo_dream_{model_type}_{config_name}_{seed}"
 
     model = PPO(
         policy=config["policy"],
@@ -264,11 +266,10 @@ def train_ppo_in_dream(config_name: str, model_type: str, wm_checkpoint_path: st
 
     # Callbacks
     print("Setting up callbacks...")
-    save_path_prefix = f"ppo_dream_{model_type}_{config_name}"
     eval_freq = max(config["eval_freq"] // config["num_envs"], 1)
     checkpoint_callback = CheckpointCallback(
         save_freq=eval_freq,
-        save_path=str(SB3_CHECKPOINTS_DIR / save_path_prefix),
+        save_path=str(SB3_CHECKPOINTS_DIR / run_name),
         name_prefix="ppo_dream_model",
     )
 
@@ -286,8 +287,8 @@ def train_ppo_in_dream(config_name: str, model_type: str, wm_checkpoint_path: st
 
     eval_callback = EvalCallback(
         eval_env,
-        best_model_save_path=str(SB3_CHECKPOINTS_DIR / f"{save_path_prefix}_best"),
-        log_path=str(SB3_LOG_DIR / f"{save_path_prefix}_eval"),
+        best_model_save_path=str(SB3_CHECKPOINTS_DIR / f"{run_name}_best"),
+        log_path=str(SB3_LOG_DIR / f"{run_name}_eval"),
         eval_freq=eval_freq,
         n_eval_episodes=config["n_eval_episodes"],
         deterministic=True,
