@@ -142,10 +142,11 @@ def main():
         figsize=(10, 6),
     )
     plt.title("Sample Efficiency Curves (All Algorithms)")
+    ax.legend()
     plt.tight_layout()
-    save_path = RESULTS_DIR / "sample_efficiency_curves_all.png"
+    save_path = RESULTS_DIR / "rliable_sample_efficiency_curves_all.png"
     fig = ax.get_figure()
-    plt.savefig(save_path, dpi=300)
+    plt.savefig(save_path, dpi=300, bbox_inches='tight')
     print(f"Saved combined sample efficiency curves to {save_path}")
     plt.close(fig)
 
@@ -168,9 +169,9 @@ def main():
         )
         plt.title(f"Sample Efficiency Curve - {alg}")
         plt.tight_layout()
-        indiv_path = RESULTS_DIR / f"sample_efficiency_curve_{alg}.png"
+        indiv_path = RESULTS_DIR / f"rliable_sample_efficiency_curve_{alg}.png"
         fig_single = ax_single.get_figure()
-        plt.savefig(indiv_path, dpi=300)
+        plt.savefig(indiv_path, dpi=300, bbox_inches='tight')
         print(f"  Saved {alg} IQM curve to {indiv_path}")
         plt.close(fig_single)
 
@@ -189,8 +190,8 @@ def main():
             ax_runs.set_ylabel("Episode Reward")
             ax_runs.legend()
             plt.tight_layout()
-            runs_path = RESULTS_DIR / f"runs_mean_iqm_{alg}.png"
-            plt.savefig(runs_path, dpi=300)
+            runs_path = RESULTS_DIR / f"rliable_runs_mean_iqm_{alg}.png"
+            plt.savefig(runs_path, dpi=300, bbox_inches='tight')
             print(f"  Saved {alg} runs + mean + IQM plot to {runs_path}")
             plt.close(fig_runs)
 
