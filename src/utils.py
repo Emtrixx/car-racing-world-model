@@ -329,14 +329,14 @@ def make_env_sb3(
     # OffTrackRewardShaper: Heavily penalizes going off-track. @CarRacing-v3
     # env = OffTrackRewardShaper(env)
 
-    # VaeEncodeWrapper: Preprocess raw frame (crop, resize)
+    # PreprocessWrapper: Preprocess raw frame (crop, resize)
     env = PreprocessWrapper(env)  # @CarRacing-v3
 
-    # FrameStackWrapper: Stacks the last N observations (quantized latent vectors) to create a temporal context.
+    # FrameStackWrapper: Stacks the last N observations to create a temporal context.
     env = FrameStackWrapper(env, frame_stack_num)
 
     # NormalizeReward: Normalizes rewards.
-    env = gym.wrappers.NormalizeReward(env, gamma=gamma)
+    # env = gym.wrappers.NormalizeReward(env, gamma=gamma)
 
     # For SB3, RecordEpisodeStatistics is often useful when using VecEnvs for logging.
     # It should be one of the outermost wrappers if used.
