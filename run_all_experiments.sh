@@ -16,12 +16,13 @@ CONFIG="default"
 # The 'dream' agents require a pre-trained world model and a replay buffer.
 # train a world model using `train_transformer_world_model.py` or `train_world_model_parallel.py` (for GRU)
 # and generate a buffer by running the PPO agent for a while and saving the buffer.
+# world models need a trained vq-vae
 
 #WM_TRANSFORMER_CHECKPOINT="checkpoints/transformer_wm_checkpoints/transformer_wm_default_final.pth"
 #WM_GRU_CHECKPOINT="checkpoints/gru_wm_checkpoints/CarRacing-v3_worldmodel_gru_ld256_ac3_dm1024_ly3.pth"
 #REPLAY_BUFFER="data/transformer_world_model_data"
 
-# WM_TRANSFORMER_CHECKPOINT="checkpoints/transformer_wm_checkpoints/1757523194/transformer_wm_default_final.pth"
+`` WM_TRANSFORMER_CHECKPOINT="checkpoints/transformer_wm_checkpoints/1757523194/transformer_wm_default_final.pth"
 WM_GRU_CHECKPOINT="checkpoints/gru_wm_checkpoints/CarRacing-v3_worldmodel_gru_ld256_ac3_dm1024_ly3.pth"
 REPLAY_BUFFER="data/transformer_world_model_data"
 

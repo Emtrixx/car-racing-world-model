@@ -19,7 +19,7 @@ from tqdm import tqdm
 from src.impala_cnn import CustomCNN
 from src.logger import ExperimentLogger
 from src.train_ppo_sb3 import SB3_SAVE_DIR
-from src.train_transformer_world_model import TransformerHistoryDataset, NUM_LOADER_WORKERS
+from src.train_transformer_world_model import TransformerHistoryDataset, NUM_LOADER_WORKERS, HISTORY_LENGTH
 from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED_DIM, TRANSFORMER_NUM_HEADS, \
     TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE, TRANSFORMER_MAX_SEQ_LEN
 from src.utils import (
@@ -39,7 +39,7 @@ def get_combined_config(name="default"):
     """
     # --- World Model Config (Shared) ---
     wm_config = {
-        "wm_epochs": 8,
+        "wm_epochs": 4,
         "wm_batch_size": 256,
         "wm_learning_rate": 38e-5,
         "max_grad_norm": 1.47,
@@ -51,7 +51,7 @@ def get_combined_config(name="default"):
 
     # --- Transformer Specific Config ---
     transformer_config = {
-        "history_length": 32,
+        "history_length": HISTORY_LENGTH,
         "embed_dim": TRANSFORMER_EMBED_DIM,
         "num_heads": TRANSFORMER_NUM_HEADS,
         "num_layers": TRANSFORMER_NUM_LAYERS,
@@ -69,11 +69,11 @@ def get_combined_config(name="default"):
     # --- PPO Config ---
     ppo_config = {
         "policy": "CnnPolicy",
-        "ppo_learning_rate": 45e-5,
-        "n_steps": 2048,  # Steps per batch (per environment)
+        "ppo_learning_rate": 5e-5,
+        "n_steps": 1024,  # Steps per batch (per environment)
         "ppo_batch_size": 64,
         "ppo_dream_batch_size": 1024,
-        "n_epochs": 15,
+        "n_epochs": 10,
         "gamma": 0.99,
         "gae_lambda": 0.9,
         "clip_range": 0.2,
@@ -98,7 +98,7 @@ def get_combined_config(name="default"):
         "total_real_steps": 2_000_000,
         "warmup_real_steps": 1_000_000,
         "wm_buffer_size": 500_000,
-        "wm_train_interval": 100_000,
+        "wm_train_interval": 60_000,
         "dream_horizon": 32,
         "dream_steps_per_real_step": 24,
         "num_envs": 32,
