@@ -323,6 +323,15 @@ class DynaTrainer:
             deterministic=True,
             render=False
         )
+        self.eval_callback_dream = EvalCallback(
+            eval_env,
+            best_model_save_path=str(SB3_SAVE_DIR / f"{run_name_for_logging}_dream_best"),
+            log_path=str(SB3_LOG_DIR / f"{run_name_for_logging}_dream_eval"),
+            eval_freq=max(config["eval_freq"] // config["num_envs"], 1),
+            n_eval_episodes=config["n_eval_episodes"],
+            deterministic=True,
+            render=False
+        )
 
         print("Initializing PPO agent...")
         self.ppo_agent = PPO(
@@ -757,7 +766,7 @@ class DynaTrainer:
         # Use the system metrics callback during dream training
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
         self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
-                             callback=[metrics_callback, self.eval_callback])
+                             callback=[metrics_callback, self.eval_callback_dream])
 
         # Restore the original PPO batch size and environment
         self.ppo_agent.batch_size = original_batch_size
