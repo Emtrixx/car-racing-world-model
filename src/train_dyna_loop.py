@@ -39,7 +39,7 @@ def get_combined_config(name="default"):
     """
     # --- World Model Config (Shared) ---
     wm_config = {
-        "wm_epochs": 4,
+        "wm_epochs": 1,
         "wm_batch_size": 256,
         "wm_learning_rate": 38e-5,
         "max_grad_norm": 1.47,
@@ -98,7 +98,7 @@ def get_combined_config(name="default"):
         "total_real_steps": 2_000_000,
         "warmup_real_steps": 1_000_000,
         "wm_buffer_size": 500_000,
-        "wm_train_interval": 60_000,
+        "wm_train_interval": 50_000,
         "dream_horizon": 32,
         "dream_steps_per_real_step": 24,
         "num_envs": 32,
