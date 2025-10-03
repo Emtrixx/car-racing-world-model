@@ -99,6 +99,7 @@ def get_combined_config(name="default"):
         "warmup_real_steps": 1_000_000,
         "wm_buffer_size": 500_000,
         "wm_train_interval": 50_000,
+        "wm_burn_in_episodes": 384,
         "dream_horizon": 32,
         "dream_steps_per_real_step": 24,
         "num_envs": 32,
@@ -118,6 +119,7 @@ def get_combined_config(name="default"):
         "warmup_real_steps": 500,
         "wm_buffer_size": 250,
         "wm_train_interval": 500,
+        "wm_burn_in_episodes": 32,
         "wm_epochs": 2,
         "wm_batch_size": 4,
         "num_loader_workers": 0,
@@ -203,14 +205,29 @@ class DynaCallback(BaseCallback):
             is_first_step_val = bool(info.get('episode_start', done))
             is_done_val = bool(done or info.get("TimeLimit.truncated", False))
 
-            self.trainer.replay_buffer.append({
-                "prev_tokens": prev_tokens_batch[i].to(torch.int64).cpu(),
-                "action": torch.tensor(action, dtype=torch.float32),
-                "reward": torch.tensor([reward], dtype=torch.float32),
-                "done": torch.tensor([is_done_val], dtype=torch.float32),
-                "next_tokens": next_tokens_batch[i].to(torch.int64).cpu(),
-                "is_first_step": torch.tensor([is_first_step_val], dtype=torch.bool)
-            })
+            if self.trainer.store_episode_mask[i]:
+                self.trainer.replay_buffer.append({
+                    "prev_tokens": prev_tokens_batch[i].to(torch.int64).cpu(),
+                    "action": torch.tensor(action, dtype=torch.float32),
+                    "reward": torch.tensor([reward], dtype=torch.float32),
+                    "done": torch.tensor([is_done_val], dtype=torch.float32),
+                    "next_tokens": next_tokens_batch[i].to(torch.int64).cpu(),
+                    "is_first_step": torch.tensor([is_first_step_val], dtype=torch.bool)
+                })
+
+            if is_done_val:
+                previous_gate_state = self.trainer.burn_in_gate_open
+                self.trainer.completed_episodes += 1
+                self.trainer.burn_in_gate_open = (
+                        self.trainer.completed_episodes >= self.trainer.wm_burn_in_episodes
+                )
+                self.trainer.store_episode_mask[i] = self.trainer.burn_in_gate_open
+
+                if self.trainer.burn_in_gate_open and not previous_gate_state:
+                    print(
+                        f"World model burn-in complete. Collecting buffer data from episode "
+                        f"{self.trainer.completed_episodes} onward."
+                    )
         return True
 
 
@@ -358,6 +375,12 @@ class DynaTrainer:
         if ppo_checkpoint:
             print(f"Loading PPO agent from {ppo_checkpoint}")
             self.ppo_agent.load(ppo_checkpoint, env=self.real_env)
+
+        # Burn-in gate prevents early low-quality data from entering the WM buffer.
+        self.wm_burn_in_episodes = int(config.get('wm_burn_in_episodes', 0))
+        self.completed_episodes = 0
+        self.burn_in_gate_open = self.wm_burn_in_episodes == 0
+        self.store_episode_mask = [self.burn_in_gate_open] * self.ppo_agent.n_envs
 
         world_model_param_count = sum(p.numel() for p in self.world_model.parameters())
         print(
