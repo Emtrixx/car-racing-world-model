@@ -24,7 +24,8 @@ from src.transformer_world_model import WorldModelTransformer, TRANSFORMER_EMBED
     TRANSFORMER_NUM_LAYERS, TRANSFORMER_FF_DIM, TRANSFORMER_DROPOUT_RATE, TRANSFORMER_MAX_SEQ_LEN
 from src.utils import (
     DEVICE, ENV_NAME, ACTION_DIM, NUM_STACK, VQ_VAE_CHECKPOINT_FILENAME,
-    TRANSFORMER_WM_CHECKPOINTS_DIR, SB3_LOG_DIR, _create_dream_env, GRU_WM_CHECKPOINTS_DIR, fmt_int
+    TRANSFORMER_WM_CHECKPOINTS_DIR, SB3_LOG_DIR, _create_dream_env, GRU_WM_CHECKPOINTS_DIR, fmt_int,
+    _create_start_state_pool
 )
 from src.utils import _init_env_fn_sb3
 from src.vq_conv_vae import VQVAE, GRID_SIZE, VQVAE_NUM_EMBEDDINGS, VQVAE_EMBEDDING_DIM
@@ -751,10 +752,21 @@ class DynaTrainer:
         config = self.config
         world_model_type = self.world_model_type
 
-        # Create a sample of the replay buffer to pass to the dream environments
+        # prepare sample for changed dream env, todo: optimize this
+        buffer_list = list(self.replay_buffer)
+        data_dict = {
+            'prev_tokens': torch.stack([s['prev_tokens'] for s in buffer_list]),
+            'actions': torch.stack([s['action'] for s in buffer_list]),
+            'rewards': torch.stack([s['reward'] for s in buffer_list]),
+            'dones': torch.stack([s['done'] for s in buffer_list]),
+            'next_tokens': torch.stack([s['next_tokens'] for s in buffer_list]),
+            'is_first_steps': torch.stack([s['is_first_step'] for s in buffer_list]),
+        }
+        replay_buffer_sample = _create_start_state_pool(data_dict, world_model_type, history_len)
+        # Create a  of the replay buffer to pass to the dream environments
         # This is more memory-efficient than pickling the entire buffer for each process.
-        buffer_sample_size = min(len(self.replay_buffer), 1000)  # Or another reasonable number
-        replay_buffer_sample = random.sample(list(self.replay_buffer), buffer_sample_size)
+        # buffer_sample_size = min(len(self.replay_buffer), 1000)  # Or another reasonable number
+        # replay_buffer_sample = random.sample(list(self.replay_buffer), buffer_sample_size)
 
         if self.config["num_envs"] > 1:
             env_fns = [
