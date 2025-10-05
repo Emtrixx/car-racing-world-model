@@ -120,8 +120,8 @@ def get_combined_config(name="default"):
         "warmup_real_steps": 500,
         "wm_buffer_size": 250,
         "wm_train_interval": 500,
-        "wm_burn_in_episodes": 32,
-        "wm_epochs": 2,
+        "wm_burn_in_episodes": 0,
+        "wm_epochs": 1,
         "wm_batch_size": 4,
         "num_loader_workers": 0,
         "history_length": 4,
@@ -554,6 +554,8 @@ class DynaTrainer:
     def train_wm(self, global_tqdm, global_step):
         global_tqdm.write(f"\n--- Training {self.world_model_type.upper()} World Model ---")
         history_len = self.config['history_length'] if self.world_model_type == 'transformer' else 1
+        buffer_len = len(self.replay_buffer)
+        print(f"Current replay buffer size: {buffer_len}/{self.config['wm_buffer_size']}")
         if len(self.replay_buffer) < history_len + 1:
             print("Not enough data for WM training. Skipping.")
             return
@@ -753,20 +755,20 @@ class DynaTrainer:
         world_model_type = self.world_model_type
 
         # prepare sample for changed dream env, todo: optimize this
-        buffer_list = list(self.replay_buffer)
-        data_dict = {
-            'prev_tokens': torch.stack([s['prev_tokens'] for s in buffer_list]),
-            'actions': torch.stack([s['action'] for s in buffer_list]),
-            'rewards': torch.stack([s['reward'] for s in buffer_list]),
-            'dones': torch.stack([s['done'] for s in buffer_list]),
-            'next_tokens': torch.stack([s['next_tokens'] for s in buffer_list]),
-            'is_first_steps': torch.stack([s['is_first_step'] for s in buffer_list]),
-        }
-        replay_buffer_sample = _create_start_state_pool(data_dict, world_model_type, history_len)
+        # buffer_list = list(self.replay_buffer)
+        # data_dict = {
+        #     'prev_tokens': torch.stack([s['prev_tokens'] for s in buffer_list]),
+        #     'actions': torch.stack([s['action'] for s in buffer_list]),
+        #     'rewards': torch.stack([s['reward'] for s in buffer_list]),
+        #     'dones': torch.stack([s['done'] for s in buffer_list]),
+        #     'next_tokens': torch.stack([s['next_tokens'] for s in buffer_list]),
+        #     'is_first_steps': torch.stack([s['is_first_step'] for s in buffer_list]),
+        # }
+        # replay_buffer_sample = _create_start_state_pool(data_dict, world_model_type, history_len)
         # Create a  of the replay buffer to pass to the dream environments
         # This is more memory-efficient than pickling the entire buffer for each process.
-        # buffer_sample_size = min(len(self.replay_buffer), 1000)  # Or another reasonable number
-        # replay_buffer_sample = random.sample(list(self.replay_buffer), buffer_sample_size)
+        buffer_sample_size = min(len(self.replay_buffer), 1000)  # Or another reasonable number
+        replay_buffer_sample = random.sample(list(self.replay_buffer), buffer_sample_size)
 
         if self.config["num_envs"] > 1:
             env_fns = [
