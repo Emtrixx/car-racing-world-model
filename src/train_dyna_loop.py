@@ -40,7 +40,7 @@ def get_combined_config(name="default"):
     """
     # --- World Model Config (Shared) ---
     wm_config = {
-        "wm_epochs": 1,
+        "wm_epochs": 5,
         "wm_batch_size": 256,
         "wm_learning_rate": 38e-5,
         "max_grad_norm": 1.47,
@@ -802,8 +802,24 @@ class DynaTrainer:
 
         # Use the system metrics callback during dream training
         metrics_callback = SystemMetricsCallback(trainer=self, log_freq=500)
-        self.ppo_agent.learn(total_timesteps=dream_steps, reset_num_timesteps=False, progress_bar=True,
-                             callback=[metrics_callback, self.eval_callback_dream])
+
+        # Preserve the real experience counters so SB3 logging reports real timesteps only
+        real_num_timesteps = self.ppo_agent.num_timesteps
+        real_total_timesteps = getattr(self.ppo_agent, "_total_timesteps", None)
+
+        self.ppo_agent.learn(
+            total_timesteps=dream_steps,
+            reset_num_timesteps=False,
+            progress_bar=True,
+            callback=[metrics_callback, self.eval_callback_dream]
+        )
+
+        # Restore counters to the pre-dream values so dream steps don't pollute real-step logging
+        dream_timesteps = self.ppo_agent.num_timesteps - real_num_timesteps
+        if dream_timesteps > 0:
+            self.ppo_agent.num_timesteps = real_num_timesteps
+            if real_total_timesteps is not None:
+                self.ppo_agent._total_timesteps = real_total_timesteps
 
         # Restore the original PPO batch size and environment
         self.ppo_agent.batch_size = original_batch_size
