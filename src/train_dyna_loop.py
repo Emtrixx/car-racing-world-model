@@ -263,6 +263,7 @@ class DynaTrainer:
         self.config['seed'] = seed
         print(f"Seed for this run: {seed}")
         set_random_seed(seed)
+        self._should_copy_vq_weights = wm_checkpoint_path is None
 
         # --- System Metrics Initialization ---
         self.nvml_handle = None
@@ -283,16 +284,18 @@ class DynaTrainer:
 
         print(f"Initializing {self.world_model_type.upper()} World Model...")
         if self.world_model_type == 'transformer':
-            self.world_model = WorldModelTransformer(
+            world_model = WorldModelTransformer(
                 embed_dim=config['embed_dim'], num_heads=config['num_heads'], num_layers=config['num_layers'],
                 ff_dim=config['ff_dim'], grid_size=config['grid_size'], dropout_rate=config['dropout_rate'],
                 max_seq_len=config['max_seq_len'], action_dim=config['action_dim'],
                 codebook_size=config['codebook_size'], vqvae_embed_dim=config['vqvae_embed_dim']
             ).to(self.device)
+            if self._should_copy_vq_weights:
+                self._copy_vqvae_embeddings_to_world_model(world_model)
             print("Compiling Transformer World Model for performance...")
-            self.world_model = torch.compile(self.world_model)
+            self.world_model = torch.compile(world_model)
         elif self.world_model_type == 'gru':
-            self.world_model = WorldModelGRU(
+            world_model = WorldModelGRU(
                 latent_dim=config['vqvae_embed_dim'],
                 action_dim=config['action_dim'],
                 d_model=config['gru_d_model'],
@@ -300,8 +303,10 @@ class DynaTrainer:
                 codebook_size=config['codebook_size'],
                 grid_size=config['grid_size']
             ).to(self.device)
+            if self._should_copy_vq_weights:
+                self._copy_vqvae_embeddings_to_world_model(world_model)
             print("Compiling GRU World Model for performance...")
-            self.world_model = torch.compile(self.world_model)
+            self.world_model = torch.compile(world_model)
         else:
             raise ValueError(f"Unknown world model type: {self.world_model_type}")
 
@@ -431,6 +436,11 @@ class DynaTrainer:
                 print(f"Validation data file not found at {val_data_path}. Continuing without validation.")
             except Exception as e:
                 print(f"Error loading validation data: {e}. Continuing without validation.")
+
+    def _copy_vqvae_embeddings_to_world_model(self, world_model):
+        """Copy pre-trained VQ-VAE codebook weights into the world model token embedding."""
+        world_model.token_embedding.weight.data.copy_(self.vq_vae.vq_layer.embeddings.data)
+        print("Copied VQ-VAE weights to world model token embedding.")
 
     def _log_system_metrics(self, step):
         """Logs CPU, RAM, and GPU metrics to the logger."""
