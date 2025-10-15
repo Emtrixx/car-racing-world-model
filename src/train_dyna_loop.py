@@ -2,7 +2,6 @@ import argparse
 import random
 import time
 from collections import deque
-from pathlib import Path
 
 import psutil
 import pynvml
@@ -103,7 +102,7 @@ def get_combined_config(name="default"):
         "wm_burn_in_episodes": 384,
         "dream_horizon": 32,
         "dream_steps_per_real_step": 24,
-        "num_envs": 32,
+        "num_envs": 2,
         "max_episode_steps_collect": 1000,
         "seed": random.randint(0, 2 ** 31 - 1),
         "device": DEVICE,
@@ -337,10 +336,36 @@ class DynaTrainer:
                                                          config_env_params=eval_env_params)])
 
         run_name_for_logging = f"dyna_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}_{seed}"
+        self.run_name_for_logging = run_name_for_logging
+        self.seed = seed
+
+        base_wm_dir = TRANSFORMER_WM_CHECKPOINTS_DIR if self.world_model_type == 'transformer' else GRU_WM_CHECKPOINTS_DIR
+        self.wm_checkpoint_dir = base_wm_dir / self.run_name_for_logging
+        self.wm_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        self.ppo_checkpoint_dir = SB3_SAVE_DIR / self.run_name_for_logging
+        self.ppo_checkpoint_dir.mkdir(parents=True, exist_ok=True)
+
+        self.ppo_log_dir = SB3_LOG_DIR / self.run_name_for_logging
+        self.ppo_log_dir.mkdir(parents=True, exist_ok=True)
+
+        real_eval_dir = self.ppo_checkpoint_dir / "real_eval_best"
+        dream_eval_dir = self.ppo_checkpoint_dir / "dream_eval_best"
+        real_eval_log_dir = self.ppo_log_dir / "real_eval"
+        dream_eval_log_dir = self.ppo_log_dir / "dream_eval"
+
+        real_eval_dir.mkdir(parents=True, exist_ok=True)
+        dream_eval_dir.mkdir(parents=True, exist_ok=True)
+        real_eval_log_dir.mkdir(parents=True, exist_ok=True)
+        dream_eval_log_dir.mkdir(parents=True, exist_ok=True)
+
+        self.tensorboard_log_dir = self.ppo_log_dir / "tensorboard"
+        self.tensorboard_log_dir.mkdir(parents=True, exist_ok=True)
+
         self.eval_callback = EvalCallback(
             eval_env,
-            best_model_save_path=str(SB3_SAVE_DIR / f"{run_name_for_logging}_best"),
-            log_path=str(SB3_LOG_DIR / f"{run_name_for_logging}_eval"),
+            best_model_save_path=str(real_eval_dir),
+            log_path=str(real_eval_log_dir),
             eval_freq=max(config["eval_freq"] // config["num_envs"], 1),
             n_eval_episodes=config["n_eval_episodes"],
             deterministic=True,
@@ -348,8 +373,8 @@ class DynaTrainer:
         )
         self.eval_callback_dream = EvalCallback(
             eval_env,
-            best_model_save_path=str(SB3_SAVE_DIR / f"{run_name_for_logging}_dream_best"),
-            log_path=str(SB3_LOG_DIR / f"{run_name_for_logging}_dream_eval"),
+            best_model_save_path=str(dream_eval_dir),
+            log_path=str(dream_eval_log_dir),
             eval_freq=max(config["eval_freq"] // config["num_envs"], 1),
             n_eval_episodes=config["n_eval_episodes"],
             deterministic=True,
@@ -372,7 +397,7 @@ class DynaTrainer:
             max_grad_norm=config["ppo_max_grad_norm"],
             target_kl=config["target_kl"],
             policy_kwargs=config["policy_kwargs"],
-            tensorboard_log=str(SB3_LOG_DIR / run_name_for_logging),
+            tensorboard_log=str(self.tensorboard_log_dir),
             verbose=0,
             seed=config["seed"],
             device=self.device,
@@ -849,8 +874,7 @@ class DynaTrainer:
 
         total_real_steps = self.config['total_real_steps']
         wm_train_interval = self.config['wm_train_interval']
-        wm_dir = TRANSFORMER_WM_CHECKPOINTS_DIR if self.world_model_type == 'transformer' else GRU_WM_CHECKPOINTS_DIR
-        wm_dir.mkdir(exist_ok=True, parents=True)
+        wm_dir = self.wm_checkpoint_dir
 
         with tqdm(total=total_real_steps, desc="Total Real Steps", position=0) as pbar:
             while pbar.n < total_real_steps:
@@ -882,13 +906,10 @@ class DynaTrainer:
                         f"Warmup phase: Skipping dream training. ({real_steps_collected}/{self.config['warmup_real_steps']})")
 
                 # Save models
-                wm_path = wm_dir / f"dyn_{self.config_name}_wm_step_{real_steps_collected}.pth"
-                ppo_path_dir = Path(
-                    str(SB3_SAVE_DIR / f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}"))
-                ppo_path_dir.mkdir(exist_ok=True, parents=True)
-                ppo_path = ppo_path_dir / f"ppo_model_{real_steps_collected}_steps.zip"
+                wm_path = wm_dir / f"{self.run_name_for_logging}_wm_step_{real_steps_collected}.pth"
+                ppo_path = self.ppo_checkpoint_dir / f"ppo_model_{real_steps_collected}_steps.zip"
                 torch.save(self.world_model.state_dict(), wm_path)
-                self.ppo_agent.save(ppo_path)
+                self.ppo_agent.save(str(ppo_path))
                 pbar.write(f"Saved models at step {real_steps_collected}")
 
         self.real_env.close()
@@ -896,12 +917,12 @@ class DynaTrainer:
             self.logger.end_run()
 
         # Save models
-        wm_path = wm_dir / f"dyn_{self.config_name}_{ENV_NAME.lower()}_wm_final.pth"
-        ppo_path = str(SB3_SAVE_DIR / f"dyn_{self.world_model_type}_{self.config_name}_{ENV_NAME.lower()}_final.zip")
+        wm_path = wm_dir / f"{self.run_name_for_logging}_wm_final.pth"
+        ppo_path = self.ppo_checkpoint_dir / f"{self.run_name_for_logging}_final.zip"
         torch.save(self.world_model.state_dict(), wm_path)
         print(f"World Model saved to {wm_path}")
         print(f"PPO Agent saved to {ppo_path}")
-        self.ppo_agent.save(ppo_path)
+        self.ppo_agent.save(str(ppo_path))
 
         print("--- Dyna-Style Training Finished ---")
 

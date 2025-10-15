@@ -333,8 +333,14 @@ class WorldModelTransformer(nn.Module):
         # --- Sample next tokens ---
         # We sample from the distribution, not just argmax, for stochasticity in dreaming.
         probs = torch.softmax(predicted_latent_logits, dim=-1)
+        probs = torch.nan_to_num(probs, nan=0.0, posinf=0.0, neginf=0.0)
+        probs_sum = probs.sum(dim=-1, keepdim=True)
+        probs_normalized = probs / torch.clamp(probs_sum, min=1e-12)
+        uniform_probs = torch.full_like(probs_normalized, 1.0 / self.codebook_size)
+        invalid_mask = probs_sum <= 0
+        safe_probs = torch.where(invalid_mask, uniform_probs, probs_normalized)
         # Reshape for multinomial sampling: [B * num_tokens, codebook_size]
-        probs_flat = probs.view(-1, self.codebook_size)
+        probs_flat = safe_probs.view(-1, self.codebook_size)
         next_tokens_flat = torch.multinomial(probs_flat, 1)
         # Reshape back to [B, num_tokens]
         generated_tokens_indices = next_tokens_flat.view(batch_size, self.num_tokens_per_state)
