@@ -6,6 +6,7 @@ document.addEventListener('DOMContentLoaded', () => {
     const ctx = canvas.getContext('2d');
     const loader = document.getElementById('loader');
     const statusMessage = document.getElementById('status-message');
+    const controlButtons = document.querySelectorAll('.control-btn');
 
     let keysPressed = {};
     const image = new Image();
@@ -188,4 +189,71 @@ document.addEventListener('DOMContentLoaded', () => {
             startNewDream();
         }
     });
+
+    const controlMappings = {
+        up: 'ArrowUp',
+        down: 'ArrowDown',
+        left: 'ArrowLeft',
+        right: 'ArrowRight'
+    };
+
+    function setVirtualKeyState(button, isActive) {
+        if (!button) {
+            return;
+        }
+        const action = button.dataset.action;
+        const key = controlMappings[action];
+        if (!key) {
+            return;
+        }
+        keysPressed[key] = isActive;
+        button.classList.toggle('active', isActive);
+    }
+
+    function bindPointerControls() {
+        controlButtons.forEach((button) => {
+            button.addEventListener('pointerdown', (event) => {
+                event.preventDefault();
+                setVirtualKeyState(button, true);
+
+                const endHandler = (endEvent) => {
+                    if (endEvent.pointerId !== event.pointerId) {
+                        return;
+                    }
+                    setVirtualKeyState(button, false);
+                    window.removeEventListener('pointerup', endHandler);
+                    window.removeEventListener('pointercancel', endHandler);
+                };
+
+                window.addEventListener('pointerup', endHandler);
+                window.addEventListener('pointercancel', endHandler);
+            });
+
+            button.addEventListener('contextmenu', (event) => event.preventDefault());
+        });
+    }
+
+    function bindFallbackControls() {
+        controlButtons.forEach((button) => {
+            button.addEventListener('touchstart', (event) => {
+                event.preventDefault();
+                setVirtualKeyState(button, true);
+            }, {passive: false});
+            button.addEventListener('touchend', () => setVirtualKeyState(button, false));
+            button.addEventListener('touchcancel', () => setVirtualKeyState(button, false));
+            button.addEventListener('mousedown', (event) => {
+                event.preventDefault();
+                setVirtualKeyState(button, true);
+            });
+            button.addEventListener('mouseup', () => setVirtualKeyState(button, false));
+            button.addEventListener('mouseleave', () => setVirtualKeyState(button, false));
+            button.addEventListener('contextmenu', (event) => event.preventDefault());
+        });
+    }
+
+    if (window.PointerEvent) {
+        bindPointerControls();
+    } else if (controlButtons.length) {
+        bindFallbackControls();
+    }
 });

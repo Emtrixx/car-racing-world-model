@@ -29,7 +29,30 @@
         </div>
         <div id="status-message"></div>
         <div class="instructions">
-            <p>Use Arrow Keys to Drive</p>
+            <p class="desktop-hint">Use Arrow Keys to Drive</p>
+            <p class="touch-hint">Tap the controls below to drive</p>
+        </div>
+        <div class="touch-controls" aria-label="Touch driving controls">
+            <div class="touch-group steering-group">
+                <button class="control-btn" data-action="left" aria-label="Steer Left">
+                    <span class="control-icon">◀</span>
+                    <span class="control-label">Left</span>
+                </button>
+                <button class="control-btn" data-action="right" aria-label="Steer Right">
+                    <span class="control-icon">▶</span>
+                    <span class="control-label">Right</span>
+                </button>
+            </div>
+            <div class="touch-group throttle-group">
+                <button class="control-btn" data-action="up" aria-label="Accelerate">
+                    <span class="control-icon">▲</span>
+                    <span class="control-label">Gas</span>
+                </button>
+                <button class="control-btn" data-action="down" aria-label="Brake">
+                    <span class="control-icon">▼</span>
+                    <span class="control-label">Brake</span>
+                </button>
+            </div>
         </div>
     </div>
 </div>
