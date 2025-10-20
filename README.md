@@ -70,7 +70,7 @@ The system is composed of three main parts:
     <img src="images/diagrams/transformer_wm.png" alt="Transformer World Model Architecture" width="75%">
   </details>
 
-- **PPO Agent (`train_ppo_sb3.py`, `train_dyn_transformer.py`):** The SB3 PPO implementation is used. For feature
+- **PPO Agent (`train_ppo_sb3.py`, `train_dyna_loop.py`):** The SB3 PPO implementation is used. For feature
   extraction from raw pixels (in the baseline and Dyna training), a custom Impala-style CNN (`impala_cnn.py`) is used.
 
 ## Key Scripts
@@ -79,10 +79,10 @@ The system is composed of three main parts:
 - `train_world_model_parallel.py`: Trains the GRU-based world model on data collected in parallel.
 - `train_transformer_world_model.py`: Trains the Transformer-based world model.
 - `train_ppo_sb3.py`: Trains a baseline PPO agent on the real environment.
-- `train_dyn_transformer.py`: Runs the main Dyna-style training loop, alternating between real-world interaction, world
-  model training, and agent training in the dream environment.
+- `train_dyna_loop.py`: Runs the main Dyna-style training loop, alternating between real-world interaction, world model
+  training, and agent training in the dream environment.
 - `play_game_sb3.py`: Visualizes a trained PPO agent playing in the environment.
-- `dreaming_render.py` / `dreaming_render_transformer.py`: Generates videos of dream sequences from a trained world
+- `render_dream.py`: Generates videos of dream sequences from a trained world
   model.
 - `play_in_dream.py` / `play_in_dream_transformer.py`: Allows for interactive "gameplay" within the world model's dream.
 
@@ -143,10 +143,10 @@ The system is composed of three main parts:
       This trains the agent and world model together from scratch and is the final step.
       ```bash
       # Run Dyna training with the Transformer world model
-      python -m src.train_dyn_transformer --world-model-type transformer --config default
+      python -m src.train_dyna_loop --world-model-type transformer --config default
  
       # Run Dyna training with the GRU world model
-      python -m src.train_dyn_transformer --world-model-type gru --config default
+      python -m src.train_dyna_loop --world-model-type gru --config default
       ```
 
 ## Troubleshooting & Notes
@@ -156,4 +156,3 @@ The system is composed of three main parts:
     - `conda install -c conda-forge libgcc-ng libstdcxx-ng`
 - The `OpenEvolve` library can be installed for experimental code evolution features:
     - `pip install git+https://github.com/codelion/openevolve.git`
-
