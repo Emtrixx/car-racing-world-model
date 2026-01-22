@@ -171,18 +171,18 @@ class WorldModelTransformer(nn.Module):
         total_query_len = history_len * self.num_queries_per_step
         total_memory_len = history_len * (self.num_tokens_per_state + 1)
 
-        # Self-Attention Mask (tgt_mask)
-        # Prevents queries for step t from attending to queries for step t+1.
-        # Allows full attention within a block of queries for a single step.
-        tgt_mask = torch.ones(total_query_len, total_query_len, device=device)
+        # Block-diagonal self-attention mask (tgt_mask):
+        # - allows attention within each step's query block
+        # - disallows attention across different steps (both past and future blocks)
+        tgt_mask = torch.full(
+            size=(total_query_len, total_query_len),
+            fill_value=float('-inf'),
+            device=device
+        )
+        q = self.num_queries_per_step
         for i in range(history_len):
-            for j in range(history_len):
-                if j > i:
-                    tgt_mask[
-                        i * self.num_queries_per_step:(i + 1) * self.num_queries_per_step,
-                        j * self.num_queries_per_step:(j + 1) * self.num_queries_per_step
-                    ] = 0
-        tgt_mask = torch.log(tgt_mask)  # Log-transform for PyTorch
+            r0, r1 = i * q, (i + 1) * q
+            tgt_mask[r0:r1, r0:r1] = 0.0
 
         # Cross-Attention Mask (memory_mask)
         # Prevents queries for step t from attending to memory from step t+1 onwards.
