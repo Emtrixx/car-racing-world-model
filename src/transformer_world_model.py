@@ -77,6 +77,7 @@ class CustomTransformerDecoder(nn.Module):
         cross_attns = []
 
         for mod in self.layers:
+            mod: nn.TransformerDecoderLayer
             if need_weights:
                 # Manually perform forward of layer to get weights
                 sa_output, sa_weights = mod.self_attn(
@@ -422,7 +423,7 @@ if __name__ == '__main__':
     print("\n--- Test: Inference with generate() ---")
     world_model_tf.eval()
     with torch.no_grad():
-        gen_tokens, gen_reward, gen_done, _ = world_model_tf.generate(action_hist, tokens_hist)
+        gen_tokens, gen_reward, gen_done = world_model_tf.generate(action_hist, tokens_hist)
     print(f"Generated tokens shape: {gen_tokens.shape}")
     print(f"Generated reward shape: {gen_reward.shape}")
     print(f"Generated done shape: {gen_done.shape}")
@@ -458,3 +459,34 @@ if __name__ == '__main__':
     assert cross_attn_shape == expected_cross_attn_shape, "Cross-attention shape mismatch!"
     print("Cross-attention shape: CORRECT")
     print("--- Attention Map Test PASSED ---")
+
+    # --- Visualize T-BTF Masks ---
+    print("\n--- Saving T-BTF Attention Masks ---")
+    import matplotlib.pyplot as plt
+
+    tgt_mask, memory_mask = world_model_tf._generate_tbtf_masks(HISTORY_LEN, DEVICE_EXAMPLE)
+    self_mask_img = torch.isfinite(tgt_mask).float().cpu().numpy()
+    cross_mask_img = torch.isfinite(memory_mask).float().cpu().numpy()
+
+    fig, ax = plt.subplots(figsize=(6, 6))
+    ax.imshow(self_mask_img, cmap='gray', interpolation='nearest')
+    ax.set_title("T-BTF Self-Attention Mask")
+    ax.set_xlabel("Key Index")
+    ax.set_ylabel("Query Index")
+    plt.tight_layout()
+    save_path = "images/tbtf_self_attention_mask.png"
+    plt.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+    fig, ax = plt.subplots(figsize=(8, 6))
+    ax.imshow(cross_mask_img, cmap='gray', interpolation='nearest')
+    ax.set_title("T-BTF Cross-Attention Mask")
+    ax.set_xlabel("Memory Index")
+    ax.set_ylabel("Query Index")
+    plt.tight_layout()
+    save_path = "images/tbtf_cross_attention_mask.png"
+    plt.savefig(save_path, dpi=150)
+    plt.close(fig)
+
+    print("Saved: tbtf_self_attention_mask.png")
+    print("Saved: tbtf_cross_attention_mask.png")
