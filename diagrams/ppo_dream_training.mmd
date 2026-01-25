@@ -1,0 +1,117 @@
+flowchart TB
+    %% PPO Agent Training in World Model (Dream Training)
+    classDef env fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d;
+    classDef vqvae fill:#e6f7e9,stroke:#047857,stroke-width:1px,color:#064e3b;
+    classDef wm fill:#fff4d6,stroke:#b45309,stroke-width:1px,color:#7c2d12;
+    classDef ppo fill:#dbeafe,stroke:#1d4ed8,stroke-width:2px,color:#1e3a8a;
+    classDef rollout fill:#ede9fe,stroke:#6b21a8,stroke-width:1px,color:#4c1d95;
+    classDef loss fill:#fde2e1,stroke:#b91c1c,stroke-width:1px,color:#7f1d1d;
+
+    subgraph Init["Initialization (from Real Environment)"]
+        direction LR
+        RealEnv["CarRacing-v3"]
+        RealEnv -->|"initial obs"| InitObs["Real Observation<br>`96 x 96 x 3`"]
+        InitObs --> InitEncode["VQ-VAE Encode"]
+        InitEncode --> InitTokens["Initial Tokens<br>`16 indices`"]
+    end
+    class RealEnv env
+    class InitObs,InitEncode,InitTokens vqvae
+
+    subgraph DreamRollout["Dream Rollout (Imagination)"]
+        direction TB
+
+        subgraph Step0["Step t=0"]
+            direction LR
+            InitTokens --> Decode0["VQ-VAE Decode"]
+            Decode0 --> Obs0["Observation_0"]
+            Obs0 --> PPO0["PPO Policy π(a|s)"]
+            PPO0 --> Action0["Action_0"]
+            PPO0 --> Value0["Value V(s_0)"]
+            PPO0 --> LogProb0["Log Prob π(a_0|s_0)"]
+        end
+
+        subgraph WMPredict0["World Model Prediction"]
+            direction LR
+            InitTokens --> WM0["World Model"]
+            Action0 --> WM0
+            WM0 --> NextTokens1["Predicted Tokens_1"]
+            WM0 --> Reward1["Predicted Reward_1"]
+            WM0 --> Done1["Predicted Done_1"]
+        end
+
+        subgraph Step1["Step t=1"]
+            direction LR
+            NextTokens1 --> Decode1["VQ-VAE Decode"]
+            Decode1 --> Obs1["Observation_1"]
+            Obs1 --> PPO1["PPO Policy π(a|s)"]
+            PPO1 --> Action1["Action_1"]
+            PPO1 --> Value1["Value V(s_1)"]
+            PPO1 --> LogProb1["Log Prob π(a_1|s_1)"]
+        end
+
+        subgraph WMPredict1["World Model Prediction"]
+            direction LR
+            NextTokens1 --> WM1["World Model"]
+            Action1 --> WM1
+            WM1 --> NextTokens2["Predicted Tokens_2"]
+            WM1 --> Reward2["Predicted Reward_2"]
+            WM1 --> Done2["Predicted Done_2"]
+        end
+
+        Step1 --> MoreSteps["... continue for H steps"]
+    end
+    class Decode0,Obs0,Decode1,Obs1 vqvae
+    class PPO0,Action0,Value0,LogProb0,PPO1,Action1,Value1,LogProb1 ppo
+    class WM0,NextTokens1,Reward1,Done1,WM1,NextTokens2,Reward2,Done2 wm
+    class MoreSteps rollout
+
+    subgraph CollectTrajectory["Collect Dream Trajectory"]
+        direction TB
+        MoreSteps --> States["States: [s_0, s_1, ..., s_H]"]
+        MoreSteps --> Actions["Actions: [a_0, a_1, ..., a_H-1]"]
+        MoreSteps --> Rewards["Rewards: [r_1, r_2, ..., r_H]"]
+        MoreSteps --> Values["Values: [V_0, V_1, ..., V_H]"]
+        MoreSteps --> LogProbs["Log Probs: [lp_0, lp_1, ..., lp_H-1]"]
+        MoreSteps --> Dones["Dones: [d_1, d_2, ..., d_H]"]
+    end
+    class States,Actions,Rewards,Values,LogProbs,Dones rollout
+
+    subgraph GAE["Advantage Estimation"]
+        direction TB
+        Rewards --> ComputeGAE["Generalized Advantage Estimation<br>(GAE-λ)"]
+        Values --> ComputeGAE
+        Dones --> ComputeGAE
+        ComputeGAE --> Advantages["Advantages Â_t"]
+        ComputeGAE --> Returns["Returns R_t"]
+    end
+    class ComputeGAE,Advantages,Returns rollout
+
+    subgraph PPOUpdate["PPO Policy Update"]
+        direction TB
+        States --> PolicyForward["PPO Forward Pass<br>(new log probs, values)"]
+        Actions --> PolicyForward
+
+        PolicyForward --> RatioCalc["Ratio r_t = π_new / π_old"]
+        LogProbs --> RatioCalc
+
+        RatioCalc --> ClipLoss["Clipped Surrogate Loss<br>min(r_t * Â, clip(r_t) * Â)"]
+        Advantages --> ClipLoss
+
+        PolicyForward --> ValueLoss["Value Loss<br>MSE(V_pred, R_t)"]
+        Returns --> ValueLoss
+
+        PolicyForward --> EntropyBonus["Entropy Bonus<br>-β * H(π)"]
+
+        ClipLoss --> TotalPPO["Total PPO Loss"]
+        ValueLoss --> TotalPPO
+        EntropyBonus --> TotalPPO
+    end
+    class PolicyForward,RatioCalc,ClipLoss,ValueLoss,EntropyBonus,TotalPPO loss
+
+    TotalPPO --> BackpropPPO["Backpropagation"]
+    BackpropPPO --> UpdatePPO["Update PPO Policy & Value Networks"]
+    class BackpropPPO,UpdatePPO ppo
+
+    UpdatePPO --> NextEpisode["Next Dream Episode"]
+    NextEpisode --> Init
+    class NextEpisode env

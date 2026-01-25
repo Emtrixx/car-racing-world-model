@@ -1,0 +1,79 @@
+flowchart TB
+    %% World Model Training Flow - Supervised learning from real environment data
+    classDef env fill:#dcfce7,stroke:#16a34a,stroke-width:2px,color:#14532d;
+    classDef vqvae fill:#e6f7e9,stroke:#047857,stroke-width:1px,color:#064e3b;
+    classDef wm fill:#fff4d6,stroke:#b45309,stroke-width:1px,color:#7c2d12;
+    classDef loss fill:#fde2e1,stroke:#b91c1c,stroke-width:1px,color:#7f1d1d;
+    classDef data fill:#e8f1fd,stroke:#1d4ed8,stroke-width:1px,color:#1f2937;
+
+    subgraph RealEnv["Real Environment (Data Collection)"]
+        direction LR
+        Env["CarRacing-v3"]
+        Agent["Data Collection Agent"]
+        Env -->|"obs_t"| Agent
+        Agent -->|"action_t"| Env
+        Env -->|"obs_t+1, reward, done"| Buffer["Replay Buffer"]
+    end
+    class Env,Agent,Buffer env
+
+    subgraph DataBatch["Training Batch"]
+        direction TB
+        Buffer --> SampleBatch["Sample Trajectory<br>`(obs_0, a_0, r_1, obs_1, a_1, r_2, ...)`"]
+        SampleBatch --> ObsSeq["Observations<br>`B x T x 96 x 96 x 3`"]
+        SampleBatch --> ActSeq["Actions<br>`B x T x action_dim`"]
+        SampleBatch --> RewardSeq["Rewards<br>`B x T`"]
+        SampleBatch --> DoneSeq["Dones<br>`B x T`"]
+    end
+    class SampleBatch,ObsSeq,ActSeq,RewardSeq,DoneSeq data
+
+    subgraph VQVAEEncode["VQ-VAE Encoding (frozen)"]
+        direction TB
+        ObsSeq --> Encoder["VQ-VAE Encoder"]
+        Encoder --> Quantize["Vector Quantization"]
+        Quantize --> TokenSeq["Token Indices<br>`B x T x 16`"]
+    end
+    class Encoder,Quantize,TokenSeq vqvae
+
+    subgraph WorldModelForward["World Model Forward Pass"]
+        direction TB
+        TokenSeq --> WM["World Model<br>(GRU or Transformer)"]
+        ActSeq --> WM
+        WM --> PredTokens["Predicted Next Tokens<br>`B x T x 16 x 512` logits"]
+        WM --> PredReward["Predicted Rewards<br>`B x T`"]
+        WM --> PredDone["Predicted Dones<br>`B x T`"]
+    end
+    class WM,PredTokens,PredReward,PredDone wm
+
+    subgraph Targets["Targets (shifted by 1)"]
+        direction TB
+        TokenSeq --> ShiftTokens["Target Tokens<br>`tokens[t+1]`"]
+        RewardSeq --> ShiftReward["Target Rewards<br>`rewards[t+1]`"]
+        DoneSeq --> ShiftDone["Target Dones<br>`dones[t+1]`"]
+    end
+    class ShiftTokens,ShiftReward,ShiftDone data
+
+    subgraph LossComputation["Loss Computation"]
+        direction TB
+        PredTokens --> TokenLoss["Cross-Entropy Loss<br>(next token prediction)"]
+        ShiftTokens --> TokenLoss
+        PredReward --> RewardLoss["MSE Loss<br>(reward prediction)"]
+        ShiftReward --> RewardLoss
+        PredDone --> DoneLoss["BCE Loss<br>(done prediction)"]
+        ShiftDone --> DoneLoss
+        TokenLoss --> TotalLoss["Total Loss<br>`L_token + λ_r * L_reward + λ_d * L_done`"]
+        RewardLoss --> TotalLoss
+        DoneLoss --> TotalLoss
+    end
+    class TokenLoss,RewardLoss,DoneLoss,TotalLoss loss
+
+    TotalLoss --> Backprop["Backpropagation"]
+    Backprop --> UpdateWM["Update World Model Parameters"]
+    class Backprop,UpdateWM loss
+
+    subgraph Optional["Optional: Reconstruction Visualization"]
+        direction LR
+        PredTokens -->|"argmax"| PredIndices["Predicted Indices"]
+        PredIndices --> Decoder["VQ-VAE Decoder"]
+        Decoder --> ReconObs["Reconstructed Observation"]
+    end
+    class PredIndices,Decoder,ReconObs vqvae
